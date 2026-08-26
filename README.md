@@ -114,6 +114,6 @@ Any material edit restarts the approval chain.
 - Replace the in-process pilot queue with a durable background queue before production volume.
 - Activate the server-side OpenAI credential and record actual per-image telemetry before committing to final retail packs.
 - Ingest does-not-fit return feedback and token refresh/revocation lifecycle.
-- Push this repository to a Git host before Render can deploy it.
+- Complete the Render owner-pilot deployment and keep live AI activation fail-closed until its server credential is configured.
 
 The current gate-by-gate status is in [docs/ACCEPTANCE_STATUS.md](docs/ACCEPTANCE_STATUS.md).
