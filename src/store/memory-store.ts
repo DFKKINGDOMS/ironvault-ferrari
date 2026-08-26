@@ -1,0 +1,151 @@
+import type {
+  ApprovalRecord,
+  AuditEvent,
+  EvidenceRecord,
+  ItemRecord,
+  ListingRecord,
+  SellerConnection,
+  SellerAcknowledgement,
+  StoredImage
+} from '../domain/types.js';
+import type { Store } from './store.js';
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
+
+export class MemoryStore implements Store {
+  private readonly items = new Map<string, ItemRecord>();
+  private readonly evidence: EvidenceRecord[] = [];
+  private readonly approvals: ApprovalRecord[] = [];
+  private readonly listings = new Map<string, ListingRecord>();
+  private readonly connections = new Map<string, SellerConnection>();
+  private readonly images = new Map<string, StoredImage>();
+  private readonly audits: AuditEvent[] = [];
+  private readonly publishSlots = new Map<string, { sellerId: string; status: 'RESERVED' | 'SUCCEEDED' }>();
+  private readonly oauthNonces = new Map<string, { sellerId: string; expiresAt: string; consumedAt?: string }>();
+  private readonly acknowledgements = new Map<string, SellerAcknowledgement>();
+
+  async createItem(item: ItemRecord): Promise<void> {
+    if (this.items.has(item.id)) throw new Error('item already exists');
+    if ([...this.items.values()].some((row) => row.sellerId === item.sellerId && row.sku === item.sku)) {
+      throw new Error('seller SKU already exists');
+    }
+    this.items.set(item.id, clone(item));
+  }
+
+  async getItem(itemId: string): Promise<ItemRecord | undefined> {
+    const item = this.items.get(itemId);
+    return item ? clone(item) : undefined;
+  }
+
+  async saveItem(item: ItemRecord): Promise<void> {
+    this.items.set(item.id, clone(item));
+  }
+
+  async listItems(sellerId: string): Promise<ItemRecord[]> {
+    return [...this.items.values()].filter((item) => item.sellerId === sellerId).map(clone);
+  }
+
+  async addEvidence(record: EvidenceRecord): Promise<void> {
+    this.evidence.push(clone(record));
+  }
+
+  async listEvidence(itemId: string): Promise<EvidenceRecord[]> {
+    return this.evidence.filter((row) => row.itemId === itemId).map(clone);
+  }
+
+  async addApproval(record: ApprovalRecord): Promise<void> {
+    this.approvals.push(clone(record));
+  }
+
+  async listApprovals(itemId: string): Promise<ApprovalRecord[]> {
+    return this.approvals.filter((row) => row.itemId === itemId).map(clone);
+  }
+
+  async saveListing(record: ListingRecord): Promise<void> {
+    this.listings.set(record.itemId, clone(record));
+  }
+
+  async getListing(itemId: string): Promise<ListingRecord | undefined> {
+    const listing = this.listings.get(itemId);
+    return listing ? clone(listing) : undefined;
+  }
+
+  async saveConnection(connection: SellerConnection): Promise<void> {
+    this.connections.set(connection.sellerId, clone(connection));
+  }
+
+  async getConnection(sellerId: string): Promise<SellerConnection | undefined> {
+    const connection = this.connections.get(sellerId);
+    return connection ? clone(connection) : undefined;
+  }
+
+  async saveImage(image: StoredImage): Promise<void> {
+    this.images.set(image.id, clone(image));
+  }
+
+  async getImage(imageId: string): Promise<StoredImage | undefined> {
+    const image = this.images.get(imageId);
+    return image ? clone(image) : undefined;
+  }
+
+  async listImages(itemId: string): Promise<StoredImage[]> {
+    return [...this.images.values()].filter((image) => image.itemId === itemId).map(clone);
+  }
+
+  async addAudit(event: AuditEvent): Promise<void> {
+    this.audits.push(clone(event));
+  }
+
+  async listAudit(itemId?: string): Promise<AuditEvent[]> {
+    return this.audits.filter((event) => itemId === undefined || event.itemId === itemId).map(clone);
+  }
+
+  async getSuccessfulPublishCount(sellerId: string): Promise<number> {
+    return [...this.publishSlots.values()].filter((slot) => slot.sellerId === sellerId && slot.status === 'SUCCEEDED').length;
+  }
+
+  async reserveFreePublish(sellerId: string, itemId: string, limit: number): Promise<boolean> {
+    const existing = this.publishSlots.get(itemId);
+    if (existing) return existing.sellerId === sellerId;
+    const claimed = [...this.publishSlots.values()].filter((slot) => slot.sellerId === sellerId).length;
+    if (claimed >= limit) return false;
+    this.publishSlots.set(itemId, { sellerId, status: 'RESERVED' });
+    return true;
+  }
+
+  async finalizeFreePublish(itemId: string): Promise<void> {
+    const slot = this.publishSlots.get(itemId);
+    if (!slot) throw new Error('publish slot not reserved');
+    this.publishSlots.set(itemId, { ...slot, status: 'SUCCEEDED' });
+  }
+
+  async releaseFreePublish(itemId: string): Promise<void> {
+    const slot = this.publishSlots.get(itemId);
+    if (slot?.status === 'RESERVED') this.publishSlots.delete(itemId);
+  }
+
+  async saveOAuthNonce(nonce: string, sellerId: string, expiresAt: string): Promise<void> {
+    this.oauthNonces.set(nonce, { sellerId, expiresAt });
+  }
+
+  async consumeOAuthNonce(nonce: string, sellerId: string, at: string): Promise<boolean> {
+    const record = this.oauthNonces.get(nonce);
+    if (!record || record.sellerId !== sellerId || record.consumedAt || Date.parse(record.expiresAt) < Date.parse(at)) return false;
+    this.oauthNonces.set(nonce, { ...record, consumedAt: at });
+    return true;
+  }
+
+  async saveAcknowledgement(record: SellerAcknowledgement): Promise<void> {
+    this.acknowledgements.set(`${record.sellerId}:${record.type}`, clone(record));
+  }
+
+  async getAcknowledgement(
+    sellerId: string,
+    type: SellerAcknowledgement['type']
+  ): Promise<SellerAcknowledgement | undefined> {
+    const record = this.acknowledgements.get(`${sellerId}:${type}`);
+    return record ? clone(record) : undefined;
+  }
+}

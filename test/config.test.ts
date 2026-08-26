@@ -1,0 +1,46 @@
+import { randomBytes } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import { loadConfig } from '../src/config.js';
+
+describe('production configuration fail-closed behavior', () => {
+  it('rejects default secrets in production', () => {
+    expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow();
+  });
+
+  it('refuses production eBay writes in the pilot build', () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        PARTQUILL_API_KEY: 'production-api-key-that-is-long-enough',
+        OAUTH_STATE_SECRET: 'production-oauth-secret-long-enough',
+        TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+        DATABASE_URL: 'postgres://example.invalid/partquill',
+        EBAY_ENV: 'production',
+        ALLOW_EBAY_WRITES: 'true'
+      })
+    ).toThrow('production eBay writes');
+  });
+
+  it('accepts a secured sandbox mock deployment with writes disabled', () => {
+    const config = loadConfig({
+      NODE_ENV: 'production',
+      PARTQUILL_API_KEY: 'production-api-key-that-is-long-enough',
+      OAUTH_STATE_SECRET: 'production-oauth-secret-long-enough',
+      TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+      DATABASE_URL: 'postgres://example.invalid/partquill',
+      EBAY_ENV: 'sandbox',
+      EBAY_MODE: 'mock',
+      ALLOW_EBAY_WRITES: 'false'
+    });
+    expect(config.ALLOW_EBAY_WRITES).toBe(false);
+  });
+
+  it('refuses live Image Studio without a server-side OpenAI credential', () => {
+    expect(() =>
+      loadConfig({
+        IMAGE_STUDIO_MODE: 'live',
+        IMAGE_STUDIO_ACCESS_TOKEN: 'private-studio-token-long-enough'
+      })
+    ).toThrow('live Image Studio requires an OpenAI API key');
+  });
+});

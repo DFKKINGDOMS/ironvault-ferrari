@@ -1,0 +1,16 @@
+{
+  "purpose": "Physical capture worksheet for the five-SKU pilot. Values are intake candidates, not catalog or fitment claims.",
+  "rules": [
+    "Scan the physical GTIN; never infer it from an internet result.",
+    "Photograph every package face and retain the original bytes and SHA-256 hash.",
+    "Do not attach compatibility unless the unique eBay catalog match returns it.",
+    "Replace or remove any candidate whose exact physical package is unavailable."
+  ],
+  "items": [
+    { "brand_candidate": "WIX", "mpn_candidate": "51040", "gtin": null, "physical_scan_required": true },
+    { "brand_candidate": "Bosch", "mpn_candidate": "3323", "gtin": null, "physical_scan_required": true },
+    { "brand_candidate": "Denso", "mpn_candidate": "143-3024", "gtin": null, "physical_scan_required": true },
+    { "brand_candidate": "ACDelco", "mpn_candidate": "PF63", "gtin": null, "physical_scan_required": true },
+    { "brand_candidate": "Motorcraft", "mpn_candidate": "FL-500S", "gtin": null, "physical_scan_required": true }
+  ]
+}

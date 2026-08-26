@@ -1,0 +1,59 @@
+services:
+  - type: web
+    name: partquill-api
+    runtime: node
+    plan: free
+    region: ohio
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: npm run migrate:compiled && npm start
+    healthCheckPath: /ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: partquill-postgres
+          property: connectionString
+      - key: PARTQUILL_API_KEY
+        generateValue: true
+      - key: TOKEN_ENCRYPTION_KEY
+        generateValue: true
+      - key: OAUTH_STATE_SECRET
+        generateValue: true
+      - key: EBAY_ENV
+        value: sandbox
+      - key: EBAY_MODE
+        value: mock
+      - key: ALLOW_EBAY_WRITES
+        value: "false"
+      - key: EBAY_CLIENT_ID
+        sync: false
+      - key: EBAY_CLIENT_SECRET
+        sync: false
+      - key: EBAY_RU_NAME
+        sync: false
+      - key: PUBLIC_BASE_URL
+        value: https://partquill-api.onrender.com
+      - key: CORS_ORIGINS
+        value: https://vaultlister-ebay.knjw1.chatgpt.site
+      - key: IMAGE_STUDIO_MODE
+        value: preview
+      - key: IMAGE_STUDIO_ACCESS_TOKEN
+        generateValue: true
+      - key: IMAGE_STUDIO_STORAGE_DIR
+        value: /tmp/partquill-image-studio
+      - key: IMAGE_STUDIO_MAX_IMAGES
+        value: "24"
+      - key: IMAGE_STUDIO_CONCURRENCY
+        value: "3"
+      - key: OPENAI_API_KEY
+        sync: false
+
+databases:
+  - name: partquill-postgres
+    plan: free
+    region: ohio
+    databaseName: partquill
+    user: partquill
+    ipAllowList: []
