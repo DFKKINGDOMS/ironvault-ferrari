@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z, ZodError } from 'zod';
 import type { AppConfig } from '../config.js';
 import { now } from '../domain/canonical.js';
@@ -16,6 +17,7 @@ import type { Store } from '../store/store.js';
 import { quoteStudioBatch } from '../image-studio/cost-model.js';
 import type { ImageStudioService } from '../image-studio/service.js';
 import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.js';
+import { buildPartQuillMcpServer } from '../mcp/server.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -84,7 +86,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
 
   app.addHook('onRequest', async (request, reply) => {
-    const publicPaths = ['/health', '/ready', '/v1/oauth/ebay/callback'];
+    const publicPaths = ['/health', '/ready', '/mcp', '/v1/oauth/ebay/callback'];
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
@@ -111,7 +113,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.2.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.3.0' }));
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
@@ -130,6 +132,43 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return reply.code(503).send({ ready: false, reason: 'persistence unavailable' });
     }
   });
+
+  app.post('/mcp', async (request, reply) => {
+    const server = buildPartQuillMcpServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    reply.hijack();
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(request.raw, reply.raw, request.body);
+      reply.raw.once('close', () => {
+        void transport.close();
+        void server.close();
+      });
+    } catch (error) {
+      request.log.error(error);
+      if (!reply.raw.headersSent) {
+        reply.raw.writeHead(500, { 'content-type': 'application/json' });
+        reply.raw.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'PartQuill MCP request failed' },
+            id: null
+          })
+        );
+      }
+    }
+    return reply;
+  });
+
+  const methodNotAllowed = async (_request: unknown, reply: { code: (status: number) => { send: (payload: unknown) => unknown } }) =>
+    reply.code(405).send({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed. Use Streamable HTTP POST.' },
+      id: null
+    });
+
+  app.get('/mcp', methodNotAllowed);
+  app.delete('/mcp', methodNotAllowed);
 
   app.get('/v1/image-studio/quote', async (request) => {
     const { count } = z.object({ count: z.coerce.number().int().min(1).max(24) }).parse(request.query);

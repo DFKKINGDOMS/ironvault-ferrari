@@ -81,6 +81,36 @@ The current service is deliberately split into two modes:
 - `live`: executes the adaptive model and QA routes. It requires a server-side
   `OPENAI_API_KEY` and a private `IMAGE_STUDIO_ACCESS_TOKEN`.
 
+There is also a separate free ChatGPT-assisted route. It does not depend on
+`IMAGE_STUDIO_MODE` and does not use PartQuill's OpenAI API key. The connected
+ChatGPT app widget uploads the seller's 1–24 originals once, retains their
+ChatGPT file references, and posts the protected Ferrari-style preservation
+job in the same conversation. The customer still reviews every derivative.
+
+The MCP contract includes a `return_edited_images` tool so finished ChatGPT
+files can be attached to the same protected job. That proves the application
+contract; it does not by itself prove that every current ChatGPT image-generation
+host will invoke the tool with generated-file references. A live two-image
+Developer Mode test is required before the product promises an automatic free
+round trip. If the host does not return those references, the existing manual
+download/import fallback remains available and is disclosed before processing.
+
+### Free ChatGPT Assist versus Express Auto
+
+| Boundary | Free ChatGPT Assist | Express Auto |
+|---|---|---|
+| Separate PartQuill image charge | None | Uses prepaid PartQuill Studio balance |
+| OpenAI API key | Not required | Required on PartQuill's server |
+| Where editing runs | Customer's ChatGPT conversation | PartQuill background job |
+| Source selection | Once inside the connected widget | Once inside PartQuill |
+| Prompt handling | Automatically posted in the same conversation | Server-managed |
+| Timing | Subject to ChatGPT plan, limits and interactive processing | Queue-managed |
+| Result return | Tool-assisted path must pass live host acceptance | Automatic after QA |
+| Best fit | Occasional users who accept variable wait and review | Repeat-volume sellers who value unattended processing |
+
+Neither route can change product geometry, repair or conceal damage, remove a
+third party's watermark, or use the derivative as identity/fitment evidence.
+
 The first Render checkpoint may use ephemeral filesystem storage and an
 in-process queue so the contract can be tested end to end. Before a real
 multi-seller launch, replace those with private object storage, signed result
@@ -106,3 +136,7 @@ it is never presented as durable production storage.
 10. Never expose filesystem paths or the OpenAI API key to a browser response.
 11. Never treat a generated derivative as identity or fitment evidence.
 12. Return an honest activation state through `/ready` and the job record.
+13. Expose a public stateless `/mcp` transport whose Image Studio widget accepts 1–24 files without an API key.
+14. Store uploaded ChatGPT file IDs in widget state and automatically send the exact preservation prompt in the same conversation.
+15. Return completed file references only to the matching job and state `eBay_write_performed=false`.
+16. Keep automatic free-route result return labeled test-required until a live ChatGPT host completes the two-image round trip.

@@ -32,6 +32,9 @@ Status legend: `implemented`, `tested`, `scaffolded`, `blocked-external`.
 | A26 Adaptive AI routing | tested-contract | Premium hero, economical secondary and premium failed-secondary escalation are implemented; live model calls require server activation |
 | A27 Image source comparison | tested-contract | Every result must pass source-versus-candidate AI QA; exact production telemetry remains external |
 | A28 Image Studio cost gate | tested | Quote is batch-based; current 24-image prepaid-balance pilot quote is $2.49 rather than $9.60 |
+| A29 Connected ChatGPT intake | tested-contract | Public stateless MCP endpoint, embedded widget, 1–24 ChatGPT file uploads and exact same-conversation prompt dispatch are covered by automated tests |
+| A30 Connected result return | scaffolded | `return_edited_images` binds returned file references to the protected job and forbids eBay writes; live ChatGPT generated-file invocation still requires a two-image acceptance test |
+| A31 Free-route separation | tested-contract | Connected ChatGPT Assist needs no PartQuill API key, contains no checkout, and does not call the metered Express worker |
 
 Production publishing remains disabled until every P0 gate is proven against one authorized seller and the exact current eBay environment.
 
@@ -39,7 +42,7 @@ Production publishing remains disabled until every P0 gate is proven against one
 
 - TypeScript build: pass.
 - ESLint: pass.
-- Automated tests: 39 pass across configuration, security, policy, images, Image Studio pricing/routing, approvals, HTTP and post-publish lifecycle.
+- Automated tests: 42 pass across configuration, security, policy, images, Image Studio pricing/routing, MCP/widget contracts, approvals, HTTP and post-publish lifecycle.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.
 - Local TCP smoke test: not available in the current managed workspace because host socket/interface lookup is blocked; Fastify injection exercises the compiled HTTP contract without a listening socket.

@@ -27,6 +27,8 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Image Studio batch intake for 1–24 seller-owned photographs, with immutable originals and SHA-256 lineage.
 - Ferrari-workflow preservation prompt, source-versus-result AI QA, premium hero routing, economical secondary routing and automatic failed-image escalation.
 - Batch pricing rather than per-photo retail pricing: the current 24-image pilot quote is $2.49 from prepaid Studio balance, subject to real production telemetry.
+- A connected ChatGPT MCP endpoint and embedded Image Studio widget for the free route: upload 1–24 files once, retain their ChatGPT file references, and dispatch the exact preservation job in the same conversation.
+- A file-return tool contract that can pair completed ChatGPT image outputs to the protected job without an eBay write. Host-level automatic return remains a live ChatGPT acceptance test, not a completed product claim.
 
 ## Safety model
 
@@ -68,6 +70,14 @@ Health endpoints are public:
 - `GET /health` — process liveness.
 - `GET /ready` — persistence and safety-mode summary.
 
+The connected ChatGPT proof endpoint is also public:
+
+- `POST /mcp` — stateless Streamable HTTP MCP transport.
+- `GET /mcp` and `DELETE /mcp` — intentionally return JSON-RPC method-not-allowed responses.
+
+The MCP surface never publishes to eBay, never treats an edited derivative as
+identity or fitment evidence, and contains no subscription or credit checkout.
+
 All business endpoints require `Authorization: Bearer $PARTQUILL_API_KEY`.
 
 Image Studio supports a separate private pilot credential through
@@ -89,6 +99,27 @@ ChatGPT subscription.
 
 See [docs/IMAGE_STUDIO.md](docs/IMAGE_STUDIO.md) for quality, cost, activation,
 and deployment boundaries.
+
+## Connected ChatGPT free route
+
+The free route is designed to run as an installed PartQuill app inside ChatGPT:
+
+1. Open `open_image_studio` in ChatGPT.
+2. Select 1–24 seller-owned source photographs in the embedded widget.
+3. Confirm the rights and preservation boundary once.
+4. PartQuill uploads those files to the current ChatGPT conversation and posts
+   the exact protected job automatically—no second tab, Explorer re-selection,
+   clipboard prompt, or PartQuill API key.
+5. ChatGPT performs the image edit under the preservation contract.
+6. When the ChatGPT host supports the return tool for generated files, the
+   finished outputs are mapped back to the same PartQuill job for side-by-side
+   review. Until that host behavior is proven live, the manual download/import
+   route remains the honest fallback.
+
+This route uses the customer's existing ChatGPT access and is subject to that
+account's plan and usage limits. It does not make a server-side OpenAI API call.
+The optional Express route is separate, automated, and metered through
+PartQuill's server-side API credential.
 
 ## Principal API flow
 
@@ -115,5 +146,6 @@ Any material edit restarts the approval chain.
 - Activate the server-side OpenAI credential and record actual per-image telemetry before committing to final retail packs.
 - Ingest does-not-fit return feedback and token refresh/revocation lifecycle.
 - Complete the Render owner-pilot deployment and keep live AI activation fail-closed until its server credential is configured.
+- Connect the public `/mcp` endpoint in ChatGPT Developer Mode and prove the generated-file return path with a two-image job before claiming unattended free-route round trips.
 
 The current gate-by-gate status is in [docs/ACCEPTANCE_STATUS.md](docs/ACCEPTANCE_STATUS.md).

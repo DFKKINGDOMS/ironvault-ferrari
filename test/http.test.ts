@@ -15,6 +15,29 @@ describe('HTTP contract', () => {
     const studioQuote = await app.inject({ method: 'GET', url: '/v1/image-studio/quote?count=24' });
     expect(studioQuote.statusCode).toBe(200);
     expect(studioQuote.json().quote.customerPriceUsd).toBe('2.49');
+    const mcpGet = await app.inject({ method: 'GET', url: '/mcp' });
+    expect(mcpGet.statusCode).toBe(405);
+    expect(mcpGet.json().error.message).toContain('Streamable HTTP POST');
+    const mcpInitialize = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
+      payload: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          clientInfo: { name: 'partquill-http-test', version: '1.0.0' }
+        }
+      }
+    });
+    expect(mcpInitialize.statusCode).toBe(200);
+    expect(mcpInitialize.body).toContain('partquill-image-studio');
   });
 
   it('creates a held draft and exposes an exception-first queue', async () => {
