@@ -15,6 +15,8 @@ describe('HTTP contract', () => {
     expect(widget.statusCode).toBe(200);
     expect(widget.headers['content-type']).toContain('text/html');
     expect(widget.body).toContain('PartQuill Image Studio');
+    const widgetHead = await app.inject({ method: 'HEAD', url: '/' });
+    expect(widgetHead.statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/v1/items', payload: {} })).statusCode).toBe(401);
     const studioQuote = await app.inject({ method: 'GET', url: '/v1/image-studio/quote?count=24' });
     expect(studioQuote.statusCode).toBe(200);

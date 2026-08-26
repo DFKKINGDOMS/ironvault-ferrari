@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { buildConnectedImagePrompt } from './prompt.js';
 import {
   buildPartQuillWidgetHtml,
+  PARTQUILL_WIDGET_ORIGIN,
   PARTQUILL_WIDGET_URI
 } from './widget.js';
 
@@ -53,8 +54,10 @@ export function buildPartQuillMcpServer(): McpServer {
           _meta: {
             ui: {
               prefersBorder: false,
-              csp: { connectDomains: [], resourceDomains: [] }
-            }
+              csp: { connectDomains: [], resourceDomains: [] },
+              domain: PARTQUILL_WIDGET_ORIGIN
+            },
+            'openai/widgetDomain': PARTQUILL_WIDGET_ORIGIN
           }
         }
       ]

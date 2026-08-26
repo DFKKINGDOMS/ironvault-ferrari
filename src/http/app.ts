@@ -88,7 +88,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.addHook('onRequest', async (request, reply) => {
     const publicPaths = ['/health', '/ready', '/mcp', '/v1/oauth/ebay/callback'];
-    if (request.method === 'GET' && (request.url === '/' || request.url.startsWith('/?'))) return;
+    if (['GET', 'HEAD'].includes(request.method) && (request.url === '/' || request.url.startsWith('/?'))) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
