@@ -1,13 +1,8 @@
 import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
+import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { buildConnectedImagePrompt } from './prompt.js';
-import {
-  buildPartQuillWidgetHtml,
-  PARTQUILL_WIDGET_ORIGIN,
-  PARTQUILL_WIDGET_URI
-} from './widget.js';
 
 const openAiFileSchema = z.object({
   download_url: z.string().url(),
@@ -40,30 +35,6 @@ export function buildPartQuillMcpServer(): McpServer {
     }
   );
 
-  registerAppResource(
-    server,
-    'PartQuill connected Image Studio',
-    PARTQUILL_WIDGET_URI,
-    { description: 'Upload-once protected automotive image editing inside ChatGPT.' },
-    async () => ({
-      contents: [
-        {
-          uri: PARTQUILL_WIDGET_URI,
-          mimeType: RESOURCE_MIME_TYPE,
-          text: buildPartQuillWidgetHtml(),
-          _meta: {
-            ui: {
-              prefersBorder: false,
-              csp: { connectDomains: [], resourceDomains: [] },
-              domain: PARTQUILL_WIDGET_ORIGIN
-            },
-            'openai/widgetDomain': PARTQUILL_WIDGET_ORIGIN
-          }
-        }
-      ]
-    })
-  );
-
   registerAppTool(
     server,
     'open_image_studio',
@@ -79,9 +50,6 @@ export function buildPartQuillMcpServer(): McpServer {
       },
       annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
       _meta: {
-        ui: { resourceUri: PARTQUILL_WIDGET_URI, visibility: ['model', 'app'] },
-        'openai/outputTemplate': PARTQUILL_WIDGET_URI,
-        'openai/widgetAccessible': true,
         'openai/toolInvocation/invoking': 'Opening protected Image Studio…',
         'openai/toolInvocation/invoked': 'Image Studio ready'
       }
@@ -125,9 +93,6 @@ export function buildPartQuillMcpServer(): McpServer {
       },
       annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
       _meta: {
-        ui: { resourceUri: PARTQUILL_WIDGET_URI, visibility: ['model', 'app'] },
-        'openai/outputTemplate': PARTQUILL_WIDGET_URI,
-        'openai/widgetAccessible': true,
         'openai/fileParams': ['images'],
         'openai/toolInvocation/invoking': 'Binding originals to protected job…',
         'openai/toolInvocation/invoked': 'Protected job prepared'
@@ -176,9 +141,6 @@ export function buildPartQuillMcpServer(): McpServer {
       },
       annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
       _meta: {
-        ui: { resourceUri: PARTQUILL_WIDGET_URI, visibility: ['model', 'app'] },
-        'openai/outputTemplate': PARTQUILL_WIDGET_URI,
-        'openai/widgetAccessible': true,
         'openai/fileParams': ['images'],
         'openai/toolInvocation/invoking': 'Mapping finished images…',
         'openai/toolInvocation/invoked': 'Finished images ready for review'

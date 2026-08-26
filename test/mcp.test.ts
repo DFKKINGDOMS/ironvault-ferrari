@@ -2,7 +2,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildPartQuillMcpServer } from '../src/mcp/server.js';
-import { PARTQUILL_WIDGET_ORIGIN, PARTQUILL_WIDGET_URI } from '../src/mcp/widget.js';
 
 describe('PartQuill connected ChatGPT contract', () => {
   let server: ReturnType<typeof buildPartQuillMcpServer>;
@@ -21,7 +20,7 @@ describe('PartQuill connected ChatGPT contract', () => {
     await server.close();
   });
 
-  it('advertises the upload-once tools, widget and exact file parameter metadata', async () => {
+  it('advertises the upload-once tools without a broken embedded-card dependency', async () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       'open_image_studio',
@@ -33,16 +32,8 @@ describe('PartQuill connected ChatGPT contract', () => {
     const returned = tools.tools.find((tool) => tool.name === 'return_edited_images');
     expect(prepare?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(returned?._meta?.['openai/fileParams']).toEqual(['images']);
-    expect(prepare?._meta?.ui).toMatchObject({ resourceUri: PARTQUILL_WIDGET_URI });
-
-    const resource = await client.readResource({ uri: PARTQUILL_WIDGET_URI });
-    const html = resource.contents[0];
-    expect(html?.mimeType).toBe('text/html;profile=mcp-app');
-    expect(html?._meta?.ui).toMatchObject({ domain: PARTQUILL_WIDGET_ORIGIN });
-    expect(html?._meta?.['openai/widgetDomain']).toBe(PARTQUILL_WIDGET_ORIGIN);
-    expect(html && 'text' in html ? html.text : '').toContain('Upload once. Edit in this conversation.');
-    expect(html && 'text' in html ? html.text : '').toContain('window.openai.sendFollowUpMessage');
-    expect(html && 'text' in html ? html.text : '').toContain('window.openai.uploadFile');
+    expect(prepare?._meta?.ui).toBeUndefined();
+    expect(prepare?._meta?.['openai/outputTemplate']).toBeUndefined();
   });
 
   it('prepares a deterministic, rights-confirmed two-image preservation job', async () => {
