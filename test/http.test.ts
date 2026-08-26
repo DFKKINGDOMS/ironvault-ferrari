@@ -11,6 +11,10 @@ describe('HTTP contract', () => {
     const h = harness();
     app = await buildApp(h);
     expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+    const widget = await app.inject({ method: 'GET', url: '/' });
+    expect(widget.statusCode).toBe(200);
+    expect(widget.headers['content-type']).toContain('text/html');
+    expect(widget.body).toContain('PartQuill Image Studio');
     expect((await app.inject({ method: 'POST', url: '/v1/items', payload: {} })).statusCode).toBe(401);
     const studioQuote = await app.inject({ method: 'GET', url: '/v1/image-studio/quote?count=24' });
     expect(studioQuote.statusCode).toBe(200);

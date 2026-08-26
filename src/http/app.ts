@@ -18,6 +18,7 @@ import { quoteStudioBatch } from '../image-studio/cost-model.js';
 import type { ImageStudioService } from '../image-studio/service.js';
 import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.js';
 import { buildPartQuillMcpServer } from '../mcp/server.js';
+import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -87,6 +88,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.addHook('onRequest', async (request, reply) => {
     const publicPaths = ['/health', '/ready', '/mcp', '/v1/oauth/ebay/callback'];
+    if (request.method === 'GET' && (request.url === '/' || request.url.startsWith('/?'))) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
@@ -114,6 +116,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
 
   app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.3.0' }));
+  app.get('/', async (_request, reply) =>
+    reply.type('text/html; charset=utf-8').send(buildPartQuillWidgetHtml())
+  );
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
