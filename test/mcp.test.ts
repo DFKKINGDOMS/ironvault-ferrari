@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildPartQuillMcpServer } from '../src/mcp/server.js';
-import { PARTQUILL_WIDGET_ORIGIN, PARTQUILL_WIDGET_URI } from '../src/mcp/widget.js';
+import { PARTQUILL_WIDGET_URI } from '../src/mcp/widget.js';
 
 describe('PartQuill connected ChatGPT contract', () => {
   let server: ReturnType<typeof buildPartQuillMcpServer>;
@@ -38,8 +38,11 @@ describe('PartQuill connected ChatGPT contract', () => {
     const resource = await client.readResource({ uri: PARTQUILL_WIDGET_URI });
     const html = resource.contents[0];
     expect(html?.mimeType).toBe('text/html;profile=mcp-app');
-    expect(html?._meta?.ui).toMatchObject({ domain: PARTQUILL_WIDGET_ORIGIN });
-    expect(html?._meta?.['openai/widgetDomain']).toBe(PARTQUILL_WIDGET_ORIGIN);
+    expect(html?._meta?.ui).toEqual({
+      prefersBorder: false,
+      csp: { connectDomains: [], resourceDomains: [] }
+    });
+    expect(html?._meta?.['openai/widgetDomain']).toBeUndefined();
     expect(html && 'text' in html ? html.text : '').toContain('Upload once. Edit in this conversation.');
     expect(html && 'text' in html ? html.text : '').toContain('window.openai.sendFollowUpMessage');
     expect(html && 'text' in html ? html.text : '').toContain('window.openai.uploadFile');
