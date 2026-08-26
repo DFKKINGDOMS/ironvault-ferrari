@@ -1,6 +1,6 @@
 import { PARTQUILL_CHATGPT_EDIT_PROMPT } from './prompt.js';
 
-export const PARTQUILL_WIDGET_URI = 'ui://partquill/image-studio-v1.html';
+export const PARTQUILL_WIDGET_URI = 'ui://partquill/image-studio-v2.html';
 
 export function buildPartQuillWidgetHtml(): string {
   const basePrompt = JSON.stringify(PARTQUILL_CHATGPT_EDIT_PROMPT);
