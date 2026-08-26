@@ -39,7 +39,7 @@ Production publishing remains disabled until every P0 gate is proven against one
 
 - TypeScript build: pass.
 - ESLint: pass.
-- Automated tests: 38 pass across configuration, security, policy, images, Image Studio pricing/routing, approvals, HTTP and post-publish lifecycle.
+- Automated tests: 39 pass across configuration, security, policy, images, Image Studio pricing/routing, approvals, HTTP and post-publish lifecycle.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.
 - Local TCP smoke test: not available in the current managed workspace because host socket/interface lookup is blocked; Fastify injection exercises the compiled HTTP contract without a listening socket.

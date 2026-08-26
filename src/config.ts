@@ -14,6 +14,7 @@ const schema = z
     TOKEN_ENCRYPTION_KEY: z.string().optional(),
     OAUTH_STATE_SECRET: z.string().min(24).default('development-only-oauth-state-change-me'),
     DATABASE_URL: z.string().optional(),
+    PILOT_EPHEMERAL_MODE: booleanString,
     EBAY_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
     EBAY_MODE: z.enum(['mock', 'live']).default('mock'),
     ALLOW_EBAY_WRITES: booleanString,
@@ -34,7 +35,7 @@ const schema = z
       if (!env.TOKEN_ENCRYPTION_KEY) {
         context.addIssue({ code: 'custom', path: ['TOKEN_ENCRYPTION_KEY'], message: 'required in production' });
       }
-      if (!env.DATABASE_URL) {
+      if (!env.DATABASE_URL && !env.PILOT_EPHEMERAL_MODE) {
         context.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'required in production' });
       }
       if (env.PARTQUILL_API_KEY.startsWith('development-only')) {
@@ -43,6 +44,13 @@ const schema = z
       if (env.OAUTH_STATE_SECRET.startsWith('development-only')) {
         context.addIssue({ code: 'custom', path: ['OAUTH_STATE_SECRET'], message: 'production OAuth state secret is required' });
       }
+    }
+    if (env.PILOT_EPHEMERAL_MODE && (env.EBAY_MODE !== 'mock' || env.ALLOW_EBAY_WRITES)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PILOT_EPHEMERAL_MODE'],
+        message: 'ephemeral pilot mode requires mock eBay mode with all eBay writes disabled'
+      });
     }
     if (env.EBAY_MODE === 'live' && (!env.EBAY_CLIENT_ID || !env.EBAY_CLIENT_SECRET || !env.EBAY_RU_NAME)) {
       context.addIssue({ code: 'custom', path: ['EBAY_MODE'], message: 'live mode requires all eBay OAuth credentials' });

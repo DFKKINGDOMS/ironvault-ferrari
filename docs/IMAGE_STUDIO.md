@@ -87,6 +87,11 @@ multi-seller launch, replace those with private object storage, signed result
 URLs, a durable queue, job cancellation, retention/deletion policy, malware
 scanning, seller-scoped authentication, metering and refunds.
 
+When the temporary owner preview has no database binding, it must set
+`PILOT_EPHEMERAL_MODE=true`. Configuration accepts that flag only with the mock
+eBay adapter and all eBay writes disabled. `/ready` reports the ephemeral state;
+it is never presented as durable production storage.
+
 ## Acceptance criteria
 
 1. Accept 1–24 JPEG, PNG or WebP files, maximum 12 MB per file and 120 MB per batch.

@@ -43,4 +43,18 @@ describe('production configuration fail-closed behavior', () => {
       })
     ).toThrow('live Image Studio requires an OpenAI API key');
   });
+
+  it('permits an explicit fail-closed ephemeral owner preview', () => {
+    const config = loadConfig({
+      NODE_ENV: 'production',
+      PARTQUILL_API_KEY: 'production-api-key-that-is-long-enough',
+      OAUTH_STATE_SECRET: 'production-oauth-secret-long-enough',
+      TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+      EBAY_ENV: 'sandbox',
+      EBAY_MODE: 'mock',
+      ALLOW_EBAY_WRITES: 'false',
+      PILOT_EPHEMERAL_MODE: 'true'
+    });
+    expect(config.PILOT_EPHEMERAL_MODE).toBe(true);
+  });
 });

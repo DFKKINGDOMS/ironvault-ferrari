@@ -118,7 +118,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return {
         ready: true,
         ebay: { environment: config.EBAY_ENV, mode: config.EBAY_MODE, writesEnabled: config.ALLOW_EBAY_WRITES },
-        persistence: config.DATABASE_URL ? 'postgres' : 'memory',
+        persistence: config.DATABASE_URL ? 'postgres' : config.PILOT_EPHEMERAL_MODE ? 'ephemeral-memory-pilot' : 'memory',
         imageStudio: {
           mode: config.IMAGE_STUDIO_MODE,
           activated: imageStudio?.activated ?? false,
