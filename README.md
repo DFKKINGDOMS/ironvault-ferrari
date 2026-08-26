@@ -1,0 +1,119 @@
+# PartQuill API — eBay-first pilot
+
+This repository is the first executable PartQuill vertical slice. It turns seller evidence into held listing drafts and enforces two independent approvals before any public eBay write.
+
+It is intentionally not a universal visual parts identifier. The default runtime uses a clearly labeled mock eBay gateway, PostgreSQL-compatible storage, and `ALLOW_EBAY_WRITES=false`.
+
+## Implemented now
+
+- Authenticated Fastify API with strict Zod request validation.
+- Canonical payload hashing and versioned held drafts.
+- Append-only evidence, approval and audit records.
+- Exception-first seller queue.
+- eBay OAuth authorization-code scaffolding with HMAC state and AES-256-GCM token storage.
+- Mock eBay catalog/staging/publish/revise/withdraw/reconcile lifecycle.
+- Live publish and withdraw adapter endpoints, guarded behind disabled-by-default controls.
+- Ten-successful-publishes free allowance.
+- Domestic/international origin separation, core terms, unverified-fitment and restricted-item gates.
+- Immutable original image retention and explicit derivative lineage.
+- Image rights and foreground-preservation contracts.
+- PostgreSQL migration and Render Blueprint.
+- EvidencePack JSON export for disputes and audits.
+- Does-not-fit feedback that clears compatibility, invalidates approvals and holds the item for evidence review.
+- Sibling compatibility quarantine for listings sharing the same sourced evidence edge.
+- Explicit seller acknowledgement of Inventory API lifecycle ownership before preflight.
+- Audited remote-drift disposition: accept remote state or prepare a local revision; never silently merge.
+- Mock catalog responses that cannot be mistaken for an ePID or production eBay evidence.
+- Image Studio batch intake for 1–24 seller-owned photographs, with immutable originals and SHA-256 lineage.
+- Ferrari-workflow preservation prompt, source-versus-result AI QA, premium hero routing, economical secondary routing and automatic failed-image escalation.
+- Batch pricing rather than per-photo retail pricing: the current 24-image pilot quote is $2.49 from prepaid Studio balance, subject to real production telemetry.
+
+## Safety model
+
+See [docs/SAFETY_INVARIANTS.md](docs/SAFETY_INVARIANTS.md). The central rule is simple:
+
+```text
+unchanged payload
+  + preflight approval
+  + staged offer
+  + fresh fee-bound public approval
+  + no exceptions
+  + authorization
+  + external-write flag
+  = eligible to call publish
+```
+
+Production eBay writes are refused by configuration in this checkpoint, even if the global write flag is accidentally enabled.
+
+## Local setup
+
+Requirements: Node 22+ and, for durable mode, PostgreSQL.
+
+```bash
+cp .env.example .env
+npm ci
+npm run build
+npm test
+```
+
+Without `DATABASE_URL`, the app runs with an in-memory repository suitable for tests and API exploration. With PostgreSQL:
+
+```bash
+npm run migrate
+npm run dev
+```
+
+Health endpoints are public:
+
+- `GET /health` — process liveness.
+- `GET /ready` — persistence and safety-mode summary.
+
+All business endpoints require `Authorization: Bearer $PARTQUILL_API_KEY`.
+
+Image Studio supports a separate private pilot credential through
+`X-PartQuill-Studio-Token`. The token belongs on a trusted server-side proxy;
+it must never be embedded in public browser code.
+
+## Image Studio batch flow
+
+1. `GET /v1/image-studio/quote?count=24`
+2. `POST /v1/image-studio/jobs` as multipart form data. Use `images` for 1–24 files and include `sellerId`, `background`, `rightsConfirmed=true`, and `watermarkStatus`.
+3. Poll `GET /v1/image-studio/jobs/:jobId`.
+4. Retrieve the immutable source or accepted result from each image URL in the job response.
+5. Use `POST /v1/image-studio/jobs/:jobId/retry` only for held activation, failed, or review-required jobs.
+
+`IMAGE_STUDIO_MODE=preview` accepts and retains the pilot job but performs no
+paid model call. `IMAGE_STUDIO_MODE=live` requires `OPENAI_API_KEY` and a private
+pilot token. The API key is server-only and cannot come from a customer's
+ChatGPT subscription.
+
+See [docs/IMAGE_STUDIO.md](docs/IMAGE_STUDIO.md) for quality, cost, activation,
+and deployment boundaries.
+
+## Principal API flow
+
+1. `POST /v1/items`
+2. `POST /v1/items/:itemId/catalog-resolution`
+3. Add or correct evidence until the item is `READY_FOR_PREFLIGHT`.
+4. `POST /v1/items/:itemId/approvals/preflight`
+5. `POST /v1/items/:itemId/stage`
+6. Review the exact staged payload and fee estimate.
+7. `POST /v1/items/:itemId/approvals/public`
+8. `POST /v1/items/:itemId/publish`
+9. Operate through `PATCH /v1/items/:itemId/listing`, `/withdraw`, and `/reconcile`.
+
+Any material edit restarts the approval chain.
+
+## What remains before a real seller pilot
+
+- Register eBay developer keys and RuName; complete one Sandbox OAuth connection.
+- Implement Inventory API inventory-item, location, business-policy and offer mapping for the pilot seller.
+- Run current production Taxonomy/Metadata/catalog read probes. Sandbox alone does not prove Motors catalog behavior.
+- Add publicly retrievable image-object storage for eBay image URLs.
+- Replace preview filesystem storage with durable private object storage and signed delivery URLs before a multi-seller launch.
+- Replace the in-process pilot queue with a durable background queue before production volume.
+- Activate the server-side OpenAI credential and record actual per-image telemetry before committing to final retail packs.
+- Ingest does-not-fit return feedback and token refresh/revocation lifecycle.
+- Push this repository to a Git host before Render can deploy it.
+
+The current gate-by-gate status is in [docs/ACCEPTANCE_STATUS.md](docs/ACCEPTANCE_STATUS.md).
