@@ -29,7 +29,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Batch pricing rather than per-photo retail pricing: the current 24-image pilot quote is $2.49 from prepaid Studio balance, subject to real production telemetry.
 - A connected ChatGPT MCP endpoint and embedded Image Studio widget for the free route: upload 1–24 files once, retain their ChatGPT file references, and dispatch the exact preservation job in the same conversation.
 - A file-return tool contract that can pair completed ChatGPT image outputs to the protected job without an eBay write. Host-level automatic return remains a live ChatGPT acceptance test, not a completed product claim.
-- A read-only Toyota/Lexus/Scion research tool for exact OEM part numbers. It merges multiple private reference catalogs into anonymous price quotes, crossover brands, supersession, PartQuill-hosted images, and normalized year/make/model/trim/engine fitment. Dealer names, domains, URLs, phones, addresses and personnel are blocked from every public result.
+- A read-only Toyota/Lexus/Scion research tool for exact OEM part numbers. It merges multiple private reference catalogs into anonymous price quotes, crossover brands, supersession, and normalized year/make/model/trim/engine fitment. The best exact product reference photo and catalog diagram are returned as real MCP image attachments, with diagram callout/PNC labels and fail-closed publishing-rights warnings. Dealer names, domains, URLs, phones, addresses and personnel are blocked from every public result.
 - Dealer-anchored quick-sale guidance with an explicit confidence boundary. It is not represented as verified resale-market value and is never applied to or published on an eBay listing automatically.
 
 ## Safety model

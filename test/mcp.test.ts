@@ -36,7 +36,12 @@ const lexusResearchFixture = {
   },
   images: [
     {
-      url: 'https://api.partquill.com/v1/catalog/images/0123456789abcdef0123456789abcdef01234567',
+      url: 'https://api.partquill.com/v1/catalog/images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      type: 'ACTUAL_PRODUCT_PHOTO' as const,
+      alt: 'Exact product reference photograph'
+    },
+    {
+      url: 'https://api.partquill.com/v1/catalog/images/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       type: 'CATALOG_ILLUSTRATION' as const,
       alt: 'Catalog illustration'
     }
@@ -66,7 +71,13 @@ describe('PartQuill connected ChatGPT contract', () => {
   let client: Client;
 
   beforeEach(async () => {
-    server = buildPartQuillMcpServer({ researchOemPart: async () => lexusResearchFixture });
+    server = buildPartQuillMcpServer({
+      researchOemPart: async () => lexusResearchFixture,
+      loadCatalogImage: async (url) => ({
+        data: Buffer.from(url.includes('aaaa') ? 'product-image' : 'diagram-image').toString('base64'),
+        mimeType: url.includes('aaaa') ? 'image/jpeg' : 'image/png'
+      })
+    });
     client = new Client({ name: 'partquill-test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -104,8 +115,24 @@ describe('PartQuill connected ChatGPT contract', () => {
       identity: { partNumber: '75443-78210', description: 'PLATE, BACK DOOR NAM' },
       pricing: { listPriceReference: 59.03, currentPriceLow: 44.36 },
       quickSale: { targetPrice: 35.49, basis: 'LOWEST_CURRENT_OEM_QUOTE' },
+      imagePresentation: {
+        productPhotoAttached: true,
+        diagramAttached: true,
+        diagramCallouts: ['75443'],
+        productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED',
+        catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY',
+        primaryEbayImageApproved: false
+      },
       vinConfirmationRequired: true
     });
+    expect((result.content as Array<{ type: string }>).map((content) => content.type)).toEqual([
+      'text',
+      'text',
+      'image',
+      'text',
+      'image'
+    ]);
+    expect(JSON.stringify(result.content)).toContain('Diagram callout / PNC: 75443');
     expect(JSON.stringify(result.content)).toContain('No eBay listing or price was changed.');
     expect(JSON.stringify(result)).not.toMatch(/lexuspartsnow|toyotapartsdeal|longotoyota|revolutionparts/i);
     expect(JSON.stringify(result)).not.toMatch(/(?:telephone|phone|street address|contact us)/i);

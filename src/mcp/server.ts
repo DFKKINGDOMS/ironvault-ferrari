@@ -3,6 +3,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { researchOemPart, type OemPartResearch } from '../catalog/oem-research.js';
+import {
+  loadCatalogImageAttachment,
+  type CatalogImageAttachment
+} from '../catalog/image-proxy.js';
 import { buildConnectedImagePrompt } from './prompt.js';
 
 const openAiFileSchema = z.object({
@@ -31,21 +35,31 @@ type OemPartResearchFunction = (
   partNumber: string,
   options?: { quickSaleDiscountPercent?: number }
 ) => Promise<OemPartResearch>;
+type CatalogImageLoader = (publicUrl: string) => Promise<CatalogImageAttachment | undefined>;
 
 export interface PartQuillMcpDependencies {
   researchOemPart?: OemPartResearchFunction;
+  loadCatalogImage?: CatalogImageLoader;
 }
 
 function money(value: number | undefined): string {
   return value === undefined ? 'not shown' : `$${value.toFixed(2)}`;
 }
 
-function oemPartSummary(result: OemPartResearch): string {
+interface ImagePresentation {
+  productPhotoAttached: boolean;
+  diagramAttached: boolean;
+  diagramCallouts: string[];
+  productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED';
+  catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY';
+  primaryEbayImageApproved: false;
+}
+
+function oemPartSummary(result: OemPartResearch, imagePresentation: ImagePresentation): string {
   const fitmentPreview = result.fitment
     .slice(0, 12)
     .map((row) => `- ${row.raw}`)
     .join('\n');
-  const image = result.images[0];
   const quoteRows = result.pricing.anonymousQuotes
     .map((quote) => `- **${quote.quote}:** current ${money(quote.currentPrice)} · list/MSRP ${money(quote.listPrice)}`)
     .join('\n');
@@ -67,7 +81,11 @@ function oemPartSummary(result: OemPartResearch): string {
     '### Anonymous OEM price checks',
     quoteRows || '- No current price was returned.',
     '',
-    image ? `![${image.alt || result.identity.description}](${image.url})` : '_No catalog image was returned._',
+    '### Images and diagram reference',
+    `- **Exact product reference photo:** ${imagePresentation.productPhotoAttached ? 'attached below' : 'not available as an attachment'}`,
+    `- **Catalog diagram:** ${imagePresentation.diagramAttached ? 'attached separately below' : 'not available as an attachment'}`,
+    `- **Diagram callout / PNC:** ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}`,
+    '- **Usage:** Research reference only. Neither attachment is approved as the primary eBay image; publishing requires confirmed image rights.',
     '',
     `### Fitment (${result.fitmentTotal} exact catalog rows)`,
     fitmentPreview || '- No fitment rows were returned.',
@@ -82,8 +100,9 @@ function oemPartSummary(result: OemPartResearch): string {
 
 export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies = {}): McpServer {
   const oemLookup = dependencies.researchOemPart ?? researchOemPart;
+  const imageLoader = dependencies.loadCatalogImage ?? loadCatalogImageAttachment;
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.5.0' },
+    { name: 'partquill-image-studio', version: '0.6.0' },
     {
       instructions:
         'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. Catalog fitment is reference evidence and always requires VIN confirmation. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
@@ -146,6 +165,14 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
             alt: z.string().optional()
           })
         ),
+        imagePresentation: z.object({
+          productPhotoAttached: z.boolean(),
+          diagramAttached: z.boolean(),
+          diagramCallouts: z.array(z.string()),
+          productPhotoUsage: z.literal('REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED'),
+          catalogDiagramUsage: z.literal('INTERNAL_REFERENCE_ONLY'),
+          primaryEbayImageApproved: z.literal(false)
+        }),
         fitment: z.array(
           z.object({
             yearStart: z.number().int().optional(),
@@ -175,10 +202,46 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
     },
     async ({ part_number: partNumber, quick_sale_discount_percent: discountPercent }) => {
       const result = await oemLookup(partNumber, { quickSaleDiscountPercent: discountPercent });
-      const structuredContent = { ...result };
+      const productPhoto = result.images.find((image) => image.type === 'ACTUAL_PRODUCT_PHOTO');
+      const catalogDiagram = result.images.find((image) => image.type === 'CATALOG_ILLUSTRATION');
+      const [productAttachment, diagramAttachment] = await Promise.all([
+        productPhoto ? imageLoader(productPhoto.url).catch(() => undefined) : undefined,
+        catalogDiagram ? imageLoader(catalogDiagram.url).catch(() => undefined) : undefined
+      ]);
+      const imagePresentation: ImagePresentation = {
+        productPhotoAttached: Boolean(productAttachment),
+        diagramAttached: Boolean(diagramAttachment),
+        diagramCallouts: result.identity.pncCodes,
+        productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED',
+        catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY',
+        primaryEbayImageApproved: false
+      };
+      const structuredContent = { ...result, imagePresentation };
+      const content: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image'; data: string; mimeType: string }
+      > = [{ type: 'text', text: oemPartSummary(result, imagePresentation) }];
+      if (productAttachment) {
+        content.push(
+          {
+            type: 'text',
+            text: `Exact product reference photograph for ${result.identity.partNumber}. Research-only unless separate publishing rights are confirmed.`
+          },
+          { type: 'image', data: productAttachment.data, mimeType: productAttachment.mimeType }
+        );
+      }
+      if (diagramAttachment) {
+        content.push(
+          {
+            type: 'text',
+            text: `Catalog diagram for internal reference. Diagram callout / PNC: ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}. Do not use as the primary eBay image.`
+          },
+          { type: 'image', data: diagramAttachment.data, mimeType: diagramAttachment.mimeType }
+        );
+      }
       return {
         structuredContent,
-        content: [{ type: 'text', text: oemPartSummary(result) }]
+        content
       };
     }
   );

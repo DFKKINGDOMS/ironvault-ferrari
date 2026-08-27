@@ -37,6 +37,7 @@ Status legend: `implemented`, `tested`, `scaffolded`, `blocked-external`.
 | A31 Free-route separation | tested-contract | Connected ChatGPT Assist needs no PartQuill API key, contains no checkout, and does not call the metered Express worker |
 | A32 Toyota/Lexus/Scion exact-number research | tested-live | `research_oem_part` exact-matches three private catalog paths, merges crossover fitment, anonymizes price quotes, proxies images through PartQuill, and fails closed on mismatches or any dealer-identity leakage |
 | A33 Quick-sale price boundary | tested | Default recommendation is transparently anchored 20% below the lowest current anonymous OEM quote, with a 15–25% range; it is labeled as an estimate rather than resale-market value and is never applied or published automatically |
+| A34 Catalog image rendering | tested-contract | `research_oem_part` attaches the best product reference photo and one catalog diagram as base64 MCP image content, labels diagram callout/PNC, blocks dealer identity, and marks both reference-only with `primaryEbayImageApproved=false` |
 
 Production publishing remains disabled until every P0 gate is proven against one authorized seller and the exact current eBay environment.
 
@@ -44,7 +45,7 @@ Production publishing remains disabled until every P0 gate is proven against one
 
 - TypeScript build: pass.
 - ESLint: pass.
-- Automated tests: 47 pass across configuration, security, policy, images, Image Studio pricing/routing, MCP/widget contracts, Lexus dealer research, approvals, HTTP and post-publish lifecycle.
+- Automated tests cover configuration, security, policy, images, Image Studio pricing/routing, MCP image attachments, multi-catalog research, approvals, HTTP and post-publish lifecycle.
 - Live multi-catalog smoke tests: exact parts returned Toyota/Lexus/Scion crossover evidence, anonymous MSRP/current-price comparisons, proxied images, supersession and normalized fitment rows without source identity or contact data.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.

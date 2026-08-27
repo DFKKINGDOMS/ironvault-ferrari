@@ -117,7 +117,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.5.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.6.0' }));
   app.get('/', async (_request, reply) =>
     reply.type('text/html; charset=utf-8').send(buildPartQuillWidgetHtml())
   );
