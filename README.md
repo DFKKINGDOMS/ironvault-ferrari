@@ -29,7 +29,8 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Batch pricing rather than per-photo retail pricing: the current 24-image pilot quote is $2.49 from prepaid Studio balance, subject to real production telemetry.
 - A connected ChatGPT MCP endpoint and embedded Image Studio widget for the free route: upload 1–24 files once, retain their ChatGPT file references, and dispatch the exact preservation job in the same conversation.
 - A file-return tool contract that can pair completed ChatGPT image outputs to the protected job without an eBay write. Host-level automatic return remains a live ChatGPT acceptance test, not a completed product claim.
-- A read-only Toyota/Lexus/Scion research tool for exact OEM part numbers. It merges multiple private reference catalogs into anonymous price quotes, crossover brands, supersession, and normalized year/make/model/trim/engine fitment. The best exact product reference photo and catalog diagram are returned as real MCP image attachments, with diagram callout/PNC labels and fail-closed publishing-rights warnings. Dealer names, domains, URLs, phones, addresses and personnel are blocked from every public result.
+- A read-only Toyota/Lexus/Scion research tool for exact OEM part numbers. It merges three private reference paths into anonymous price quotes, crossover brands, supersession, and normalized year/make/model/trim/engine fitment. The exact product reference photo and catalog diagram render inside a PartQuill inline card from widget-only media bytes, with diagram callout/PNC labels and fail-closed publishing-rights warnings. Dealer names, domains, URLs, phones, addresses and personnel are blocked from every public result.
+- A buyer-facing VIN cross-check in the same card. It decodes a 17-character Toyota/Lexus/Scion VIN, compares year/make/model/engine against the three-path catalog evidence, returns only the VIN's last four characters, stores no VIN and permits a listing fitment claim only on a specific catalog match.
 - Dealer-anchored quick-sale guidance with an explicit confidence boundary. It is not represented as verified resale-market value and is never applied to or published on an eBay listing automatically.
 
 ## Safety model
@@ -79,10 +80,12 @@ The connected ChatGPT proof endpoint is also public:
 
 The MCP surface never publishes to eBay, never treats an edited derivative as
 identity or fitment evidence, and contains no subscription or credit checkout.
-`research_oem_part` is the current read-only catalog tool. It accepts an exact
+`open_oem_part_finder` opens the inline buyer card. `research_oem_part` accepts an exact
 Toyota, Lexus or Scion part number and performs private multi-catalog lookups. Results are
-OEM catalog reference evidence—not VIN-confirmed compatibility or marketplace sales
-evidence. They retain retrieval time and source counts but never source identity or URLs.
+OEM catalog reference evidence—not marketplace sales evidence. `verify_oem_part_vin`
+accepts the exact part plus a 17-character VIN, returns a masked decision, and fails closed
+on broad engine or production-break evidence. Results retain retrieval time and source
+counts but never source identity or URLs.
 
 All business endpoints require `Authorization: Bearer $PARTQUILL_API_KEY`.
 

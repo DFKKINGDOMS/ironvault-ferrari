@@ -1,12 +1,18 @@
 import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
+import {
+  registerAppResource,
+  registerAppTool,
+  RESOURCE_MIME_TYPE
+} from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { researchOemPart, type OemPartResearch } from '../catalog/oem-research.js';
+import { verifyOemPartVin, type VinPartVerification } from '../catalog/vin-fitment.js';
 import {
   loadCatalogImageAttachment,
   type CatalogImageAttachment
 } from '../catalog/image-proxy.js';
+import { buildPartQuillOemWidgetHtml, PARTQUILL_OEM_WIDGET_URI } from './oem-widget.js';
 import { buildConnectedImagePrompt } from './prompt.js';
 
 const openAiFileSchema = z.object({
@@ -36,10 +42,12 @@ type OemPartResearchFunction = (
   options?: { quickSaleDiscountPercent?: number }
 ) => Promise<OemPartResearch>;
 type CatalogImageLoader = (publicUrl: string) => Promise<CatalogImageAttachment | undefined>;
+type VinPartVerificationFunction = (partNumber: string, vin: string) => Promise<VinPartVerification>;
 
 export interface PartQuillMcpDependencies {
   researchOemPart?: OemPartResearchFunction;
   loadCatalogImage?: CatalogImageLoader;
+  verifyOemPartVin?: VinPartVerificationFunction;
 }
 
 function money(value: number | undefined): string {
@@ -47,8 +55,10 @@ function money(value: number | undefined): string {
 }
 
 interface ImagePresentation {
-  productPhotoAttached: boolean;
-  diagramAttached: boolean;
+  productPhotoAvailable: boolean;
+  diagramAvailable: boolean;
+  visualCard: 'PARTQUILL_INLINE_CARD';
+  transcriptAttachments: false;
   diagramCallouts: string[];
   productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED';
   catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY';
@@ -82,10 +92,11 @@ function oemPartSummary(result: OemPartResearch, imagePresentation: ImagePresent
     quoteRows || '- No current price was returned.',
     '',
     '### Images and diagram reference',
-    `- **Exact product reference photo:** ${imagePresentation.productPhotoAttached ? 'attached below' : 'not available as an attachment'}`,
-    `- **Catalog diagram:** ${imagePresentation.diagramAttached ? 'attached separately below' : 'not available as an attachment'}`,
+    `- **Exact product reference photo:** ${imagePresentation.productPhotoAvailable ? 'available to the PartQuill visual result card' : 'not returned'}`,
+    `- **Catalog diagram:** ${imagePresentation.diagramAvailable ? 'available to the PartQuill visual result card' : 'not returned'}`,
     `- **Diagram callout / PNC:** ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}`,
-    '- **Usage:** Research reference only. Neither attachment is approved as the primary eBay image; publishing requires confirmed image rights.',
+    '- **Display:** These are not transcript attachments. Do not claim they are shown unless the PartQuill visual result card is visible.',
+    '- **Usage:** Research reference only. Neither image is approved as the primary eBay image; publishing requires confirmed image rights.',
     '',
     `### Fitment (${result.fitmentTotal} exact catalog rows)`,
     fitmentPreview || '- No fitment rows were returned.',
@@ -101,11 +112,68 @@ function oemPartSummary(result: OemPartResearch, imagePresentation: ImagePresent
 export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies = {}): McpServer {
   const oemLookup = dependencies.researchOemPart ?? researchOemPart;
   const imageLoader = dependencies.loadCatalogImage ?? loadCatalogImageAttachment;
+  const vinVerifier = dependencies.verifyOemPartVin ?? verifyOemPartVin;
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.6.0' },
+    { name: 'partquill-image-studio', version: '0.7.0' },
     {
       instructions:
-        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. Catalog fitment is reference evidence and always requires VIN confirmation. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
+        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
+    }
+  );
+
+  registerAppResource(
+    server,
+    'PartQuill OEM Part Finder',
+    PARTQUILL_OEM_WIDGET_URI,
+    { description: 'Inline OEM part research, reference media and VIN cross-check panel.' },
+    async () => ({
+      contents: [
+        {
+          uri: PARTQUILL_OEM_WIDGET_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: buildPartQuillOemWidgetHtml(),
+          _meta: { ui: { prefersBorder: true } }
+        }
+      ]
+    })
+  );
+
+  registerAppTool(
+    server,
+    'open_oem_part_finder',
+    {
+      title: 'Open PartQuill OEM Part Finder',
+      description:
+        'Open the buyer-facing Toyota, Lexus and Scion part-number finder with an optional 17-character VIN cross-check. Read-only and dealer-anonymous.',
+      outputSchema: {
+        stage: z.literal('READY_FOR_PART_OR_VIN'),
+        supportedMakes: z.tuple([z.literal('Toyota'), z.literal('Lexus'), z.literal('Scion')]),
+        dealerIdentityExposed: z.literal(false),
+        eBayWritePerformed: z.literal(false)
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
+      _meta: {
+        ui: { resourceUri: PARTQUILL_OEM_WIDGET_URI, visibility: ['model'] },
+        'openai/toolInvocation/invoking': 'Opening PartQuill OEM Part Finder…',
+        'openai/toolInvocation/invoked': 'PartQuill OEM Part Finder ready'
+      }
+    },
+    async () => {
+      const structuredContent = {
+        stage: 'READY_FOR_PART_OR_VIN' as const,
+        supportedMakes: ['Toyota', 'Lexus', 'Scion'] as const,
+        dealerIdentityExposed: false as const,
+        eBayWritePerformed: false as const
+      };
+      return {
+        structuredContent,
+        content: [
+          {
+            type: 'text',
+            text: 'PartQuill OEM Part Finder is ready for an exact part number and optional 17-character VIN. No dealer identity or eBay write is exposed.'
+          }
+        ]
+      };
     }
   );
 
@@ -166,8 +234,10 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           })
         ),
         imagePresentation: z.object({
-          productPhotoAttached: z.boolean(),
-          diagramAttached: z.boolean(),
+          productPhotoAvailable: z.boolean(),
+          diagramAvailable: z.boolean(),
+          visualCard: z.literal('PARTQUILL_INLINE_CARD'),
+          transcriptAttachments: z.literal(false),
           diagramCallouts: z.array(z.string()),
           productPhotoUsage: z.literal('REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED'),
           catalogDiagramUsage: z.literal('INTERNAL_REFERENCE_ONLY'),
@@ -196,6 +266,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
       },
       annotations: { readOnlyHint: true, openWorldHint: true, destructiveHint: false },
       _meta: {
+        ui: { resourceUri: PARTQUILL_OEM_WIDGET_URI, visibility: ['model', 'app'] },
         'openai/toolInvocation/invoking': 'Checking private OEM references…',
         'openai/toolInvocation/invoked': 'Anonymous OEM research ready'
       }
@@ -209,39 +280,110 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
         catalogDiagram ? imageLoader(catalogDiagram.url).catch(() => undefined) : undefined
       ]);
       const imagePresentation: ImagePresentation = {
-        productPhotoAttached: Boolean(productAttachment),
-        diagramAttached: Boolean(diagramAttachment),
+        productPhotoAvailable: Boolean(productAttachment),
+        diagramAvailable: Boolean(diagramAttachment),
+        visualCard: 'PARTQUILL_INLINE_CARD',
+        transcriptAttachments: false,
         diagramCallouts: result.identity.pncCodes,
         productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED',
         catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY',
         primaryEbayImageApproved: false
       };
       const structuredContent = { ...result, imagePresentation };
-      const content: Array<
-        | { type: 'text'; text: string }
-        | { type: 'image'; data: string; mimeType: string }
-      > = [{ type: 'text', text: oemPartSummary(result, imagePresentation) }];
+      const partquillMedia: Array<{
+        role: 'PRODUCT_PHOTO' | 'CATALOG_DIAGRAM';
+        data: string;
+        mimeType: string;
+        alt: string;
+      }> = [];
       if (productAttachment) {
-        content.push(
-          {
-            type: 'text',
-            text: `Exact product reference photograph for ${result.identity.partNumber}. Research-only unless separate publishing rights are confirmed.`
-          },
-          { type: 'image', data: productAttachment.data, mimeType: productAttachment.mimeType }
-        );
+        partquillMedia.push({
+          role: 'PRODUCT_PHOTO',
+          data: productAttachment.data,
+          mimeType: productAttachment.mimeType,
+          alt: `Exact product reference photograph for ${result.identity.partNumber}`
+        });
       }
       if (diagramAttachment) {
-        content.push(
-          {
-            type: 'text',
-            text: `Catalog diagram for internal reference. Diagram callout / PNC: ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}. Do not use as the primary eBay image.`
-          },
-          { type: 'image', data: diagramAttachment.data, mimeType: diagramAttachment.mimeType }
-        );
+        partquillMedia.push({
+          role: 'CATALOG_DIAGRAM',
+          data: diagramAttachment.data,
+          mimeType: diagramAttachment.mimeType,
+          alt: `Catalog diagram for ${result.identity.partNumber}; callout ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}`
+        });
       }
       return {
         structuredContent,
-        content
+        content: [{ type: 'text', text: oemPartSummary(result, imagePresentation) }],
+        _meta: { partquillMedia }
+      };
+    }
+  );
+
+  registerAppTool(
+    server,
+    'verify_oem_part_vin',
+    {
+      title: 'Verify OEM part against buyer VIN',
+      description:
+        'Decode a buyer-provided 17-character Toyota, Lexus or Scion VIN and cross-check an exact OEM part number against three anonymous catalog paths. Returns only the VIN last four, never stores the VIN, never exposes dealer identity and never writes to eBay.',
+      inputSchema: {
+        part_number: z.string().min(5).max(40),
+        vin: z.string().regex(/^[A-HJ-NPR-Z0-9]{17}$/i)
+      },
+      outputSchema: {
+        partNumber: z.string(),
+        vinLastFour: z.string().length(4),
+        vehicle: z.object({
+          make: z.enum(['Toyota', 'Lexus', 'Scion']),
+          model: z.string(),
+          modelYear: z.number().int(),
+          engineModel: z.string().optional(),
+          displacementL: z.number().optional(),
+          cylinders: z.number().optional(),
+          trim: z.string().optional(),
+          series: z.string().optional()
+        }),
+        status: z.enum(['CATALOG_MATCH', 'CATALOG_NO_MATCH', 'INCONCLUSIVE']),
+        statusLabel: z.enum(['Fits catalog evidence', 'No matching catalog evidence', 'Needs manual confirmation']),
+        explanation: z.string(),
+        matchingFitment: z.array(z.object({
+          yearStart: z.number().int().optional(),
+          yearEnd: z.number().int().optional(),
+          make: z.enum(['Lexus', 'Toyota', 'Scion']),
+          model: z.string(),
+          trimEngine: z.string().optional(),
+          optionDetails: z.string().optional(),
+          raw: z.string()
+        })),
+        catalogChecks: z.object({
+          attempted: z.literal(3),
+          exactPartMatches: z.number().int(),
+          unavailable: z.number().int(),
+          matchingRows: z.number().int()
+        }),
+        listingFitmentAllowed: z.boolean(),
+        vinStored: z.literal(false),
+        dealerIdentityExposed: z.literal(false)
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true, destructiveHint: false },
+      _meta: {
+        ui: { resourceUri: PARTQUILL_OEM_WIDGET_URI, visibility: ['model', 'app'] },
+        'openai/toolInvocation/invoking': 'Checking VIN against anonymous catalog evidence…',
+        'openai/toolInvocation/invoked': 'VIN catalog cross-check ready'
+      }
+    },
+    async ({ part_number: partNumber, vin }) => {
+      const verification = await vinVerifier(partNumber, vin);
+      const structuredContent = { ...verification };
+      return {
+        structuredContent,
+        content: [
+          {
+            type: 'text',
+            text: `${verification.statusLabel}: ${verification.explanation} VIN ending ${verification.vinLastFour}. The full VIN was not returned or stored. No dealer identity or eBay write was exposed.`
+          }
+        ]
       };
     }
   );
