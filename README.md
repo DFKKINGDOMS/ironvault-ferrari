@@ -29,6 +29,8 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Batch pricing rather than per-photo retail pricing: the current 24-image pilot quote is $2.49 from prepaid Studio balance, subject to real production telemetry.
 - A connected ChatGPT MCP endpoint and embedded Image Studio widget for the free route: upload 1–24 files once, retain their ChatGPT file references, and dispatch the exact preservation job in the same conversation.
 - A file-return tool contract that can pair completed ChatGPT image outputs to the protected job without an eBay write. Host-level automatic return remains a live ChatGPT acceptance test, not a completed product claim.
+- A read-only LexusPartsNow research tool for exact Lexus part numbers. It returns dealer-catalog identity, MSRP/list and dealer sale prices, labeled product/illustration images, supersession, and normalized year/make/model/trim/engine fitment with source URL and retrieval time.
+- Dealer-anchored quick-sale guidance with an explicit confidence boundary. It is not represented as verified resale-market value and is never applied to or published on an eBay listing automatically.
 
 ## Safety model
 
@@ -77,6 +79,10 @@ The connected ChatGPT proof endpoint is also public:
 
 The MCP surface never publishes to eBay, never treats an edited derivative as
 identity or fitment evidence, and contains no subscription or credit checkout.
+`research_lexus_part` is the current read-only catalog tool. It accepts an exact
+Lexus part number and performs a live lookup against LexusPartsNow. Results are
+dealer reference evidence—not VIN-confirmed compatibility or marketplace sales
+evidence—and retain the dealer URL and retrieval time.
 
 All business endpoints require `Authorization: Bearer $PARTQUILL_API_KEY`.
 
