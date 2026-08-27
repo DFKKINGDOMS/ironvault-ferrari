@@ -18,6 +18,12 @@ export interface AnonymousOemQuote {
   savingsPercent?: number;
 }
 
+export interface OemApplicationSummary {
+  make: OemMake;
+  model: string;
+  yearRanges: string[];
+}
+
 export interface OemPartResearch {
   identity: {
     partNumber: string;
@@ -149,6 +155,40 @@ function mergeFitment(observations: LexusPartResearch[]): LexusPartFitment[] {
   return [...rows.values()].sort((a, b) =>
     a.make.localeCompare(b.make) || a.model.localeCompare(b.model) || (b.yearEnd || 0) - (a.yearEnd || 0)
   );
+}
+
+function compactYearRanges(rows: LexusPartFitment[]): string[] {
+  const intervals = rows.flatMap((row) => {
+    const start = row.yearStart ?? row.yearEnd;
+    const end = row.yearEnd ?? row.yearStart;
+    return start === undefined || end === undefined ? [] : [{ start, end }];
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const interval of intervals) {
+    const previous = merged.at(-1);
+    if (previous && interval.start <= previous.end + 1) {
+      previous.end = Math.max(previous.end, interval.end);
+    } else {
+      merged.push({ ...interval });
+    }
+  }
+  const ranges = merged.map(({ start, end }) => start === end ? String(start) : `${start}\u2013${end}`);
+  return ranges.length ? ranges : ['Years not returned'];
+}
+
+export function summarizeOemApplications(rows: LexusPartFitment[]): OemApplicationSummary[] {
+  const groups = new Map<string, LexusPartFitment[]>();
+  for (const row of rows) {
+    const key = `${row.make}|${row.model.toUpperCase()}`;
+    const current = groups.get(key) || [];
+    current.push(row);
+    groups.set(key, current);
+  }
+  return [...groups.values()].map((group) => ({
+    make: group[0]?.make as OemMake,
+    model: group[0]?.model || 'Model not returned',
+    yearRanges: compactYearRanges(group)
+  })).sort((a, b) => a.make.localeCompare(b.make) || a.model.localeCompare(b.model));
 }
 
 function anonymousQuotes(observations: LexusPartResearch[]): AnonymousOemQuote[] {

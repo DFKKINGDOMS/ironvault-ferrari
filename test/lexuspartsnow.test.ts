@@ -41,7 +41,8 @@ function productPage(partNumber = '75443-78210'): string {
       ],
       fitVehicleList: [
         ['2022-2025 Lexus NX250', '4 Cyl 2.5L', 'A25AFXS; AAZH25L'],
-        ['2022-2024 Lexus NX450h+', '4 Cyl 2.5L', 'Plug-in hybrid']
+        ['2022-2024 Lexus NX450h+', '4 Cyl 2.5L', 'Plug-in hybrid'],
+        ['2003-2006, 1997-2001 Lexus ES300', '6 Cyl 3.0L', '1MZFE']
       ]
     }
   };
@@ -108,6 +109,13 @@ describe('LexusPartsNow evidence lookup', () => {
       model: 'NX250',
       trimEngine: '4 Cyl 2.5L'
     });
+    expect(result.fitment).toEqual(expect.arrayContaining([
+      expect.objectContaining({ yearStart: 1997, yearEnd: 2001, make: 'Lexus', model: 'ES300' }),
+      expect.objectContaining({ yearStart: 2003, yearEnd: 2006, make: 'Lexus', model: 'ES300' })
+    ]));
+    expect(result.fitment).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ yearStart: 1997, yearEnd: 2006, make: 'Lexus', model: 'ES300' })
+    ]));
     expect(result.vinConfirmationRequired).toBe(true);
   });
 

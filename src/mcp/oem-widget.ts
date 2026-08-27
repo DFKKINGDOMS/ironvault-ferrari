@@ -1,4 +1,4 @@
-export const PARTQUILL_OEM_WIDGET_URI = 'ui://partquill/oem-part-finder-v1.html';
+export const PARTQUILL_OEM_WIDGET_URI = 'ui://partquill/oem-part-finder-v2.html';
 
 export function buildPartQuillOemWidgetHtml(): string {
   return `<!doctype html>
@@ -8,7 +8,7 @@ export function buildPartQuillOemWidgetHtml(): string {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PartQuill OEM Part Finder</title>
   <style>
-    :root { color-scheme:light; --ink:#10241b; --muted:#5d6e65; --green:#117a4b; --mint:#e9f8ef; --line:#c8d8cf; --cream:#fbfaf4; --warn:#895d14; --bad:#a63c2f; }
+    :root { color-scheme:light; --ink:#10241b; --muted:#5d6e65; --green:#087443; --mint:#e8f8ef; --amber:#966200; --amber-bg:#fff6d9; --red:#a32822; --red-bg:#fff0ed; --line:#c8d8cf; --cream:#fbfaf4; }
     * { box-sizing:border-box; }
     body { margin:0; padding:12px; color:var(--ink); background:var(--cream); font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     .shell { max-width:820px; margin:auto; overflow:hidden; border:1px solid var(--line); border-radius:18px; background:#fff; box-shadow:0 12px 32px rgba(16,36,27,.08); }
@@ -26,14 +26,25 @@ export function buildPartQuillOemWidgetHtml(): string {
     .privacy { margin:8px 0 0; color:var(--muted); font-size:11px; }
     .status { margin-top:12px; padding:11px 12px; border-radius:11px; background:#f2f6f3; color:#3f554a; }
     .status[data-tone=good] { background:var(--mint); color:#0a683d; }
-    .status[data-tone=warn] { background:#fff6df; color:var(--warn); }
-    .status[data-tone=bad] { background:#fff0ed; color:var(--bad); }
+    .status[data-tone=warn] { background:var(--amber-bg); color:var(--amber); }
+    .status[data-tone=bad] { background:var(--red-bg); color:var(--red); }
     .result { display:none; margin-top:16px; }
     .result.visible { display:block; }
     .headline { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding-bottom:13px; border-bottom:1px solid var(--line); }
     h1 { margin:0; font-size:23px; line-height:1.15; letter-spacing:-.025em; }
     .sub { margin-top:4px; color:var(--muted); }
     .callout { white-space:nowrap; padding:6px 9px; border-radius:9px; background:var(--mint); color:var(--green); font-weight:850; }
+    .verdict { display:flex; gap:12px; align-items:center; margin:14px 0; padding:14px 15px; border:2px solid; border-radius:14px; }
+    .verdict-icon { display:grid; flex:0 0 34px; place-items:center; width:34px; height:34px; border-radius:50%; color:#fff; font-size:21px; font-weight:900; }
+    .verdict strong,.verdict span { display:block; }
+    .verdict strong { font-size:17px; line-height:1.2; }
+    .verdict span { margin-top:3px; }
+    .verdict[data-tone=green] { border-color:#7fc7a1; background:var(--mint); color:#075c37; }
+    .verdict[data-tone=green] .verdict-icon { background:var(--green); }
+    .verdict[data-tone=amber] { border-color:#e4bf67; background:var(--amber-bg); color:#6d4900; }
+    .verdict[data-tone=amber] .verdict-icon { background:var(--amber); }
+    .verdict[data-tone=red] { border-color:#e4a49d; background:var(--red-bg); color:#7e211d; }
+    .verdict[data-tone=red] .verdict-icon { background:var(--red); }
     .facts { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:13px 0; }
     .fact { padding:10px; border:1px solid var(--line); border-radius:11px; background:#fbfdfb; }
     .fact b,.fact span { display:block; }
@@ -47,10 +58,20 @@ export function buildPartQuillOemWidgetHtml(): string {
     figure figcaption b { display:block; color:var(--ink); font-size:12px; }
     .image-empty { color:var(--muted); text-align:center; }
     .fitment { margin-top:13px; padding:12px; border:1px solid var(--line); border-radius:12px; background:#fbfdfb; }
-    .fitment h2 { margin:0 0 7px; font-size:14px; }
-    .fitment ul { margin:0; padding-left:18px; color:#40534a; }
+    .fitment h2 { margin:0 0 4px; font-size:14px; }
+    .fitment p { margin:0 0 8px; color:var(--muted); font-size:12px; }
+    .fitment ul { display:grid; grid-template-columns:1fr 1fr; gap:6px 18px; margin:0; padding:0; list-style:none; color:#40534a; }
+    .fitment li { padding:6px 0; border-top:1px solid #edf2ef; }
+    .more { margin-top:7px; color:var(--muted); font-size:11px; }
+    details { margin-top:12px; border:1px solid var(--line); border-radius:11px; background:#fff; }
+    summary { padding:10px 12px; color:#334a3f; font-weight:800; cursor:pointer; }
+    .research-details { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:0 12px 12px; }
+    .research-details div { padding:9px; border-radius:9px; background:#f5f8f6; }
+    .research-details b,.research-details span { display:block; }
+    .research-details b { color:var(--muted); font-size:10px; text-transform:uppercase; }
+    .research-details span { margin-top:3px; font-weight:750; }
     .guard { margin-top:12px; padding:11px 12px; border-left:4px solid #d69a2c; background:#fff8e8; color:#66512a; font-size:12px; }
-    @media (max-width:650px) { .lookup { grid-template-columns:1fr; } .facts { grid-template-columns:1fr; } .media { grid-template-columns:1fr; } .headline { display:block; } .callout { display:inline-block; margin-top:8px; } }
+    @media (max-width:650px) { .lookup { grid-template-columns:1fr; } .facts,.research-details { grid-template-columns:1fr; } .media { grid-template-columns:1fr; } .fitment ul { grid-template-columns:1fr; } .headline { display:block; } .callout { display:inline-block; margin-top:8px; } }
   </style>
 </head>
 <body>
@@ -66,13 +87,15 @@ export function buildPartQuillOemWidgetHtml(): string {
       <div id="status" class="status">Enter a part number. Add a VIN when the buyer wants a vehicle-specific catalog cross-check.</div>
       <section id="result" class="result">
         <div class="headline"><div><h1 id="title"></h1><div id="subtitle" class="sub"></div></div><div id="callout" class="callout"></div></div>
-        <div class="facts"><div class="fact"><b>Observed OEM range</b><span id="price"></span></div><div class="fact"><b>Brands found</b><span id="brands"></span></div><div class="fact"><b>Exact catalog checks</b><span id="checks"></span></div></div>
+        <div id="fitment-verdict" class="verdict" data-tone="amber" role="status" aria-live="polite"><div id="verdict-icon" class="verdict-icon">!</div><div><strong id="verdict-title">Fitment not verified</strong><span id="verdict-detail">Enter the buyer VIN above for a vehicle-specific check.</span></div></div>
+        <div class="facts"><div class="fact"><b>Part number</b><span id="part-fact"></span></div><div class="fact"><b>Superseded by</b><span id="superseded"></span></div><div class="fact"><b>Diagram callout</b><span id="pnc"></span></div></div>
         <div class="media">
           <figure><div id="photo-frame" class="frame"><span class="image-empty">No product reference photo returned.</span></div><figcaption><b>Exact product reference photo</b>Research-only unless separate publishing rights are confirmed.</figcaption></figure>
           <figure><div id="diagram-frame" class="frame"><span class="image-empty">No catalog diagram returned.</span></div><figcaption><b id="diagram-label">Catalog diagram</b>Internal fitment reference only. Never use as the primary eBay image.</figcaption></figure>
         </div>
-        <div class="fitment"><h2>Catalog fitment preview</h2><ul id="fitment-list"></ul></div>
-        <div class="guard">Images are reference evidence—not seller photographs. No eBay listing is created or changed. Broad fitment remains blocked unless the VIN result reaches “Fits catalog evidence.”</div>
+        <div class="fitment"><h2>Potential applications</h2><p>Grouped catalog references only. A VIN verdict controls whether fitment can be claimed.</p><ul id="fitment-list"></ul><div id="fitment-more" class="more"></div></div>
+        <details><summary>Seller research details</summary><div class="research-details"><div><b>OEM-source range</b><span id="price"></span></div><div><b>Brands found</b><span id="brands"></span></div><div><b>Anonymous checks</b><span id="checks"></span></div></div></details>
+        <div class="guard">Catalog condition is not the seller item’s condition. Reference prices are not verified eBay market value. Images are research evidence, and nothing is created or changed on eBay.</div>
       </section>
     </main>
   </section>
@@ -102,6 +125,14 @@ export function buildPartQuillOemWidgetHtml(): string {
         var frame = document.getElementById(id); frame.textContent = '';
         var empty = document.createElement('span'); empty.className = 'image-empty'; empty.textContent = fallback; frame.appendChild(empty);
       }
+      function renderVerdict(tone, title, detail) {
+        var verdict = document.getElementById('fitment-verdict');
+        var normalized = tone === 'GREEN' ? 'green' : tone === 'RED' ? 'red' : 'amber';
+        verdict.dataset.tone = normalized;
+        document.getElementById('verdict-icon').textContent = normalized === 'green' ? '✓' : normalized === 'red' ? '×' : '!';
+        document.getElementById('verdict-title').textContent = title;
+        document.getElementById('verdict-detail').textContent = detail;
+      }
       function renderMedia(meta) {
         clearFrame('photo-frame', 'No product reference photo returned.');
         clearFrame('diagram-frame', 'No catalog diagram returned.');
@@ -127,24 +158,37 @@ export function buildPartQuillOemWidgetHtml(): string {
         var callouts = data.imagePresentation && data.imagePresentation.diagramCallouts || data.identity.pncCodes || [];
         document.getElementById('callout').textContent = 'Diagram callout: ' + (callouts.length ? callouts.join(', ') : 'not returned');
         document.getElementById('diagram-label').textContent = 'Catalog diagram · PNC ' + (callouts.length ? callouts.join(', ') : 'not returned');
-        var pricing = data.pricing || {};
+        document.getElementById('part-fact').textContent = data.identity.partNumber;
+        document.getElementById('superseded').textContent = data.identity.replacedBy && data.identity.replacedBy.length ? data.identity.replacedBy.join(', ') : 'None returned';
+        document.getElementById('pnc').textContent = callouts.length ? callouts.join(', ') : 'Not returned';
+        var initialVerdict = data.fitmentVerdict || {};
+        renderVerdict(initialVerdict.tone || 'AMBER', initialVerdict.statusLabel || 'Fitment not verified', initialVerdict.explanation || 'Enter the buyer VIN above for a vehicle-specific check.');
+        var pricing = data.pricingReference || data.pricing || {};
         document.getElementById('price').textContent = money(pricing.currentPriceLow) + '–' + money(pricing.currentPriceHigh);
         document.getElementById('brands').textContent = data.brandCoverage && data.brandCoverage.catalogBrands ? data.brandCoverage.catalogBrands.join(', ') : 'not established';
         document.getElementById('checks').textContent = data.catalogChecks ? data.catalogChecks.exactMatches + ' of ' + data.catalogChecks.attempted : 'not returned';
         var list = document.getElementById('fitment-list'); list.textContent = '';
-        (data.fitment || []).slice(0, 8).forEach(function (row) { var li = document.createElement('li'); li.textContent = row.raw; list.appendChild(li); });
-        if (!(data.fitment || []).length) { var li = document.createElement('li'); li.textContent = 'No exact fitment rows returned.'; list.appendChild(li); }
+        var applications = Array.isArray(data.applicationSummary) ? data.applicationSummary : [];
+        applications.slice(0, 6).forEach(function (application) {
+          var li = document.createElement('li');
+          li.textContent = (application.yearRanges || []).join(', ') + ' ' + application.make + ' ' + application.model;
+          list.appendChild(li);
+        });
+        if (!applications.length) { var li = document.createElement('li'); li.textContent = 'No potential application groups returned.'; list.appendChild(li); }
+        document.getElementById('fitment-more').textContent = applications.length > 6 ? '+' + (applications.length - 6) + ' more grouped applications. Use the VIN check instead of relying on this broad list.' : '';
         renderMedia(resultMeta(raw));
         result.classList.add('visible');
-        setStatus('Part found. ' + ((data.imagePresentation && data.imagePresentation.productPhotoAvailable) ? 'The product photo and diagram are displayed below.' : 'Reference media availability is shown below.'), 'good');
+        setStatus('Exact part number found. Vehicle fitment remains unverified until the VIN check is completed.', 'warn');
         return true;
       }
       function renderVin(raw) {
         var data = structured(raw);
         if (!data.status || !data.vehicle) return false;
         var engine = data.vehicle.engineModel || (data.vehicle.displacementL ? data.vehicle.displacementL + 'L' : 'engine not decoded');
-        var message = data.statusLabel + ' — ' + data.vehicle.modelYear + ' ' + data.vehicle.make + ' ' + data.vehicle.model + ', ' + engine + '. ' + data.explanation + ' VIN ending ' + data.vinLastFour + '.';
-        setStatus(message, data.status === 'CATALOG_MATCH' ? 'good' : data.status === 'CATALOG_NO_MATCH' ? 'bad' : 'warn');
+        var vehicle = data.vehicle.modelYear + ' ' + data.vehicle.make + ' ' + data.vehicle.model + ', ' + engine;
+        var detail = vehicle + '. ' + data.explanation + ' VIN ending ' + data.vinLastFour + '.';
+        renderVerdict(data.verdictTone || (data.status === 'CATALOG_MATCH' ? 'GREEN' : data.status === 'CATALOG_NO_MATCH' ? 'RED' : 'AMBER'), data.statusLabel, detail);
+        setStatus(data.statusLabel + ' — VIN ending ' + data.vinLastFour + '.', data.status === 'CATALOG_MATCH' ? 'good' : data.status === 'CATALOG_NO_MATCH' ? 'bad' : 'warn');
         return true;
       }
       async function verifyVinIfPresent() {
@@ -156,7 +200,8 @@ export function buildPartQuillOemWidgetHtml(): string {
         try {
           var checked = await window.openai.callTool('verify_oem_part_vin', { part_number:partInput.value.trim(), vin:vin });
           renderVin(checked);
-        } catch (error) { setStatus('VIN verification could not complete. No compatibility claim was made.', 'bad'); }
+          vinInput.value = '';
+        } catch (error) { renderVerdict('AMBER', 'May fit — not verified', 'VIN verification could not complete, so no compatibility claim was made.'); setStatus('VIN verification could not complete. No compatibility claim was made.', 'warn'); }
       }
       lookup.addEventListener('click', async function () {
         var part = partInput.value.trim().toUpperCase();

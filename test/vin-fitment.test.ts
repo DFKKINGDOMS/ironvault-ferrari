@@ -85,6 +85,8 @@ describe('buyer VIN catalog cross-check', () => {
       partNumber: '13568-29025',
       vinLastFour: '3456',
       status: 'CATALOG_MATCH',
+      statusLabel: 'Fits this vehicle',
+      verdictTone: 'GREEN',
       listingFitmentAllowed: true,
       vinStored: false,
       dealerIdentityExposed: false,
@@ -99,6 +101,8 @@ describe('buyer VIN catalog cross-check', () => {
       research: async () => researchWithFitment('1997-2006 Toyota Camry | 3.0L V6 | 1MZ-FE', '3.0L V6 | 1MZ-FE')
     });
     expect(result.status).toBe('CATALOG_NO_MATCH');
+    expect(result.statusLabel).toBe('Does not fit this vehicle');
+    expect(result.verdictTone).toBe('RED');
     expect(result.listingFitmentAllowed).toBe(false);
   });
 
@@ -108,6 +112,8 @@ describe('buyer VIN catalog cross-check', () => {
       research: async () => researchWithFitment('1997-2006 Toyota Camry V6')
     });
     expect(result.status).toBe('INCONCLUSIVE');
+    expect(result.statusLabel).toBe('May fit — not verified');
+    expect(result.verdictTone).toBe('AMBER');
     expect(result.listingFitmentAllowed).toBe(false);
   });
 

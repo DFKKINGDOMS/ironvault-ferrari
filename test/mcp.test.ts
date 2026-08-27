@@ -85,7 +85,8 @@ describe('PartQuill connected ChatGPT contract', () => {
           cylinders: 4
         },
         status: 'CATALOG_MATCH',
-        statusLabel: 'Fits catalog evidence',
+        statusLabel: 'Fits this vehicle',
+        verdictTone: 'GREEN',
         explanation: 'The decoded vehicle matches exact catalog evidence.',
         matchingFitment: lexusResearchFixture.fitment,
         catalogChecks: { attempted: 3, exactPartMatches: 1, unavailable: 2, matchingRows: 1 },
@@ -124,8 +125,8 @@ describe('PartQuill connected ChatGPT contract', () => {
     const verify = tools.tools.find((tool) => tool.name === 'verify_oem_part_vin');
     const prepare = tools.tools.find((tool) => tool.name === 'prepare_protected_image_job');
     const returned = tools.tools.find((tool) => tool.name === 'return_edited_images');
-    expect(research?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v1.html' });
-    expect(verify?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v1.html' });
+    expect(research?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v2.html' });
+    expect(verify?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v2.html' });
     expect(prepare?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(returned?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(prepare?._meta?.ui).toBeUndefined();
@@ -139,8 +140,23 @@ describe('PartQuill connected ChatGPT contract', () => {
     });
     expect(result.structuredContent).toMatchObject({
       identity: { partNumber: '75443-78210', description: 'PLATE, BACK DOOR NAM' },
-      pricing: { listPriceReference: 59.03, currentPriceLow: 44.36 },
-      quickSale: { targetPrice: 35.49, basis: 'LOWEST_CURRENT_OEM_QUOTE' },
+      pricingReference: {
+        listPriceReference: 59.03,
+        currentPriceLow: 44.36,
+        ebayMarketValueVerified: false
+      },
+      fitmentVerdict: {
+        status: 'VIN_REQUIRED',
+        tone: 'AMBER',
+        statusLabel: 'Fitment not verified',
+        listingFitmentAllowed: false
+      },
+      applicationSummary: [{ make: 'Lexus', model: 'NX250', yearRanges: ['2022–2025'] }],
+      sellerListingReadiness: {
+        status: 'NEEDS_SELLER_FACTS_AND_MARKET_EVIDENCE',
+        ebayMarketValueVerified: false,
+        finalListingReady: false
+      },
       imagePresentation: {
         productPhotoAvailable: true,
         diagramAvailable: true,
@@ -162,6 +178,10 @@ describe('PartQuill connected ChatGPT contract', () => {
     });
     expect(JSON.stringify(result.content)).toContain('Diagram callout / PNC:** 75443');
     expect(JSON.stringify(result.content)).toContain('not transcript attachments');
+    expect(JSON.stringify(result.content)).toContain('AMBER — not verified');
+    expect(JSON.stringify(result.content)).not.toContain('2022-2025 Lexus NX250');
+    expect(JSON.stringify(result.structuredContent)).not.toContain('raw');
+    expect(JSON.stringify(result.structuredContent)).not.toContain('targetPrice');
     expect(JSON.stringify(result.content)).toContain('No eBay listing or price was changed.');
     expect(JSON.stringify(result)).not.toMatch(/lexuspartsnow|toyotapartsdeal|longotoyota|revolutionparts/i);
     expect(JSON.stringify(result)).not.toMatch(/(?:telephone|phone|street address|contact us)/i);
@@ -177,6 +197,8 @@ describe('PartQuill connected ChatGPT contract', () => {
       partNumber: '75443-78210',
       vinLastFour: '3456',
       status: 'CATALOG_MATCH',
+      statusLabel: 'Fits this vehicle',
+      verdictTone: 'GREEN',
       listingFitmentAllowed: true,
       vinStored: false,
       dealerIdentityExposed: false
@@ -188,15 +210,19 @@ describe('PartQuill connected ChatGPT contract', () => {
   it('serves the inline OEM widget with product, diagram and VIN controls', async () => {
     const resources = await client.listResources();
     expect(resources.resources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ uri: 'ui://partquill/oem-part-finder-v1.html' })
+      expect.objectContaining({ uri: 'ui://partquill/oem-part-finder-v2.html' })
     ]));
-    const resource = await client.readResource({ uri: 'ui://partquill/oem-part-finder-v1.html' });
+    const resource = await client.readResource({ uri: 'ui://partquill/oem-part-finder-v2.html' });
     const firstContent = resource.contents[0];
     const html = firstContent && 'text' in firstContent ? firstContent.text : '';
     expect(html).toContain('PartQuill OEM Part Finder');
     expect(html).toContain('Buyer VIN (optional)');
     expect(html).toContain('Exact product reference photo');
     expect(html).toContain('Catalog diagram');
+    expect(html).toContain('Fitment not verified');
+    expect(html).toContain('May fit — not verified');
+    expect(html).toContain('Potential applications');
+    expect(html).not.toContain('Catalog fitment preview');
     expect(html).toContain('verify_oem_part_vin');
     expect(html).not.toMatch(/lexuspartsnow|toyotapartsdeal|longotoyota|revolutionparts/i);
   });

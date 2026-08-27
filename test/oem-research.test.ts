@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { researchOemPart } from '../src/catalog/oem-research.js';
+import { researchOemPart, summarizeOemApplications } from '../src/catalog/oem-research.js';
 import type { LexusPartResearch } from '../src/catalog/lexuspartsnow.js';
 
 function observation(
@@ -48,6 +48,17 @@ function observation(
 }
 
 describe('anonymous multi-catalog OEM research', () => {
+  it('groups models without exposing raw option codes and preserves disjoint year ranges', () => {
+    expect(summarizeOemApplications([
+      { yearStart: 1997, yearEnd: 2001, make: 'Toyota', model: 'Camry', raw: 'private row A' },
+      { yearStart: 2003, yearEnd: 2006, make: 'Toyota', model: 'Camry', raw: 'private row B' },
+      { yearStart: 2004, yearEnd: 2008, make: 'Lexus', model: 'RX330', raw: 'private row C' }
+    ])).toEqual([
+      { make: 'Lexus', model: 'RX330', yearRanges: ['2004–2008'] },
+      { make: 'Toyota', model: 'Camry', yearRanges: ['1997–2001', '2003–2006'] }
+    ]);
+  });
+
   it('merges cross-brand evidence, sorts anonymous quotes and anchors quick sale to the lowest quote', async () => {
     const result = await researchOemPart('90915-YZZS1', {
       now: () => new Date('2026-08-27T12:00:00.000Z'),

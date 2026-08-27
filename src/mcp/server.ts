@@ -6,7 +6,12 @@ import {
   RESOURCE_MIME_TYPE
 } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
-import { researchOemPart, type OemPartResearch } from '../catalog/oem-research.js';
+import {
+  researchOemPart,
+  summarizeOemApplications,
+  type OemApplicationSummary,
+  type OemPartResearch
+} from '../catalog/oem-research.js';
 import { verifyOemPartVin, type VinPartVerification } from '../catalog/vin-fitment.js';
 import {
   loadCatalogImageAttachment,
@@ -65,46 +70,43 @@ interface ImagePresentation {
   primaryEbayImageApproved: false;
 }
 
-function oemPartSummary(result: OemPartResearch, imagePresentation: ImagePresentation): string {
-  const fitmentPreview = result.fitment
-    .slice(0, 12)
-    .map((row) => `- ${row.raw}`)
-    .join('\n');
-  const quoteRows = result.pricing.anonymousQuotes
-    .map((quote) => `- **${quote.quote}:** current ${money(quote.currentPrice)} · list/MSRP ${money(quote.listPrice)}`)
-    .join('\n');
-  const quickSale = result.quickSale.targetPrice === undefined
-    ? '- **Quick-sale target:** unavailable because no current anonymous quote was returned'
-    : `- **Quick-sale target:** ${money(result.quickSale.targetPrice)} (${result.quickSale.discountPercent}% below the lowest current anonymous OEM quote)`;
+function applicationLine(application: OemApplicationSummary): string {
+  return `${application.yearRanges.join(', ')} ${application.make} ${application.model}`;
+}
+
+function oemPartSummary(
+  result: OemPartResearch,
+  imagePresentation: ImagePresentation,
+  applications: OemApplicationSummary[]
+): string {
+  const applicationPreview = applications.slice(0, 8).map((application) => `- ${applicationLine(application)}`).join('\n');
   return [
     `## ${result.identity.partNumber} — ${result.identity.description}`,
     '',
-    `- **Catalog brands:** ${result.brandCoverage.catalogBrands.join(', ') || 'not established'}`,
-    `- **Fitment brands:** ${result.brandCoverage.fitmentBrands.join(', ') || 'not returned'}`,
-    `- **Crossover:** ${result.brandCoverage.crossoverStatus === 'MULTI_BRAND' ? 'Yes—multiple Toyota umbrella brands have evidence' : 'No crossover established'}`,
-    `- **List/MSRP reference:** ${money(result.pricing.listPriceReference)}`,
-    `- **Current observed range:** ${money(result.pricing.currentPriceLow)}–${money(result.pricing.currentPriceHigh)}`,
-    quickSale,
+    '**Vehicle fitment: AMBER — not verified.** Enter the buyer VIN in the PartQuill card for a vehicle-specific verdict. Do not call the applications below safe or confirmed fitment.',
+    '',
     ...(result.identity.replacedBy.length ? [`- **Replaced by:** ${result.identity.replacedBy.join(', ')}`] : []),
     ...(result.identity.replaces.length ? [`- **Replaces:** ${result.identity.replaces.join(', ')}`] : []),
+    `- **Diagram callout / PNC:** ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}`,
+    `- **Potential application groups:** ${applications.length}; VIN confirmation required`,
     '',
-    '### Anonymous OEM price checks',
-    quoteRows || '- No current price was returned.',
+    '### Potential applications — VIN required',
+    applicationPreview || '- No catalog application groups were returned.',
+    applications.length > 8 ? `- …and ${applications.length - 8} additional grouped applications in the visual card.` : '',
     '',
-    '### Images and diagram reference',
+    '### Reference pricing — not eBay market value',
+    `- **List/MSRP reference:** ${money(result.pricing.listPriceReference)}`,
+    `- **Current anonymous OEM-source range:** ${money(result.pricing.currentPriceLow)}–${money(result.pricing.currentPriceHigh)}`,
+    '- No eBay list price or quick-sale price is verified by this lookup. Sold-market evidence, actual condition, shipping, fees and seller cost are still required.',
+    '',
+    '### Reference media',
     `- **Exact product reference photo:** ${imagePresentation.productPhotoAvailable ? 'available to the PartQuill visual result card' : 'not returned'}`,
     `- **Catalog diagram:** ${imagePresentation.diagramAvailable ? 'available to the PartQuill visual result card' : 'not returned'}`,
-    `- **Diagram callout / PNC:** ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}`,
     '- **Display:** These are not transcript attachments. Do not claim they are shown unless the PartQuill visual result card is visible.',
     '- **Usage:** Research reference only. Neither image is approved as the primary eBay image; publishing requires confirmed image rights.',
     '',
-    `### Fitment (${result.fitmentTotal} exact catalog rows)`,
-    fitmentPreview || '- No fitment rows were returned.',
-    result.fitmentTotal > 12 ? `- …and ${result.fitmentTotal - 12} additional rows in the structured result.` : '',
-    '',
-    `Catalog checks: ${result.catalogChecks.exactMatches} exact match(es) from ${result.catalogChecks.attempted} private lookup sources; retrieved ${result.catalogChecks.retrievedAt}. Dealer identity is never exposed.`,
-    '',
-    `**Important:** ${result.quickSale.disclaimer}`,
+    '**eBay draft guard:** Catalog condition does not establish the seller item’s condition. Do not assert New, quantity, package contents, specifications, fitment or a recommended price until those facts are separately confirmed.',
+    `Catalog checks: ${result.catalogChecks.exactMatches} exact part-number match(es) from ${result.catalogChecks.attempted} anonymous sources.`,
     'No eBay listing or price was changed.'
   ].join('\n');
 }
@@ -114,10 +116,10 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
   const imageLoader = dependencies.loadCatalogImage ?? loadCatalogImageAttachment;
   const vinVerifier = dependencies.verifyOemPartVin ?? verifyOemPartVin;
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.7.0' },
+    { name: 'partquill-image-studio', version: '0.8.0' },
     {
       instructions:
-        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
+        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. Always lead with the returned vehicle-fitment verdict: GREEN means Fits this vehicle, AMBER means Fitment not verified or May fit, and RED means Does not fit this vehicle. Without a VIN, fitment is always AMBER and potential application groups must never be called safe or confirmed. Never dump raw catalog option codes or hidden research rows. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. OEM-source quotes and MSRP are reference pricing, not eBay market value; never manufacture a recommended list price or quick-sale price without sold-market evidence, actual seller condition, shipping, fees and cost. Catalog condition does not prove the seller item condition. Never invent teeth count, dimensions, package contents, quantity or other specifications absent from the structured result. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
     }
   );
 
@@ -183,7 +185,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
     {
       title: 'Research Toyota / Lexus / Scion part',
       description:
-        'Privately exact-match a Toyota, Lexus or Scion part number across multiple OEM reference catalogs. Returns anonymized price quotes, crossover brands, PartQuill-hosted images, supersession and year/make/model fitment. It never returns dealer identity or contact information. Read-only: never changes or publishes an eBay listing.',
+        'Privately exact-match a Toyota, Lexus or Scion part number across multiple OEM reference catalogs. Returns a concise AMBER fitment-not-verified verdict, grouped potential applications, anonymous OEM-source reference pricing, reference media and supersession. A green or red vehicle verdict requires verify_oem_part_vin. It never returns dealer identity or contact information, raw option-code dumps, verified eBay market value or a seller-item condition claim. Read-only: never changes or publishes an eBay listing.',
       inputSchema: {
         part_number: z.string().min(5).max(40),
         quick_sale_discount_percent: z.number().min(10).max(40).default(20)
@@ -194,8 +196,8 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           description: z.string(),
           alternateNames: z.array(z.string()),
           manufacturerNotes: z.array(z.string()),
-          condition: z.string().optional(),
-          fitmentType: z.string().optional(),
+          catalogCondition: z.string().optional(),
+          catalogFitmentType: z.string().optional(),
           pncCodes: z.array(z.string()),
           replacedBy: z.array(z.string()),
           replaces: z.array(z.string())
@@ -205,34 +207,22 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           fitmentBrands: z.array(z.enum(['Lexus', 'Toyota', 'Scion'])),
           crossoverStatus: z.enum(['SINGLE_BRAND', 'MULTI_BRAND'])
         }),
-        pricing: z.object({
+        pricingReference: z.object({
           currency: z.literal('USD'),
           observedQuoteCount: z.number().int(),
           listPriceReference: z.number().optional(),
           currentPriceLow: z.number().optional(),
           currentPriceHigh: z.number().optional(),
-          anonymousQuotes: z.array(z.object({
-            quote: z.string(),
-            listPrice: z.number().optional(),
-            currentPrice: z.number().optional(),
-            savingsPercent: z.number().optional()
-          }))
+          evidenceType: z.literal('ANONYMOUS_OEM_SOURCE_REFERENCE'),
+          ebayMarketValueVerified: z.literal(false)
         }),
-        quickSale: z.object({
-          targetPrice: z.number().optional(),
-          lowPrice: z.number().optional(),
-          highPrice: z.number().optional(),
-          discountPercent: z.number(),
-          basis: z.enum(['LOWEST_CURRENT_OEM_QUOTE', 'UNAVAILABLE']),
-          disclaimer: z.string()
+        fitmentVerdict: z.object({
+          status: z.literal('VIN_REQUIRED'),
+          tone: z.literal('AMBER'),
+          statusLabel: z.literal('Fitment not verified'),
+          explanation: z.string(),
+          listingFitmentAllowed: z.literal(false)
         }),
-        images: z.array(
-          z.object({
-            url: z.string().url(),
-            type: z.enum(['ACTUAL_PRODUCT_PHOTO', 'CATALOG_ILLUSTRATION']),
-            alt: z.string().optional()
-          })
-        ),
         imagePresentation: z.object({
           productPhotoAvailable: z.boolean(),
           diagramAvailable: z.boolean(),
@@ -243,23 +233,24 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           catalogDiagramUsage: z.literal('INTERNAL_REFERENCE_ONLY'),
           primaryEbayImageApproved: z.literal(false)
         }),
-        fitment: z.array(
-          z.object({
-            yearStart: z.number().int().optional(),
-            yearEnd: z.number().int().optional(),
-            make: z.enum(['Lexus', 'Toyota', 'Scion']),
-            model: z.string(),
-            trimEngine: z.string().optional(),
-            optionDetails: z.string().optional(),
-            raw: z.string()
-          })
-        ),
-        fitmentTotal: z.number().int(),
+        applicationSummary: z.array(z.object({
+          make: z.enum(['Lexus', 'Toyota', 'Scion']),
+          model: z.string(),
+          yearRanges: z.array(z.string())
+        })),
+        applicationGroupTotal: z.number().int(),
+        fitmentRowCount: z.number().int(),
         catalogChecks: z.object({
           attempted: z.literal(3),
           exactMatches: z.number().int(),
           unavailable: z.number().int(),
           retrievedAt: z.string()
+        }),
+        sellerListingReadiness: z.object({
+          status: z.literal('NEEDS_SELLER_FACTS_AND_MARKET_EVIDENCE'),
+          missingSellerFacts: z.array(z.string()),
+          ebayMarketValueVerified: z.literal(false),
+          finalListingReady: z.literal(false)
         }),
         dealerIdentityExposed: z.literal(false),
         vinConfirmationRequired: z.literal(true)
@@ -289,7 +280,56 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
         catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY',
         primaryEbayImageApproved: false
       };
-      const structuredContent = { ...result, imagePresentation };
+      const applications = summarizeOemApplications(result.fitment);
+      const structuredContent = {
+        identity: {
+          partNumber: result.identity.partNumber,
+          description: result.identity.description,
+          alternateNames: result.identity.alternateNames,
+          manufacturerNotes: result.identity.manufacturerNotes,
+          ...(result.identity.condition ? { catalogCondition: result.identity.condition } : {}),
+          ...(result.identity.fitmentType ? { catalogFitmentType: result.identity.fitmentType } : {}),
+          pncCodes: result.identity.pncCodes,
+          replacedBy: result.identity.replacedBy,
+          replaces: result.identity.replaces
+        },
+        brandCoverage: result.brandCoverage,
+        pricingReference: {
+          currency: result.pricing.currency,
+          observedQuoteCount: result.pricing.observedQuoteCount,
+          ...(result.pricing.listPriceReference !== undefined ? { listPriceReference: result.pricing.listPriceReference } : {}),
+          ...(result.pricing.currentPriceLow !== undefined ? { currentPriceLow: result.pricing.currentPriceLow } : {}),
+          ...(result.pricing.currentPriceHigh !== undefined ? { currentPriceHigh: result.pricing.currentPriceHigh } : {}),
+          evidenceType: 'ANONYMOUS_OEM_SOURCE_REFERENCE' as const,
+          ebayMarketValueVerified: false as const
+        },
+        fitmentVerdict: {
+          status: 'VIN_REQUIRED' as const,
+          tone: 'AMBER' as const,
+          statusLabel: 'Fitment not verified' as const,
+          explanation: 'Enter the buyer VIN for a vehicle-specific catalog verdict. The grouped applications below are potential reference applications only.',
+          listingFitmentAllowed: false as const
+        },
+        imagePresentation,
+        applicationSummary: applications,
+        applicationGroupTotal: applications.length,
+        fitmentRowCount: result.fitmentTotal,
+        catalogChecks: result.catalogChecks,
+        sellerListingReadiness: {
+          status: 'NEEDS_SELLER_FACTS_AND_MARKET_EVIDENCE' as const,
+          missingSellerFacts: [
+            'Actual seller-item condition',
+            'Quantity and package contents',
+            'Seller-owned item photographs',
+            'Shipping cost and seller acquisition cost',
+            'Verified sold-market evidence'
+          ],
+          ebayMarketValueVerified: false as const,
+          finalListingReady: false as const
+        },
+        dealerIdentityExposed: false as const,
+        vinConfirmationRequired: true as const
+      };
       const partquillMedia: Array<{
         role: 'PRODUCT_PHOTO' | 'CATALOG_DIAGRAM';
         data: string;
@@ -314,7 +354,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
       }
       return {
         structuredContent,
-        content: [{ type: 'text', text: oemPartSummary(result, imagePresentation) }],
+        content: [{ type: 'text', text: oemPartSummary(result, imagePresentation, applications) }],
         _meta: { partquillMedia }
       };
     }
@@ -326,7 +366,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
     {
       title: 'Verify OEM part against buyer VIN',
       description:
-        'Decode a buyer-provided 17-character Toyota, Lexus or Scion VIN and cross-check an exact OEM part number against three anonymous catalog paths. Returns only the VIN last four, never stores the VIN, never exposes dealer identity and never writes to eBay.',
+        'Decode a buyer-provided 17-character Toyota, Lexus or Scion VIN and cross-check an exact OEM part number against three anonymous catalog paths. Returns an explicit GREEN Fits, AMBER May fit/not verified, or RED Does not fit verdict. Returns only the VIN last four, never stores the VIN, never exposes dealer identity and never writes to eBay.',
       inputSchema: {
         part_number: z.string().min(5).max(40),
         vin: z.string().regex(/^[A-HJ-NPR-Z0-9]{17}$/i)
@@ -345,16 +385,13 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           series: z.string().optional()
         }),
         status: z.enum(['CATALOG_MATCH', 'CATALOG_NO_MATCH', 'INCONCLUSIVE']),
-        statusLabel: z.enum(['Fits catalog evidence', 'No matching catalog evidence', 'Needs manual confirmation']),
+        statusLabel: z.enum(['Fits this vehicle', 'Does not fit this vehicle', 'May fit — not verified']),
+        verdictTone: z.enum(['GREEN', 'RED', 'AMBER']),
         explanation: z.string(),
-        matchingFitment: z.array(z.object({
-          yearStart: z.number().int().optional(),
-          yearEnd: z.number().int().optional(),
+        matchingApplications: z.array(z.object({
           make: z.enum(['Lexus', 'Toyota', 'Scion']),
           model: z.string(),
-          trimEngine: z.string().optional(),
-          optionDetails: z.string().optional(),
-          raw: z.string()
+          yearRanges: z.array(z.string())
         })),
         catalogChecks: z.object({
           attempted: z.literal(3),
@@ -375,7 +412,20 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
     },
     async ({ part_number: partNumber, vin }) => {
       const verification = await vinVerifier(partNumber, vin);
-      const structuredContent = { ...verification };
+      const structuredContent = {
+        partNumber: verification.partNumber,
+        vinLastFour: verification.vinLastFour,
+        vehicle: verification.vehicle,
+        status: verification.status,
+        statusLabel: verification.statusLabel,
+        verdictTone: verification.verdictTone,
+        explanation: verification.explanation,
+        matchingApplications: summarizeOemApplications(verification.matchingFitment),
+        catalogChecks: verification.catalogChecks,
+        listingFitmentAllowed: verification.listingFitmentAllowed,
+        vinStored: verification.vinStored,
+        dealerIdentityExposed: verification.dealerIdentityExposed
+      };
       return {
         structuredContent,
         content: [

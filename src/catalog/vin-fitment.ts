@@ -19,7 +19,8 @@ export interface VinPartVerification {
   vinLastFour: string;
   vehicle: DecodedToyotaVin;
   status: 'CATALOG_MATCH' | 'CATALOG_NO_MATCH' | 'INCONCLUSIVE';
-  statusLabel: 'Fits catalog evidence' | 'No matching catalog evidence' | 'Needs manual confirmation';
+  statusLabel: 'Fits this vehicle' | 'Does not fit this vehicle' | 'May fit — not verified';
+  verdictTone: 'GREEN' | 'RED' | 'AMBER';
   explanation: string;
   matchingFitment: LexusPartFitment[];
   catalogChecks: {
@@ -171,10 +172,15 @@ export async function verifyOemPartVin(
         ? 'INCONCLUSIVE'
         : 'CATALOG_NO_MATCH';
   const statusLabel: VinPartVerification['statusLabel'] = status === 'CATALOG_MATCH'
-    ? 'Fits catalog evidence'
+    ? 'Fits this vehicle'
     : status === 'CATALOG_NO_MATCH'
-      ? 'No matching catalog evidence'
-      : 'Needs manual confirmation';
+      ? 'Does not fit this vehicle'
+      : 'May fit — not verified';
+  const verdictTone: VinPartVerification['verdictTone'] = status === 'CATALOG_MATCH'
+    ? 'GREEN'
+    : status === 'CATALOG_NO_MATCH'
+      ? 'RED'
+      : 'AMBER';
   const explanation = status === 'CATALOG_MATCH'
     ? `The decoded ${vehicle.modelYear} ${vehicle.make} ${vehicle.model} matches the part's year, model and engine evidence.`
     : status === 'CATALOG_NO_MATCH'
@@ -186,6 +192,7 @@ export async function verifyOemPartVin(
     vehicle,
     status,
     statusLabel,
+    verdictTone,
     explanation,
     matchingFitment,
     catalogChecks: {

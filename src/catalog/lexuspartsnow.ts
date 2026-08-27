@@ -163,22 +163,37 @@ function parseFitment(value: unknown, defaultMake: 'Lexus' | 'Toyota'): LexusPar
     if (!Array.isArray(row)) return [];
     const yearMakeModel = stringValue(row[0]);
     if (!yearMakeModel) return [];
-    const match = yearMakeModel.match(/^(\d{4})(?:-(\d{4}))?(?:,\s*\d{4}(?:-\d{4})?)*\s+(Lexus|Toyota|Scion)\s+(.+)$/i);
-    const parsedMake = match?.[3]
-      ? (`${match[3][0]?.toUpperCase()}${match[3].slice(1).toLowerCase()}` as OemMake)
+    const match = yearMakeModel.match(/^((?:\d{4}(?:-\d{4})?)(?:,\s*\d{4}(?:-\d{4})?)*)\s+(Lexus|Toyota|Scion)\s+(.+)$/i);
+    const parsedMake = match?.[2]
+      ? (`${match[2][0]?.toUpperCase()}${match[2].slice(1).toLowerCase()}` as OemMake)
       : defaultMake;
-    const fitment: LexusPartFitment = {
-      make: parsedMake,
-      model: match?.[4]?.trim() || yearMakeModel.replace(/^.*?\s+(?:Lexus|Toyota|Scion)\s+/i, '').trim(),
-      raw: [yearMakeModel, stringValue(row[1]), stringValue(row[2])].filter(Boolean).join(' | ')
-    };
-    if (match?.[1]) fitment.yearStart = Number(match[1]);
-    if (match?.[2] || match?.[1]) fitment.yearEnd = Number(match?.[2] || match?.[1]);
     const trimEngine = stringValue(row[1]);
     const optionDetails = stringValue(row[2]);
-    if (trimEngine) fitment.trimEngine = trimEngine;
-    if (optionDetails) fitment.optionDetails = optionDetails;
-    return [fitment];
+    const raw = [yearMakeModel, trimEngine, optionDetails].filter(Boolean).join(' | ');
+    const model = match?.[3]?.trim() || yearMakeModel.replace(/^.*?\s+(?:Lexus|Toyota|Scion)\s+/i, '').trim();
+    const ranges = match?.[1]?.split(/\s*,\s*/) || [];
+    if (ranges.length === 0) {
+      return [{
+        make: parsedMake,
+        model,
+        raw,
+        ...(trimEngine ? { trimEngine } : {}),
+        ...(optionDetails ? { optionDetails } : {})
+      }];
+    }
+    return ranges.flatMap((range) => {
+      const years = range.match(/^(\d{4})(?:-(\d{4}))?$/);
+      if (!years?.[1]) return [];
+      return [{
+        yearStart: Number(years[1]),
+        yearEnd: Number(years[2] || years[1]),
+        make: parsedMake,
+        model,
+        raw,
+        ...(trimEngine ? { trimEngine } : {}),
+        ...(optionDetails ? { optionDetails } : {})
+      }];
+    });
   });
 }
 
