@@ -18,9 +18,12 @@ describe('HTTP contract', () => {
     const widget = await app.inject({ method: 'GET', url: '/' });
     expect(widget.statusCode).toBe(200);
     expect(widget.headers['content-type']).toContain('text/html');
-    expect(widget.body).toContain('PartQuill Image Studio');
+    expect(widget.body).toContain('PartQuill');
     const widgetHead = await app.inject({ method: 'HEAD', url: '/' });
     expect(widgetHead.statusCode).toBe(200);
+    const imageStudio = await app.inject({ method: 'GET', url: '/image-studio' });
+    expect(imageStudio.statusCode).toBe(200);
+    expect(imageStudio.body).toContain('PartQuill Image Studio');
     expect((await app.inject({ method: 'POST', url: '/v1/items', payload: {} })).statusCode).toBe(401);
     const studioQuote = await app.inject({ method: 'GET', url: '/v1/image-studio/quote?count=24' });
     expect(studioQuote.statusCode).toBe(200);
@@ -48,6 +51,34 @@ describe('HTTP contract', () => {
     });
     expect(mcpInitialize.statusCode).toBe(200);
     expect(mcpInitialize.body).toContain('partquill-image-studio');
+  });
+
+  it('serves the backend-connected seller bootstrap and fail-closed command preview publicly', async () => {
+    const h = harness({ ALLOW_EBAY_WRITES: false, OEM_RESEARCH_MODE: 'private-pilot', OEM_DATA_RIGHTS_CONFIRMED: false });
+    app = await buildApp(h);
+    const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
+    expect(bootstrap.statusCode).toBe(200);
+    expect(bootstrap.json()).toMatchObject({
+      version: '0.10.0',
+      backendConnected: true,
+      ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
+      safeguards: { unknownCatalogClaimsHeld: true, sellerPhotoRequired: true, dualApproval: true }
+    });
+
+    const preview = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'List part 13568-29025 for $79.95' }
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().preview).toMatchObject({
+      status: 'HELD',
+      identity: { brand: null, productType: null },
+      fitment: { state: 'NOT_VERIFIED', totalApplications: 0 },
+      media: { state: 'SELLER_PHOTO_REQUIRED' },
+      gates: { publicEbayWrite: 'DISABLED', ebayHandoffUrl: 'https://www.ebay.com/' },
+      noExternalRequestMade: true
+    });
   });
 
   it('creates a held draft and exposes an exception-first queue', async () => {

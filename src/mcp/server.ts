@@ -56,6 +56,7 @@ export interface PartQuillMcpDependencies {
   loadCatalogImage?: CatalogImageLoader;
   verifyOemPartVin?: VinPartVerificationFunction;
   findCorrectOemPart?: CorrectOemPartFunction;
+  oemResearchAllowed?: boolean;
 }
 
 function money(value: number | undefined): string {
@@ -211,8 +212,13 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
   const imageLoader = dependencies.loadCatalogImage ?? loadCatalogImageAttachment;
   const vinVerifier = dependencies.verifyOemPartVin ?? verifyOemPartVin;
   const correctPartFinder = dependencies.findCorrectOemPart ?? findCorrectOemPart;
+  const assertOemResearchAllowed = (): void => {
+    if (dependencies.oemResearchAllowed === false) {
+      throw new Error('OEM research is unavailable until authorized data and image-use rights are documented.');
+    }
+  };
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.9.0' },
+    { name: 'partquill-image-studio', version: '0.10.0' },
     {
       instructions:
         'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. When and only when that verifier returns RED, find_correct_oem_part may reuse the same buyer VIN to locate one exact VIN-filtered replacement in the same part family. This is buyer purchase assistance: it must never replace the seller item, change the seller listing, or write to eBay. A replacement is GREEN only when one unique VIN-filtered candidate is exact-matched; multiple, incomplete or conflicting candidates remain AMBER. Always lead with the returned vehicle-fitment verdict: GREEN means Fits this vehicle, AMBER means Fitment not verified or May fit, and RED means Does not fit this vehicle. Without a VIN, fitment is always AMBER and potential application groups must never be called safe or confirmed. Never dump raw catalog option codes or hidden research rows. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. OEM-source quotes and MSRP are reference pricing, not eBay market value; never manufacture a recommended list price or quick-sale price without sold-market evidence, actual seller condition, shipping, fees and cost. Catalog condition does not prove the seller item condition. Never invent teeth count, dimensions, package contents, quantity or other specifications absent from the structured result. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
@@ -367,6 +373,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
       }
     },
     async ({ part_number: partNumber, quick_sale_discount_percent: discountPercent }) => {
+      assertOemResearchAllowed();
       const result = await oemLookup(partNumber, { quickSaleDiscountPercent: discountPercent });
       const productPhoto = result.images.find((image) => image.type === 'ACTUAL_PRODUCT_PHOTO');
       const catalogDiagram = result.images.find((image) => image.type === 'CATALOG_ILLUSTRATION');
@@ -515,6 +522,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
       }
     },
     async ({ part_number: partNumber, vin }) => {
+      assertOemResearchAllowed();
       const verification = await vinVerifier(partNumber, vin);
       const structuredContent = {
         partNumber: verification.partNumber,
@@ -646,6 +654,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
       }
     },
     async ({ rejected_part_number: rejectedPartNumber, vin }) => {
+      assertOemResearchAllowed();
       const correction = await correctPartFinder(rejectedPartNumber, vin);
       let correctPart;
       let partquillMedia: PartQuillMedia[] = [];

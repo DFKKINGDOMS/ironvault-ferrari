@@ -21,6 +21,15 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     IMAGE_STUDIO_STORAGE_DIR: '.partquill-image-studio-test',
     IMAGE_STUDIO_MAX_IMAGES: 24,
     IMAGE_STUDIO_CONCURRENCY: 3,
+    OEM_RESEARCH_MODE: 'disabled',
+    OEM_DATA_RIGHTS_CONFIRMED: false,
+    MCP_RATE_LIMIT_MAX: 30,
+    MCP_RATE_LIMIT_WINDOW_MS: 60_000,
+    MCP_MAX_BODY_BYTES: 1_048_576,
+    MCP_MAX_CONCURRENCY: 4,
+    SELLER_PREVIEW_RATE_LIMIT_MAX: 60,
+    SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS: 60_000,
+    SELLER_PREVIEW_MAX_CONCURRENCY: 8,
     ...overrides
   };
 }

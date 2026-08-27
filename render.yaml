@@ -36,9 +36,9 @@ services:
       - key: EBAY_RU_NAME
         sync: false
       - key: PUBLIC_BASE_URL
-        value: https://partquill-api.onrender.com
+        value: https://partquill.com
       - key: CORS_ORIGINS
-        value: https://vaultlister-ebay.knjw1.chatgpt.site
+        value: https://partquill.com,https://www.partquill.com
       - key: IMAGE_STUDIO_MODE
         value: preview
       - key: IMAGE_STUDIO_ACCESS_TOKEN
@@ -51,6 +51,24 @@ services:
         value: "3"
       - key: OPENAI_API_KEY
         sync: false
+      - key: OEM_RESEARCH_MODE
+        value: private-pilot
+      - key: OEM_DATA_RIGHTS_CONFIRMED
+        value: "false"
+      - key: MCP_RATE_LIMIT_MAX
+        value: "30"
+      - key: MCP_RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: MCP_MAX_BODY_BYTES
+        value: "1048576"
+      - key: MCP_MAX_CONCURRENCY
+        value: "4"
+      - key: SELLER_PREVIEW_RATE_LIMIT_MAX
+        value: "60"
+      - key: SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: SELLER_PREVIEW_MAX_CONCURRENCY
+        value: "8"
 
 databases:
   - name: partquill-postgres

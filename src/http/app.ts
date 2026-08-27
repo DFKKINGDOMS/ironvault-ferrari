@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import staticFiles from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z, ZodError } from 'zod';
@@ -20,6 +24,8 @@ import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.
 import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
 import { resolveCatalogImage } from '../catalog/image-proxy.js';
+import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema } from '../seller/command-preview.js';
+import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -79,6 +85,32 @@ function publicStudioJob(job: StudioJobRecord) {
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
   const { config, store, service, tokenVault, imageStudio } = dependencies;
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
+  const webRoot = resolve(process.cwd(), 'dist/web');
+  const sellerIndexPath = join(webRoot, 'index.html');
+  const sellerIndex = existsSync(sellerIndexPath)
+    ? await readFile(sellerIndexPath, 'utf8')
+    : '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PartQuill seller workspace</title></head><body><main><h1>PartQuill seller workspace</h1><p>The production seller bundle is created by npm run build.</p></main></body></html>';
+  const assetRoot = join(webRoot, 'assets');
+  if (existsSync(assetRoot)) {
+    await app.register(staticFiles, {
+      root: assetRoot,
+      prefix: '/assets/',
+      decorateReply: false,
+      cacheControl: true,
+      maxAge: '1y',
+      immutable: true
+    });
+  }
+  const mcpGuard = new RequestGuard(
+    config.MCP_RATE_LIMIT_MAX,
+    config.MCP_RATE_LIMIT_WINDOW_MS,
+    config.MCP_MAX_CONCURRENCY
+  );
+  const sellerPreviewGuard = new RequestGuard(
+    config.SELLER_PREVIEW_RATE_LIMIT_MAX,
+    config.SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS,
+    config.SELLER_PREVIEW_MAX_CONCURRENCY
+  );
   await app.register(cors, {
     origin: config.CORS_ORIGINS.split(',').map((origin) => origin.trim()),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -89,7 +121,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.addHook('onRequest', async (request, reply) => {
     const publicPaths = ['/health', '/ready', '/mcp', '/v1/oauth/ebay/callback'];
-    if (['GET', 'HEAD'].includes(request.method) && (request.url === '/' || request.url.startsWith('/?'))) return;
+    if (['GET', 'HEAD'].includes(request.method) && (
+      request.url === '/'
+      || request.url.startsWith('/?')
+      || request.url === '/image-studio'
+      || request.url.startsWith('/image-studio?')
+      || request.url.startsWith('/assets/')
+      || request.url.startsWith('/connected')
+    )) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
+    if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
@@ -107,6 +148,12 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
 
   app.setErrorHandler((error, request, reply) => {
+    if (error instanceof RequestLimitError) {
+      return reply
+        .header('retry-after', String(error.retryAfterSeconds))
+        .code(429)
+        .send({ error: { code: error.code, message: error.message } });
+    }
     if (error instanceof ZodError) {
       return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'request validation failed', issues: error.issues } });
     }
@@ -117,10 +164,38 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.9.1' }));
-  app.get('/', async (_request, reply) =>
-    reply.type('text/html; charset=utf-8').send(buildPartQuillWidgetHtml())
-  );
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.10.0' }));
+  app.get('/', async (_request, reply) => reply
+    .header(
+      'content-security-policy',
+      "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    )
+    .header('referrer-policy', 'strict-origin-when-cross-origin')
+    .header('x-content-type-options', 'nosniff')
+    .header('x-frame-options', 'DENY')
+    .header('cache-control', 'no-cache')
+    .type('text/html; charset=utf-8')
+    .send(sellerIndex));
+  app.get('/image-studio', async (_request, reply) => reply
+    .header('cache-control', 'no-store')
+    .type('text/html; charset=utf-8')
+    .send(buildPartQuillWidgetHtml()));
+  app.get('/connected', async (_request, reply) => reply.redirect('/?connected=ebay'));
+  app.get('/v1/seller-ui/bootstrap', async (_request, reply) => reply
+    .header('cache-control', 'no-store')
+    .send(buildSellerUiBootstrap(config)));
+  app.post('/v1/seller-ui/command-preview', { bodyLimit: 16 * 1024 }, async (request, reply) => {
+    const permit = sellerPreviewGuard.acquire(request.ip);
+    try {
+      const { command } = listingCommandRequestSchema.parse(request.body);
+      return reply
+        .header('cache-control', 'no-store')
+        .header('x-content-type-options', 'nosniff')
+        .send({ preview: buildSellerCommandPreview(command) });
+    } finally {
+      permit.release();
+    }
+  });
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
@@ -133,6 +208,22 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           activated: imageStudio?.activated ?? false,
           maxImages: config.IMAGE_STUDIO_MAX_IMAGES,
           storage: config.IMAGE_STUDIO_STORAGE_DIR
+        },
+        sellerUi: {
+          version: '0.10.0',
+          commandPreview: true,
+          publicEbayWritesDisabled: true
+        },
+        oemResearch: {
+          mode: config.OEM_RESEARCH_MODE,
+          rightsConfirmed: config.OEM_DATA_RIGHTS_CONFIRMED,
+          requestsAllowed: config.OEM_RESEARCH_MODE === 'private-pilot' && config.OEM_DATA_RIGHTS_CONFIRMED
+        },
+        mcpProtection: {
+          maxBodyBytes: config.MCP_MAX_BODY_BYTES,
+          maxConcurrency: config.MCP_MAX_CONCURRENCY,
+          requestsPerWindow: config.MCP_RATE_LIMIT_MAX,
+          windowMs: config.MCP_RATE_LIMIT_WINDOW_MS
         }
       };
     } catch {
@@ -140,8 +231,11 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     }
   });
 
-  app.post('/mcp', async (request, reply) => {
-    const server = buildPartQuillMcpServer();
+  app.post('/mcp', { bodyLimit: config.MCP_MAX_BODY_BYTES }, async (request, reply) => {
+    const permit = mcpGuard.acquire(request.ip);
+    const server = buildPartQuillMcpServer({
+      oemResearchAllowed: config.OEM_RESEARCH_MODE === 'private-pilot' && config.OEM_DATA_RIGHTS_CONFIRMED
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.hijack();
     try {
@@ -163,6 +257,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           })
         );
       }
+    } finally {
+      permit.release();
     }
     return reply;
   });

@@ -28,7 +28,16 @@ const schema = z
     IMAGE_STUDIO_ACCESS_TOKEN: z.string().min(16).optional(),
     IMAGE_STUDIO_STORAGE_DIR: z.string().default('.partquill-image-studio'),
     IMAGE_STUDIO_MAX_IMAGES: z.coerce.number().int().min(1).max(24).default(24),
-    IMAGE_STUDIO_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3)
+    IMAGE_STUDIO_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3),
+    OEM_RESEARCH_MODE: z.enum(['disabled', 'private-pilot']).default('disabled'),
+    OEM_DATA_RIGHTS_CONFIRMED: booleanString,
+    MCP_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000).default(30),
+    MCP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+    MCP_MAX_BODY_BYTES: z.coerce.number().int().min(1_024).max(4 * 1024 * 1024).default(1_048_576),
+    MCP_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+    SELLER_PREVIEW_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(2_000).default(60),
+    SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+    SELLER_PREVIEW_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8)
   })
   .superRefine((env, context) => {
     if (env.NODE_ENV === 'production') {

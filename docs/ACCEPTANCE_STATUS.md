@@ -35,12 +35,17 @@ Status legend: `implemented`, `tested`, `scaffolded`, `blocked-external`.
 | A29 Connected ChatGPT intake | tested-contract | Public stateless MCP endpoint, embedded widget, 1–24 ChatGPT file uploads and exact same-conversation prompt dispatch are covered by automated tests |
 | A30 Connected result return | scaffolded | `return_edited_images` binds returned file references to the protected job and forbids eBay writes; live ChatGPT generated-file invocation still requires a two-image acceptance test |
 | A31 Free-route separation | tested-contract | Connected ChatGPT Assist needs no PartQuill API key, contains no checkout, and does not call the metered Express worker |
-| A32 Toyota/Lexus/Scion exact-number research | tested-live | `research_oem_part` exact-matches three private catalog paths, merges crossover fitment, anonymizes price quotes, proxies images through PartQuill, and fails closed on mismatches or any dealer-identity leakage |
+| A32 Toyota/Lexus/Scion exact-number research | tested-contract / blocked-release | Parser, anonymization and mismatch tests pass, but production invocation is fail-closed until authorized data and image-use rights are documented |
 | A33 Marketplace price boundary | tested | MSRP and current anonymous OEM-source prices are labeled reference-only; no eBay list or quick-sale price is treated as verified without sold-market evidence, actual seller condition, shipping, fees and seller cost |
 | A34 Catalog image rendering | tested-contract | `research_oem_part` hydrates the inline PartQuill card with widget-only product-photo and diagram bytes, labels diagram callout/PNC, never claims transcript attachments, blocks dealer identity, and marks both reference-only with `primaryEbayImageApproved=false` |
 | A35 Buyer VIN cross-check | tested-contract | `verify_oem_part_vin` decodes a 17-character Toyota/Lexus/Scion VIN, intersects the decoded year/make/model/engine with three-path catalog evidence, returns only the last four characters, stores no VIN, and presents explicit green Fits, amber May fit/not verified, or red Does not fit verdicts while failing closed on broad or conflicting evidence |
 | A36 Fitment information hierarchy | tested-contract | Part-only research is always amber and VIN-required; raw option-code rows are replaced by grouped year/make/model applications, seller diagnostics are collapsed, and a catalog condition can never establish seller-item condition |
 | A37 Buyer correct-part recovery | tested-contract | A red VIN mismatch exposes a buyer-only Find the correct part action. It reuses the VIN once, isolates the original part family by diagram callout/PNC, requires one unique VIN-filtered candidate, independently exact-matches that candidate, returns only the VIN last four, and leaves multiple or adjacent parts amber. Dealer identity, the seller listing and all eBay writes remain blocked. |
+| A38 Command-first seller home | tested | `/` serves the approved React workspace with one-command listing as the primary action; legacy seller tools are demoted |
+| A39 Server command parsing | tested | Part number, price, quantity, condition, shipping and no-fitment instructions are parsed server-side with a 500-character/16 KB boundary and deterministic SHA-256 fingerprint |
+| A40 Unknown-part claim hold | tested | Unverified parts receive no fabricated brand, part type, category, fitment or licensed-media claim; private preflight remains held |
+| A41 Seller review surface | tested-contract | Identity source, fitment source, green/amber/red legend, seller-photo requirement and explicit physical-item/condition confirmations are visible before preflight |
+| A42 Safe eBay handoff | tested-contract | Public writes remain disabled; the final approved button opens only eBay's public home page without transmitting the listing payload |
 
 Production publishing remains disabled until every P0 gate is proven against one authorized seller and the exact current eBay environment.
 
@@ -48,8 +53,8 @@ Production publishing remains disabled until every P0 gate is proven against one
 
 - TypeScript build: pass.
 - ESLint: pass.
-- Automated tests cover configuration, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking, red-mismatch correct-part recovery, ambiguity blocking, multi-catalog research, approvals, HTTP and post-publish lifecycle.
-- Live multi-catalog smoke tests: exact parts returned Toyota/Lexus/Scion crossover evidence, anonymous MSRP/current-price comparisons, proxied images, supersession and normalized fitment rows without source identity or contact data.
+- 75 automated tests cover configuration, request limits, seller-command parsing, unknown-part holds, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking, red-mismatch correct-part recovery, ambiguity blocking, catalog-adapter contracts, approvals, HTTP and post-publish lifecycle.
+- Production OEM research requests remain disabled while data-rights confirmation is false; test fixtures prove the output contract without treating those fixtures as licensed production evidence.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.
 - Local TCP smoke test: not available in the current managed workspace because host socket/interface lookup is blocked; Fastify injection exercises the compiled HTTP contract without a listening socket.

@@ -1,11 +1,19 @@
-# PartQuill API — eBay-first pilot
+# PartQuill — one-command eBay seller pilot
 
-This repository is the first executable PartQuill vertical slice. It turns seller evidence into held listing drafts and enforces two independent approvals before any public eBay write.
+This repository serves the PartQuill seller workspace and its evidence-gated API from one Render web service. The primary action is a sentence such as `List part 58487514 on eBay for $9.99 now`; the backend extracts seller intent, applies safe defaults, holds unsupported catalog claims, fingerprints the exact preview, and preserves two independent approval gates.
 
 It is intentionally not a universal visual parts identifier. The default runtime uses a clearly labeled mock eBay gateway, PostgreSQL-compatible storage, and `ALLOW_EBAY_WRITES=false`.
 
 ## Implemented now
 
+- Command-first React seller workspace at `/`, with the approved Understand → Resolve → Map → Protect → Assemble → Review flow.
+- Public, rate-limited `POST /v1/seller-ui/command-preview` parser for part number, price, quantity, condition, shipping and no-fitment instructions.
+- Deterministic SHA-256 preview fingerprints. A material seller edit requires a rebuild before preflight.
+- Explicit identity, fitment and media proof states. Unknown parts never receive an invented brand, product type, category, compatibility row or catalog image.
+- A clearly labeled `58487514` illustrative adapter fixture for reviewing the fully populated UI. It is not catalog evidence and cannot authorize an eBay claim.
+- Seller-photo requirement, explicit physical-part and condition confirmations, green/amber/red fitment legend, VIN recovery entry point, and a visible “Find the correct part” buyer-assistance path.
+- Safe “Send to eBay” handoff that opens only `https://www.ebay.com/`; no account sign-in, listing payload or eBay write is performed.
+- Existing connected Image Studio preserved at `/image-studio`.
 - Authenticated Fastify API with strict Zod request validation.
 - Canonical payload hashing and versioned held drafts.
 - Append-only evidence, approval and audit records.
@@ -29,7 +37,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Batch pricing rather than per-photo retail pricing: the current 24-image pilot quote is $2.49 from prepaid Studio balance, subject to real production telemetry.
 - A connected ChatGPT MCP endpoint and embedded Image Studio widget for the free route: upload 1–24 files once, retain their ChatGPT file references, and dispatch the exact preservation job in the same conversation.
 - A file-return tool contract that can pair completed ChatGPT image outputs to the protected job without an eBay write. Host-level automatic return remains a live ChatGPT acceptance test, not a completed product claim.
-- A read-only Toyota/Lexus/Scion research tool for exact OEM part numbers. It merges three private reference paths into anonymous OEM-source price references, crossover brands, supersession, and normalized application evidence. The exact product reference photo and catalog diagram render inside a PartQuill inline card from widget-only media bytes, with diagram callout/PNC labels and fail-closed publishing-rights warnings. Dealer names, domains, URLs, phones, addresses and personnel are blocked from every public result.
+- A read-only Toyota/Lexus/Scion research implementation for exact OEM part numbers. Production invocation is fail-closed while `OEM_DATA_RIGHTS_CONFIRMED=false`; authorized data and image-use rights are a release gate. When enabled in an approved build, results remain dealer-anonymous and reference-only.
 - A buyer-facing VIN cross-check in the same card. It decodes a 17-character Toyota/Lexus/Scion VIN, compares year/make/model/engine against the three-path catalog evidence, returns only the VIN's last four characters, stores no VIN and presents an explicit green Fits, amber May fit/not verified, or red Does not fit verdict. Only a specific engine-supported match permits a listing fitment claim.
 - Buyer-only red-mismatch recovery. After a confirmed Does not fit verdict, the card offers **Find the correct part** and reuses the in-memory VIN once to search the same part family. It requires one unique VIN-filtered candidate with the same diagram callout/PNC (or one exact normalized family match), then independently exact-matches that part across the anonymous research paths. Multiple, adjacent or incomplete candidates remain amber. The seller item, listing and eBay account are never changed.
 - A progressive-disclosure result card. Vehicle verdict, identity and reference media lead; potential applications are grouped by year/make/model; source counts and OEM-source prices remain collapsed seller research. Catalog condition never becomes seller-item condition, and OEM-source quotes are never represented as verified eBay market value.
@@ -73,6 +81,11 @@ Health endpoints are public:
 
 - `GET /health` — process liveness.
 - `GET /ready` — persistence and safety-mode summary.
+
+The seller workspace endpoints are also public and read-only:
+
+- `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
+- `POST /v1/seller-ui/command-preview` — builds a held or illustrative preview; it performs no catalog or eBay request.
 
 The connected ChatGPT proof endpoint is also public:
 
@@ -151,6 +164,8 @@ Any material edit restarts the approval chain.
 
 ## What remains before a real seller pilot
 
+- Connect an authorized catalog/eBay product adapter so verified identity, taxonomy, item specifics, fitment and licensed media can replace the illustrative fixture.
+- Add the seller photo upload to the command surface and durable private object storage for originals.
 - Register eBay developer keys and RuName; complete one Sandbox OAuth connection.
 - Implement Inventory API inventory-item, location, business-policy and offer mapping for the pilot seller.
 - Run current production Taxonomy/Metadata/catalog read probes. Sandbox alone does not prove Motors catalog behavior.
