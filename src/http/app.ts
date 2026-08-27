@@ -19,6 +19,7 @@ import type { ImageStudioService } from '../image-studio/service.js';
 import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.js';
 import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
+import { resolveCatalogImage } from '../catalog/image-proxy.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -90,6 +91,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const publicPaths = ['/health', '/ready', '/mcp', '/v1/oauth/ebay/callback'];
     if (['GET', 'HEAD'].includes(request.method) && (request.url === '/' || request.url.startsWith('/?'))) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
       request.url.startsWith('/v1/image-studio/') &&
@@ -115,7 +117,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.4.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.5.0' }));
   app.get('/', async (_request, reply) =>
     reply.type('text/html; charset=utf-8').send(buildPartQuillWidgetHtml())
   );
@@ -174,6 +176,31 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.get('/mcp', methodNotAllowed);
   app.delete('/mcp', methodNotAllowed);
+
+  app.get('/v1/catalog/images/:imageId', async (request, reply) => {
+    const { imageId } = z.object({ imageId: z.string().regex(/^[a-f0-9]{40}$/) }).parse(request.params);
+    const sourceUrl = resolveCatalogImage(imageId);
+    if (!sourceUrl) return reply.code(404).send({ error: { code: 'IMAGE_NOT_FOUND', message: 'catalog image expired' } });
+    const response = await fetch(sourceUrl, {
+      headers: { accept: 'image/avif,image/webp,image/png,image/jpeg', 'user-agent': 'PartQuill/0.5 (+https://partquill.com)' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(12_000)
+    });
+    if (!response.ok) return reply.code(502).send({ error: { code: 'IMAGE_UPSTREAM_ERROR', message: 'catalog image unavailable' } });
+    const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim();
+    if (!mediaType || !['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(mediaType)) {
+      return reply.code(502).send({ error: { code: 'INVALID_IMAGE', message: 'catalog image type rejected' } });
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > 10 * 1024 * 1024) {
+      return reply.code(502).send({ error: { code: 'INVALID_IMAGE', message: 'catalog image size rejected' } });
+    }
+    return reply
+      .header('content-type', mediaType)
+      .header('cache-control', 'public, max-age=3600, stale-while-revalidate=86400')
+      .header('x-content-type-options', 'nosniff')
+      .send(bytes);
+  });
 
   app.get('/v1/image-studio/quote', async (request) => {
     const { count } = z.object({ count: z.coerce.number().int().min(1).max(24) }).parse(request.query);

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
-import { researchLexusPart, type LexusPartResearch } from '../catalog/lexuspartsnow.js';
+import { researchOemPart, type OemPartResearch } from '../catalog/oem-research.js';
 import { buildConnectedImagePrompt } from './prompt.js';
 
 const openAiFileSchema = z.object({
@@ -27,104 +27,116 @@ function deterministicJobCode(files: OpenAiFile[]): string {
   return `PQ-C-${digest}`;
 }
 
-type LexusPartResearchFunction = (
+type OemPartResearchFunction = (
   partNumber: string,
   options?: { quickSaleDiscountPercent?: number }
-) => Promise<LexusPartResearch>;
+) => Promise<OemPartResearch>;
 
 export interface PartQuillMcpDependencies {
-  researchLexusPart?: LexusPartResearchFunction;
+  researchOemPart?: OemPartResearchFunction;
 }
 
 function money(value: number | undefined): string {
   return value === undefined ? 'not shown' : `$${value.toFixed(2)}`;
 }
 
-function lexusPartSummary(result: LexusPartResearch): string {
+function oemPartSummary(result: OemPartResearch): string {
   const fitmentPreview = result.fitment
     .slice(0, 12)
     .map((row) => `- ${row.raw}`)
     .join('\n');
   const image = result.images[0];
+  const quoteRows = result.pricing.anonymousQuotes
+    .map((quote) => `- **${quote.quote}:** current ${money(quote.currentPrice)} · list/MSRP ${money(quote.listPrice)}`)
+    .join('\n');
   const quickSale = result.quickSale.targetPrice === undefined
-    ? '- **Quick-sale target:** unavailable because the dealer did not return a current sale price'
-    : `- **Quick-sale target:** ${money(result.quickSale.targetPrice)} (dealer-anchored estimate, ${result.quickSale.discountPercent}% below current dealer price)`;
+    ? '- **Quick-sale target:** unavailable because no current anonymous quote was returned'
+    : `- **Quick-sale target:** ${money(result.quickSale.targetPrice)} (${result.quickSale.discountPercent}% below the lowest current anonymous OEM quote)`;
   return [
     `## ${result.identity.partNumber} — ${result.identity.description}`,
     '',
-    `- **Manufacturer:** ${result.identity.manufacturer}`,
-    `- **List/MSRP:** ${money(result.pricing.listPrice)}`,
-    `- **Current dealer price:** ${money(result.pricing.dealerSalePrice)}`,
+    `- **Catalog brands:** ${result.brandCoverage.catalogBrands.join(', ') || 'not established'}`,
+    `- **Fitment brands:** ${result.brandCoverage.fitmentBrands.join(', ') || 'not returned'}`,
+    `- **Crossover:** ${result.brandCoverage.crossoverStatus === 'MULTI_BRAND' ? 'Yes—multiple Toyota umbrella brands have evidence' : 'No crossover established'}`,
+    `- **List/MSRP reference:** ${money(result.pricing.listPriceReference)}`,
+    `- **Current observed range:** ${money(result.pricing.currentPriceLow)}–${money(result.pricing.currentPriceHigh)}`,
     quickSale,
-    ...(result.identity.replacedBy ? [`- **Replaced by:** ${result.identity.replacedBy}`] : []),
+    ...(result.identity.replacedBy.length ? [`- **Replaced by:** ${result.identity.replacedBy.join(', ')}`] : []),
+    ...(result.identity.replaces.length ? [`- **Replaces:** ${result.identity.replaces.join(', ')}`] : []),
+    '',
+    '### Anonymous OEM price checks',
+    quoteRows || '- No current price was returned.',
     '',
     image ? `![${image.alt || result.identity.description}](${image.url})` : '_No catalog image was returned._',
     '',
-    `### Fitment (${result.fitmentTotal} dealer-catalog rows)`,
+    `### Fitment (${result.fitmentTotal} exact catalog rows)`,
     fitmentPreview || '- No fitment rows were returned.',
     result.fitmentTotal > 12 ? `- …and ${result.fitmentTotal - 12} additional rows in the structured result.` : '',
     '',
-    `Source: ${result.source.url} (retrieved ${result.source.retrievedAt})`,
+    `Catalog checks: ${result.catalogChecks.exactMatches} exact match(es) from ${result.catalogChecks.attempted} private lookup sources; retrieved ${result.catalogChecks.retrievedAt}. Dealer identity is never exposed.`,
     '',
-    `**Important:** ${result.quickSale.disclaimer} ${result.source.limitations[2]}`,
+    `**Important:** ${result.quickSale.disclaimer}`,
     'No eBay listing or price was changed.'
   ].join('\n');
 }
 
 export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies = {}): McpServer {
-  const lexusLookup = dependencies.researchLexusPart ?? researchLexusPart;
+  const oemLookup = dependencies.researchOemPart ?? researchOemPart;
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.4.0' },
+    { name: 'partquill-image-studio', version: '0.5.0' },
     {
       instructions:
-        'PartQuill researches exact Lexus part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_lexus_part when the user supplies a Lexus part number or asks its identity, price, worth, images or fitment. Dealer fitment is reference evidence and always requires VIN confirmation. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
+        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. Catalog fitment is reference evidence and always requires VIN confirmation. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
     }
   );
 
   registerAppTool(
     server,
-    'research_lexus_part',
+    'research_oem_part',
     {
-      title: 'Research Lexus part',
+      title: 'Research Toyota / Lexus / Scion part',
       description:
-        'Look up an exact Lexus part number at LexusPartsNow and return dealer-catalog identity, list/MSRP, current dealer sale price, a dealer-anchored quick-sale estimate, images, supersession and year/make/model fitment. Use when the user enters a Lexus part number or asks what it is worth. Read-only: never changes or publishes an eBay listing.',
+        'Privately exact-match a Toyota, Lexus or Scion part number across multiple OEM reference catalogs. Returns anonymized price quotes, crossover brands, PartQuill-hosted images, supersession and year/make/model fitment. It never returns dealer identity or contact information. Read-only: never changes or publishes an eBay listing.',
       inputSchema: {
         part_number: z.string().min(5).max(40),
         quick_sale_discount_percent: z.number().min(10).max(40).default(20)
       },
       outputSchema: {
-        source: z.object({
-          provider: z.literal('LexusPartsNow'),
-          url: z.string().url(),
-          retrievedAt: z.string(),
-          evidenceStatus: z.literal('DEALER_CATALOG_REFERENCE'),
-          limitations: z.array(z.string())
-        }),
         identity: z.object({
-          manufacturer: z.literal('Lexus'),
           partNumber: z.string(),
           description: z.string(),
-          alternateDescription: z.string().optional(),
-          manufacturerNote: z.string().optional(),
+          alternateNames: z.array(z.string()),
+          manufacturerNotes: z.array(z.string()),
           condition: z.string().optional(),
           fitmentType: z.string().optional(),
-          pncCode: z.string().optional(),
-          replacedBy: z.string().optional(),
+          pncCodes: z.array(z.string()),
+          replacedBy: z.array(z.string()),
           replaces: z.array(z.string())
+        }),
+        brandCoverage: z.object({
+          catalogBrands: z.array(z.enum(['Lexus', 'Toyota', 'Scion'])),
+          fitmentBrands: z.array(z.enum(['Lexus', 'Toyota', 'Scion'])),
+          crossoverStatus: z.enum(['SINGLE_BRAND', 'MULTI_BRAND'])
         }),
         pricing: z.object({
           currency: z.literal('USD'),
-          listPrice: z.number().optional(),
-          dealerSalePrice: z.number().optional(),
-          savingsPercent: z.number().optional(),
-          status: z.string().optional()
+          observedQuoteCount: z.number().int(),
+          listPriceReference: z.number().optional(),
+          currentPriceLow: z.number().optional(),
+          currentPriceHigh: z.number().optional(),
+          anonymousQuotes: z.array(z.object({
+            quote: z.string(),
+            listPrice: z.number().optional(),
+            currentPrice: z.number().optional(),
+            savingsPercent: z.number().optional()
+          }))
         }),
         quickSale: z.object({
           targetPrice: z.number().optional(),
           lowPrice: z.number().optional(),
           highPrice: z.number().optional(),
           discountPercent: z.number(),
-          basis: z.enum(['DEALER_SALE_PRICE', 'UNAVAILABLE']),
+          basis: z.enum(['LOWEST_CURRENT_OEM_QUOTE', 'UNAVAILABLE']),
           disclaimer: z.string()
         }),
         images: z.array(
@@ -138,7 +150,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           z.object({
             yearStart: z.number().int().optional(),
             yearEnd: z.number().int().optional(),
-            make: z.literal('Lexus'),
+            make: z.enum(['Lexus', 'Toyota', 'Scion']),
             model: z.string(),
             trimEngine: z.string().optional(),
             optionDetails: z.string().optional(),
@@ -146,20 +158,27 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           })
         ),
         fitmentTotal: z.number().int(),
+        catalogChecks: z.object({
+          attempted: z.literal(3),
+          exactMatches: z.number().int(),
+          unavailable: z.number().int(),
+          retrievedAt: z.string()
+        }),
+        dealerIdentityExposed: z.literal(false),
         vinConfirmationRequired: z.literal(true)
       },
       annotations: { readOnlyHint: true, openWorldHint: true, destructiveHint: false },
       _meta: {
-        'openai/toolInvocation/invoking': 'Checking Lexus dealer catalog…',
-        'openai/toolInvocation/invoked': 'Lexus part research ready'
+        'openai/toolInvocation/invoking': 'Checking private OEM references…',
+        'openai/toolInvocation/invoked': 'Anonymous OEM research ready'
       }
     },
     async ({ part_number: partNumber, quick_sale_discount_percent: discountPercent }) => {
-      const result = await lexusLookup(partNumber, { quickSaleDiscountPercent: discountPercent });
+      const result = await oemLookup(partNumber, { quickSaleDiscountPercent: discountPercent });
       const structuredContent = { ...result };
       return {
         structuredContent,
-        content: [{ type: 'text', text: lexusPartSummary(result) }]
+        content: [{ type: 'text', text: oemPartSummary(result) }]
       };
     }
   );

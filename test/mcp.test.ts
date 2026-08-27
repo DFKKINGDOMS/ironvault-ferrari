@@ -4,35 +4,39 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildPartQuillMcpServer } from '../src/mcp/server.js';
 
 const lexusResearchFixture = {
-  source: {
-    provider: 'LexusPartsNow' as const,
-    url: 'https://www.lexuspartsnow.com/parts/lexus-plate~75443-78210.html',
-    retrievedAt: '2026-08-27T12:00:00.000Z',
-    evidenceStatus: 'DEALER_CATALOG_REFERENCE' as const,
-    limitations: [
-      'Dealer catalog data can contain errors or change after retrieval.',
-      'Catalog diagrams may be general illustrations.',
-      'Vehicle fitment requires VIN confirmation before a compatibility claim or listing publication.'
-    ]
-  },
   identity: {
-    manufacturer: 'Lexus' as const,
     partNumber: '75443-78210',
     description: 'PLATE, BACK DOOR NAM',
+    alternateNames: [],
+    manufacturerNotes: [],
+    pncCodes: ['75443'],
+    replacedBy: [],
     replaces: []
   },
-  pricing: { currency: 'USD' as const, listPrice: 59.03, dealerSalePrice: 44.36 },
+  brandCoverage: {
+    catalogBrands: ['Lexus' as const],
+    fitmentBrands: ['Lexus' as const],
+    crossoverStatus: 'SINGLE_BRAND' as const
+  },
+  pricing: {
+    currency: 'USD' as const,
+    observedQuoteCount: 1,
+    listPriceReference: 59.03,
+    currentPriceLow: 44.36,
+    currentPriceHigh: 44.36,
+    anonymousQuotes: [{ quote: 'Quote A', listPrice: 59.03, currentPrice: 44.36 }]
+  },
   quickSale: {
     targetPrice: 35.49,
     lowPrice: 33.27,
     highPrice: 37.71,
     discountPercent: 20,
-    basis: 'DEALER_SALE_PRICE' as const,
-    disclaimer: 'Dealer-anchored estimate only.'
+    basis: 'LOWEST_CURRENT_OEM_QUOTE' as const,
+    disclaimer: 'Anonymous OEM-catalog estimate only.'
   },
   images: [
     {
-      url: 'https://www.lexuspartsnow.com/resources/example.png',
+      url: 'https://api.partquill.com/v1/catalog/images/0123456789abcdef0123456789abcdef01234567',
       type: 'CATALOG_ILLUSTRATION' as const,
       alt: 'Catalog illustration'
     }
@@ -47,6 +51,13 @@ const lexusResearchFixture = {
     }
   ],
   fitmentTotal: 1,
+  catalogChecks: {
+    attempted: 3 as const,
+    exactMatches: 1,
+    unavailable: 2,
+    retrievedAt: '2026-08-27T12:00:00.000Z'
+  },
+  dealerIdentityExposed: false as const,
   vinConfirmationRequired: true as const
 };
 
@@ -55,7 +66,7 @@ describe('PartQuill connected ChatGPT contract', () => {
   let client: Client;
 
   beforeEach(async () => {
-    server = buildPartQuillMcpServer({ researchLexusPart: async () => lexusResearchFixture });
+    server = buildPartQuillMcpServer({ researchOemPart: async () => lexusResearchFixture });
     client = new Client({ name: 'partquill-test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -70,7 +81,7 @@ describe('PartQuill connected ChatGPT contract', () => {
   it('advertises the upload-once tools without a broken embedded-card dependency', async () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual([
-      'research_lexus_part',
+      'research_oem_part',
       'open_image_studio',
       'prepare_protected_image_job',
       'return_edited_images'
@@ -86,16 +97,18 @@ describe('PartQuill connected ChatGPT contract', () => {
 
   it('returns Lexus catalog research without an eBay write', async () => {
     const result = await client.callTool({
-      name: 'research_lexus_part',
+      name: 'research_oem_part',
       arguments: { part_number: '75443-78210' }
     });
     expect(result.structuredContent).toMatchObject({
       identity: { partNumber: '75443-78210', description: 'PLATE, BACK DOOR NAM' },
-      pricing: { listPrice: 59.03, dealerSalePrice: 44.36 },
-      quickSale: { targetPrice: 35.49, basis: 'DEALER_SALE_PRICE' },
+      pricing: { listPriceReference: 59.03, currentPriceLow: 44.36 },
+      quickSale: { targetPrice: 35.49, basis: 'LOWEST_CURRENT_OEM_QUOTE' },
       vinConfirmationRequired: true
     });
     expect(JSON.stringify(result.content)).toContain('No eBay listing or price was changed.');
+    expect(JSON.stringify(result)).not.toMatch(/lexuspartsnow|toyotapartsdeal|longotoyota|revolutionparts/i);
+    expect(JSON.stringify(result)).not.toMatch(/(?:telephone|phone|street address|contact us)/i);
   });
 
   it('prepares a deterministic, rights-confirmed two-image preservation job', async () => {

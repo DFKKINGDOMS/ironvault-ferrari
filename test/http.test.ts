@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/http/app.js';
 import { harness, validPayload } from './helpers.js';
+import { registerCatalogImage } from '../src/catalog/image-proxy.js';
 
 let app: FastifyInstance | undefined;
-afterEach(async () => app?.close());
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await app?.close();
+});
 
 describe('HTTP contract', () => {
   it('keeps health public and business routes authenticated', async () => {
@@ -70,5 +74,20 @@ describe('HTTP contract', () => {
     expect(queue.statusCode).toBe(200);
     expect(queue.json().items).toHaveLength(1);
     expect(queue.json().items[0].exceptions[0].code).toBe('IDENTITY_INCOMPLETE');
+  });
+
+  it('serves catalog images through an opaque public PartQuill URL', async () => {
+    const publicUrl = registerCatalogImage('https://www.toyotapartsdeal.com/resources/encry/part-picture/example.png');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' }
+      })
+    ));
+    app = await buildApp(harness());
+    const response = await app.inject({ method: 'GET', url: new URL(publicUrl).pathname });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('image/png');
+    expect(response.headers['cache-control']).toContain('public');
   });
 });

@@ -35,8 +35,8 @@ Status legend: `implemented`, `tested`, `scaffolded`, `blocked-external`.
 | A29 Connected ChatGPT intake | tested-contract | Public stateless MCP endpoint, embedded widget, 1–24 ChatGPT file uploads and exact same-conversation prompt dispatch are covered by automated tests |
 | A30 Connected result return | scaffolded | `return_edited_images` binds returned file references to the protected job and forbids eBay writes; live ChatGPT generated-file invocation still requires a two-image acceptance test |
 | A31 Free-route separation | tested-contract | Connected ChatGPT Assist needs no PartQuill API key, contains no checkout, and does not call the metered Express worker |
-| A32 Lexus exact-number research | tested-live | `research_lexus_part` performs an exact-match-only LexusPartsNow lookup and returns sourced identity, MSRP/list, dealer sale price, labeled images, supersession, normalized fitment and retrieval time; mismatches and unsafe redirects fail closed |
-| A33 Quick-sale price boundary | tested | Default recommendation is transparently anchored 20% below the current dealer sale price, with a 15–25% range; it is labeled as an estimate rather than resale-market value and is never applied or published automatically |
+| A32 Toyota/Lexus/Scion exact-number research | tested-live | `research_oem_part` exact-matches three private catalog paths, merges crossover fitment, anonymizes price quotes, proxies images through PartQuill, and fails closed on mismatches or any dealer-identity leakage |
+| A33 Quick-sale price boundary | tested | Default recommendation is transparently anchored 20% below the lowest current anonymous OEM quote, with a 15–25% range; it is labeled as an estimate rather than resale-market value and is never applied or published automatically |
 
 Production publishing remains disabled until every P0 gate is proven against one authorized seller and the exact current eBay environment.
 
@@ -45,7 +45,7 @@ Production publishing remains disabled until every P0 gate is proven against one
 - TypeScript build: pass.
 - ESLint: pass.
 - Automated tests: 47 pass across configuration, security, policy, images, Image Studio pricing/routing, MCP/widget contracts, Lexus dealer research, approvals, HTTP and post-publish lifecycle.
-- Live dealer smoke test: exact part `75443-78210` returned the source URL, Lexus identity, MSRP/list, dealer price, catalog image and four normalized fitment rows.
+- Live multi-catalog smoke tests: exact parts returned Toyota/Lexus/Scion crossover evidence, anonymous MSRP/current-price comparisons, proxied images, supersession and normalized fitment rows without source identity or contact data.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.
 - Local TCP smoke test: not available in the current managed workspace because host socket/interface lookup is blocked; Fastify injection exercises the compiled HTTP contract without a listening socket.
