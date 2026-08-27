@@ -13,6 +13,7 @@ import {
   type OemPartResearch
 } from '../catalog/oem-research.js';
 import { verifyOemPartVin, type VinPartVerification } from '../catalog/vin-fitment.js';
+import { findCorrectOemPart, type CorrectOemPartResult } from '../catalog/correct-part.js';
 import {
   loadCatalogImageAttachment,
   type CatalogImageAttachment
@@ -48,11 +49,13 @@ type OemPartResearchFunction = (
 ) => Promise<OemPartResearch>;
 type CatalogImageLoader = (publicUrl: string) => Promise<CatalogImageAttachment | undefined>;
 type VinPartVerificationFunction = (partNumber: string, vin: string) => Promise<VinPartVerification>;
+type CorrectOemPartFunction = (partNumber: string, vin: string) => Promise<CorrectOemPartResult>;
 
 export interface PartQuillMcpDependencies {
   researchOemPart?: OemPartResearchFunction;
   loadCatalogImage?: CatalogImageLoader;
   verifyOemPartVin?: VinPartVerificationFunction;
+  findCorrectOemPart?: CorrectOemPartFunction;
 }
 
 function money(value: number | undefined): string {
@@ -68,6 +71,98 @@ interface ImagePresentation {
   productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED';
   catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY';
   primaryEbayImageApproved: false;
+}
+
+interface PartQuillMedia {
+  role: 'PRODUCT_PHOTO' | 'CATALOG_DIAGRAM';
+  data: string;
+  mimeType: string;
+  alt: string;
+}
+
+async function prepareResearchMedia(
+  result: OemPartResearch,
+  imageLoader: CatalogImageLoader
+): Promise<{ imagePresentation: ImagePresentation; partquillMedia: PartQuillMedia[] }> {
+  const productPhoto = result.images.find((image) => image.type === 'ACTUAL_PRODUCT_PHOTO');
+  const catalogDiagram = result.images.find((image) => image.type === 'CATALOG_ILLUSTRATION');
+  const [productAttachment, diagramAttachment] = await Promise.all([
+    productPhoto ? imageLoader(productPhoto.url).catch(() => undefined) : undefined,
+    catalogDiagram ? imageLoader(catalogDiagram.url).catch(() => undefined) : undefined
+  ]);
+  const imagePresentation: ImagePresentation = {
+    productPhotoAvailable: Boolean(productAttachment),
+    diagramAvailable: Boolean(diagramAttachment),
+    visualCard: 'PARTQUILL_INLINE_CARD',
+    transcriptAttachments: false,
+    diagramCallouts: result.identity.pncCodes,
+    productPhotoUsage: 'REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED',
+    catalogDiagramUsage: 'INTERNAL_REFERENCE_ONLY',
+    primaryEbayImageApproved: false
+  };
+  const partquillMedia: PartQuillMedia[] = [];
+  if (productAttachment) {
+    partquillMedia.push({
+      role: 'PRODUCT_PHOTO',
+      data: productAttachment.data,
+      mimeType: productAttachment.mimeType,
+      alt: `Exact product reference photograph for ${result.identity.partNumber}`
+    });
+  }
+  if (diagramAttachment) {
+    partquillMedia.push({
+      role: 'CATALOG_DIAGRAM',
+      data: diagramAttachment.data,
+      mimeType: diagramAttachment.mimeType,
+      alt: `Catalog diagram for ${result.identity.partNumber}; callout ${imagePresentation.diagramCallouts.join(', ') || 'not returned'}`
+    });
+  }
+  return { imagePresentation, partquillMedia };
+}
+
+function researchCardData(
+  result: OemPartResearch,
+  imagePresentation: ImagePresentation,
+  fitmentVerdict: {
+    status: 'VIN_REQUIRED' | 'VIN_MATCHED_CORRECT_PART';
+    tone: 'AMBER' | 'GREEN';
+    statusLabel: 'Fitment not verified' | 'Correct part for this vehicle';
+    explanation: string;
+    listingFitmentAllowed: boolean;
+  }
+) {
+  const applications = summarizeOemApplications(result.fitment);
+  return {
+    identity: {
+      partNumber: result.identity.partNumber,
+      description: result.identity.description,
+      alternateNames: result.identity.alternateNames,
+      manufacturerNotes: result.identity.manufacturerNotes,
+      ...(result.identity.condition ? { catalogCondition: result.identity.condition } : {}),
+      ...(result.identity.fitmentType ? { catalogFitmentType: result.identity.fitmentType } : {}),
+      pncCodes: result.identity.pncCodes,
+      replacedBy: result.identity.replacedBy,
+      replaces: result.identity.replaces
+    },
+    brandCoverage: result.brandCoverage,
+    pricingReference: {
+      currency: result.pricing.currency,
+      observedQuoteCount: result.pricing.observedQuoteCount,
+      ...(result.pricing.listPriceReference !== undefined ? { listPriceReference: result.pricing.listPriceReference } : {}),
+      ...(result.pricing.currentPriceLow !== undefined ? { currentPriceLow: result.pricing.currentPriceLow } : {}),
+      ...(result.pricing.currentPriceHigh !== undefined ? { currentPriceHigh: result.pricing.currentPriceHigh } : {}),
+      evidenceType: 'ANONYMOUS_OEM_SOURCE_REFERENCE' as const,
+      ebayMarketValueVerified: false as const
+    },
+    fitmentVerdict,
+    imagePresentation,
+    applicationSummary: applications,
+    applicationGroupTotal: applications.length,
+    fitmentRowCount: result.fitmentTotal,
+    catalogChecks: result.catalogChecks,
+    dealerIdentityExposed: false as const,
+    vinConfirmationRequired: true as const
+  };
 }
 
 function applicationLine(application: OemApplicationSummary): string {
@@ -115,11 +210,12 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
   const oemLookup = dependencies.researchOemPart ?? researchOemPart;
   const imageLoader = dependencies.loadCatalogImage ?? loadCatalogImageAttachment;
   const vinVerifier = dependencies.verifyOemPartVin ?? verifyOemPartVin;
+  const correctPartFinder = dependencies.findCorrectOemPart ?? findCorrectOemPart;
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.8.0' },
+    { name: 'partquill-image-studio', version: '0.9.0' },
     {
       instructions:
-        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. Always lead with the returned vehicle-fitment verdict: GREEN means Fits this vehicle, AMBER means Fitment not verified or May fit, and RED means Does not fit this vehicle. Without a VIN, fitment is always AMBER and potential application groups must never be called safe or confirmed. Never dump raw catalog option codes or hidden research rows. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. OEM-source quotes and MSRP are reference pricing, not eBay market value; never manufacture a recommended list price or quick-sale price without sold-market evidence, actual seller condition, shipping, fees and cost. Catalog condition does not prove the seller item condition. Never invent teeth count, dimensions, package contents, quantity or other specifications absent from the structured result. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
+        'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. When and only when that verifier returns RED, find_correct_oem_part may reuse the same buyer VIN to locate one exact VIN-filtered replacement in the same part family. This is buyer purchase assistance: it must never replace the seller item, change the seller listing, or write to eBay. A replacement is GREEN only when one unique VIN-filtered candidate is exact-matched; multiple, incomplete or conflicting candidates remain AMBER. Always lead with the returned vehicle-fitment verdict: GREEN means Fits this vehicle, AMBER means Fitment not verified or May fit, and RED means Does not fit this vehicle. Without a VIN, fitment is always AMBER and potential application groups must never be called safe or confirmed. Never dump raw catalog option codes or hidden research rows. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. OEM-source quotes and MSRP are reference pricing, not eBay market value; never manufacture a recommended list price or quick-sale price without sold-market evidence, actual seller condition, shipping, fees and cost. Catalog condition does not prove the seller item condition. Never invent teeth count, dimensions, package contents, quantity or other specifications absent from the structured result. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
     }
   );
 
@@ -442,6 +538,157 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
             text: `${verification.statusLabel}: ${verification.explanation} VIN ending ${verification.vinLastFour}. The full VIN was not returned or stored. No dealer identity or eBay write was exposed.`
           }
         ]
+      };
+    }
+  );
+
+  registerAppTool(
+    server,
+    'find_correct_oem_part',
+    {
+      title: 'Find the correct OEM part for this vehicle',
+      description:
+        'Buyer-only recovery after verify_oem_part_vin returns RED. Reuses the buyer-provided VIN once to search the same part family and returns GREEN only for one unique VIN-filtered exact part-number match. Multiple or incomplete candidates remain AMBER. Never changes the seller item or listing, never stores or echoes the full VIN, never exposes dealer identity, and never writes to eBay.',
+      inputSchema: {
+        rejected_part_number: z.string().min(5).max(40),
+        vin: z.string().regex(/^[A-HJ-NPR-Z0-9]{17}$/i)
+      },
+      outputSchema: {
+        rejectedPartNumber: z.string(),
+        partFamily: z.string(),
+        vinLastFour: z.string().length(4),
+        vehicle: z.object({
+          make: z.enum(['Toyota', 'Lexus', 'Scion']),
+          model: z.string(),
+          modelYear: z.number().int(),
+          engineModel: z.string().optional(),
+          displacementL: z.number().optional(),
+          cylinders: z.number().optional(),
+          trim: z.string().optional(),
+          series: z.string().optional()
+        }),
+        status: z.enum(['EXACT_MATCH', 'MULTIPLE_MATCHES', 'NO_EXACT_MATCH']),
+        statusLabel: z.enum(['Correct part found', 'Possible matching parts', 'Correct part not verified']),
+        verdictTone: z.enum(['GREEN', 'AMBER']),
+        explanation: z.string(),
+        matchBasis: z.enum(['VIN_FILTERED_PNC', 'VIN_FILTERED_EXACT_FAMILY', 'NO_UNIQUE_CANDIDATE']),
+        candidatePartNumbers: z.array(z.string()).max(5),
+        correctPart: z.object({
+          identity: z.object({
+            partNumber: z.string(),
+            description: z.string(),
+            alternateNames: z.array(z.string()),
+            manufacturerNotes: z.array(z.string()),
+            catalogCondition: z.string().optional(),
+            catalogFitmentType: z.string().optional(),
+            pncCodes: z.array(z.string()),
+            replacedBy: z.array(z.string()),
+            replaces: z.array(z.string())
+          }),
+          brandCoverage: z.object({
+            catalogBrands: z.array(z.enum(['Lexus', 'Toyota', 'Scion'])),
+            fitmentBrands: z.array(z.enum(['Lexus', 'Toyota', 'Scion'])),
+            crossoverStatus: z.enum(['SINGLE_BRAND', 'MULTI_BRAND'])
+          }),
+          pricingReference: z.object({
+            currency: z.literal('USD'),
+            observedQuoteCount: z.number().int(),
+            listPriceReference: z.number().optional(),
+            currentPriceLow: z.number().optional(),
+            currentPriceHigh: z.number().optional(),
+            evidenceType: z.literal('ANONYMOUS_OEM_SOURCE_REFERENCE'),
+            ebayMarketValueVerified: z.literal(false)
+          }),
+          fitmentVerdict: z.object({
+            status: z.literal('VIN_MATCHED_CORRECT_PART'),
+            tone: z.literal('GREEN'),
+            statusLabel: z.literal('Correct part for this vehicle'),
+            explanation: z.string(),
+            listingFitmentAllowed: z.literal(false)
+          }),
+          imagePresentation: z.object({
+            productPhotoAvailable: z.boolean(),
+            diagramAvailable: z.boolean(),
+            visualCard: z.literal('PARTQUILL_INLINE_CARD'),
+            transcriptAttachments: z.literal(false),
+            diagramCallouts: z.array(z.string()),
+            productPhotoUsage: z.literal('REFERENCE_ONLY_UNLESS_RIGHTS_CONFIRMED'),
+            catalogDiagramUsage: z.literal('INTERNAL_REFERENCE_ONLY'),
+            primaryEbayImageApproved: z.literal(false)
+          }),
+          applicationSummary: z.array(z.object({
+            make: z.enum(['Lexus', 'Toyota', 'Scion']),
+            model: z.string(),
+            yearRanges: z.array(z.string())
+          })),
+          applicationGroupTotal: z.number().int(),
+          fitmentRowCount: z.number().int(),
+          catalogChecks: z.object({
+            attempted: z.literal(3),
+            exactMatches: z.number().int(),
+            unavailable: z.number().int(),
+            retrievedAt: z.string()
+          }),
+          dealerIdentityExposed: z.literal(false),
+          vinConfirmationRequired: z.literal(true)
+        }).optional(),
+        buyerFitmentVerified: z.boolean(),
+        sellerListingChanged: z.literal(false),
+        eBayWritePerformed: z.literal(false),
+        vinStored: z.literal(false),
+        dealerIdentityExposed: z.literal(false)
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true, destructiveHint: false },
+      _meta: {
+        ui: { visibility: ['model', 'app'] },
+        'openai/toolInvocation/invoking': 'Finding the exact part for this VIN…',
+        'openai/toolInvocation/invoked': 'Correct-part search complete'
+      }
+    },
+    async ({ rejected_part_number: rejectedPartNumber, vin }) => {
+      const correction = await correctPartFinder(rejectedPartNumber, vin);
+      let correctPart;
+      let partquillMedia: PartQuillMedia[] = [];
+      if (correction.correctPart) {
+        const prepared = await prepareResearchMedia(correction.correctPart, imageLoader);
+        partquillMedia = prepared.partquillMedia;
+        correctPart = researchCardData(
+          correction.correctPart,
+          prepared.imagePresentation,
+          {
+            status: 'VIN_MATCHED_CORRECT_PART',
+            tone: 'GREEN',
+            statusLabel: 'Correct part for this vehicle',
+            explanation: `${correction.explanation} Buyer purchase assistance only; the seller listing was not changed.`,
+            listingFitmentAllowed: false
+          }
+        );
+      }
+      const structuredContent = {
+        rejectedPartNumber: correction.rejectedPartNumber,
+        partFamily: correction.partFamily,
+        vinLastFour: correction.vinLastFour,
+        vehicle: correction.vehicle,
+        status: correction.status,
+        statusLabel: correction.statusLabel,
+        verdictTone: correction.verdictTone,
+        explanation: correction.explanation,
+        matchBasis: correction.matchBasis,
+        candidatePartNumbers: correction.candidatePartNumbers,
+        ...(correctPart ? { correctPart } : {}),
+        buyerFitmentVerified: correction.buyerFitmentVerified,
+        sellerListingChanged: false as const,
+        eBayWritePerformed: false as const,
+        vinStored: false as const,
+        dealerIdentityExposed: false as const
+      };
+      const text = correction.status === 'EXACT_MATCH' && correction.correctPart
+        ? `GREEN — Correct part found. ${correction.rejectedPartNumber} does not fit the VIN ending ${correction.vinLastFour}; the unique VIN-filtered ${correction.partFamily} is ${correction.correctPart.identity.partNumber}. This is buyer purchase assistance only. The seller item and listing were not changed, the full VIN was not returned or stored, and nothing was written to eBay.`
+        : `AMBER — ${correction.statusLabel}. ${correction.explanation} VIN ending ${correction.vinLastFour}. The seller item and listing were not changed, the full VIN was not returned or stored, and nothing was written to eBay.`;
+      return {
+        structuredContent,
+        content: [{ type: 'text', text }],
+        _meta: { partquillMedia }
       };
     }
   );

@@ -31,6 +31,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - A file-return tool contract that can pair completed ChatGPT image outputs to the protected job without an eBay write. Host-level automatic return remains a live ChatGPT acceptance test, not a completed product claim.
 - A read-only Toyota/Lexus/Scion research tool for exact OEM part numbers. It merges three private reference paths into anonymous OEM-source price references, crossover brands, supersession, and normalized application evidence. The exact product reference photo and catalog diagram render inside a PartQuill inline card from widget-only media bytes, with diagram callout/PNC labels and fail-closed publishing-rights warnings. Dealer names, domains, URLs, phones, addresses and personnel are blocked from every public result.
 - A buyer-facing VIN cross-check in the same card. It decodes a 17-character Toyota/Lexus/Scion VIN, compares year/make/model/engine against the three-path catalog evidence, returns only the VIN's last four characters, stores no VIN and presents an explicit green Fits, amber May fit/not verified, or red Does not fit verdict. Only a specific engine-supported match permits a listing fitment claim.
+- Buyer-only red-mismatch recovery. After a confirmed Does not fit verdict, the card offers **Find the correct part** and reuses the in-memory VIN once to search the same part family. It requires one unique VIN-filtered candidate with the same diagram callout/PNC (or one exact normalized family match), then independently exact-matches that part across the anonymous research paths. Multiple, adjacent or incomplete candidates remain amber. The seller item, listing and eBay account are never changed.
 - A progressive-disclosure result card. Vehicle verdict, identity and reference media lead; potential applications are grouped by year/make/model; source counts and OEM-source prices remain collapsed seller research. Catalog condition never becomes seller-item condition, and OEM-source quotes are never represented as verified eBay market value.
 
 ## Safety model
@@ -86,7 +87,10 @@ OEM catalog reference evidence—not marketplace sales evidence. Raw trim, optio
 production-code strings are withheld from the public card. `verify_oem_part_vin` accepts
 the exact part plus a 17-character VIN, returns a masked green/amber/red decision, and
 fails closed on broad engine or production-break evidence. Results retain retrieval time
-and source counts but never source identity or URLs.
+and source counts but never source identity or URLs. If that result is red,
+`find_correct_oem_part` can perform a buyer-only search for the same component family.
+It returns green only for one unique VIN-filtered exact candidate; ambiguity stays amber,
+the full VIN is discarded after the call, and the seller listing remains untouched.
 
 All business endpoints require `Authorization: Bearer $PARTQUILL_API_KEY`.
 

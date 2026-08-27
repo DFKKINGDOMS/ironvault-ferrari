@@ -56,7 +56,7 @@ function numberValue(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function validateVin(value: string): string {
+export function validateToyotaVin(value: string): string {
   const vin = value.trim().toUpperCase();
   if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) {
     throw new Error('Enter a complete 17-character VIN. Letters I, O and Q are not valid VIN characters.');
@@ -112,7 +112,7 @@ function engineMatchStrength(vehicle: DecodedToyotaVin, row: LexusPartFitment): 
 }
 
 export async function decodeToyotaVin(vinInput: string, fetcher: typeof fetch = fetch): Promise<DecodedToyotaVin> {
-  const vin = validateVin(vinInput);
+  const vin = validateToyotaVin(vinInput);
   const url = new URL(`/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(vin)}`, VPIC_ORIGIN);
   url.searchParams.set('format', 'json');
   const response = await fetcher(url, {
@@ -152,7 +152,7 @@ export async function verifyOemPartVin(
   vinInput: string,
   options: VerifyVinPartOptions = {}
 ): Promise<VinPartVerification> {
-  const vin = validateVin(vinInput);
+  const vin = validateToyotaVin(vinInput);
   const [vehicle, research] = await Promise.all([
     decodeToyotaVin(vin, options.fetch),
     (options.research ?? researchOemPart)(partNumber)

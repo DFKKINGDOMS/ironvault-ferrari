@@ -1,4 +1,4 @@
-export const PARTQUILL_OEM_WIDGET_URI = 'ui://partquill/oem-part-finder-v2.html';
+export const PARTQUILL_OEM_WIDGET_URI = 'ui://partquill/oem-part-finder-v3.html';
 
 export function buildPartQuillOemWidgetHtml(): string {
   return `<!doctype html>
@@ -45,6 +45,15 @@ export function buildPartQuillOemWidgetHtml(): string {
     .verdict[data-tone=amber] .verdict-icon { background:var(--amber); }
     .verdict[data-tone=red] { border-color:#e4a49d; background:var(--red-bg); color:#7e211d; }
     .verdict[data-tone=red] .verdict-icon { background:var(--red); }
+    .correction { display:none; margin:-3px 0 14px; padding:14px 15px; border:1px solid #e4a49d; border-radius:14px; background:#fffaf8; }
+    .correction.visible { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; }
+    .correction strong,.correction span { display:block; }
+    .correction strong { font-size:15px; }
+    .correction span { margin-top:4px; color:#6f554f; font-size:12px; }
+    .correction button { background:#8c2822; }
+    .correction[data-mode=result] { border-color:#7fc7a1; background:var(--mint); }
+    .correction[data-mode=result] strong { color:#075c37; }
+    .correction[data-mode=result] button { display:none; }
     .facts { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:13px 0; }
     .fact { padding:10px; border:1px solid var(--line); border-radius:11px; background:#fbfdfb; }
     .fact b,.fact span { display:block; }
@@ -71,7 +80,7 @@ export function buildPartQuillOemWidgetHtml(): string {
     .research-details b { color:var(--muted); font-size:10px; text-transform:uppercase; }
     .research-details span { margin-top:3px; font-weight:750; }
     .guard { margin-top:12px; padding:11px 12px; border-left:4px solid #d69a2c; background:#fff8e8; color:#66512a; font-size:12px; }
-    @media (max-width:650px) { .lookup { grid-template-columns:1fr; } .facts,.research-details { grid-template-columns:1fr; } .media { grid-template-columns:1fr; } .fitment ul { grid-template-columns:1fr; } .headline { display:block; } .callout { display:inline-block; margin-top:8px; } }
+    @media (max-width:650px) { .lookup { grid-template-columns:1fr; } .facts,.research-details { grid-template-columns:1fr; } .media { grid-template-columns:1fr; } .fitment ul { grid-template-columns:1fr; } .headline { display:block; } .callout { display:inline-block; margin-top:8px; } .correction.visible { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -88,6 +97,7 @@ export function buildPartQuillOemWidgetHtml(): string {
       <section id="result" class="result">
         <div class="headline"><div><h1 id="title"></h1><div id="subtitle" class="sub"></div></div><div id="callout" class="callout"></div></div>
         <div id="fitment-verdict" class="verdict" data-tone="amber" role="status" aria-live="polite"><div id="verdict-icon" class="verdict-icon">!</div><div><strong id="verdict-title">Fitment not verified</strong><span id="verdict-detail">Enter the buyer VIN above for a vehicle-specific check.</span></div></div>
+        <section id="correction" class="correction" aria-live="polite"><div><strong id="correction-title">This part does not fit. Want the right one?</strong><span id="correction-detail">PartQuill can reuse this VIN once to find the exact part in the same family. The seller’s part and listing will not change.</span></div><button id="find-correct" type="button">Find the correct part</button></section>
         <div class="facts"><div class="fact"><b>Part number</b><span id="part-fact"></span></div><div class="fact"><b>Superseded by</b><span id="superseded"></span></div><div class="fact"><b>Diagram callout</b><span id="pnc"></span></div></div>
         <div class="media">
           <figure><div id="photo-frame" class="frame"><span class="image-empty">No product reference photo returned.</span></div><figcaption><b>Exact product reference photo</b>Research-only unless separate publishing rights are confirmed.</figcaption></figure>
@@ -106,7 +116,13 @@ export function buildPartQuillOemWidgetHtml(): string {
       var lookup = document.getElementById('lookup');
       var status = document.getElementById('status');
       var result = document.getElementById('result');
+      var correction = document.getElementById('correction');
+      var correctionTitle = document.getElementById('correction-title');
+      var correctionDetail = document.getElementById('correction-detail');
+      var findCorrect = document.getElementById('find-correct');
       var activeResearch = null;
+      var lastVerifiedVin = '';
+      var rejectedPartNumber = '';
 
       function setStatus(message, tone) { status.textContent = message; status.dataset.tone = tone || 'normal'; }
       function money(value) { return typeof value === 'number' ? '$' + value.toFixed(2) : 'not returned'; }
@@ -148,10 +164,33 @@ export function buildPartQuillOemWidgetHtml(): string {
           frame.appendChild(image);
         });
       }
-      function renderResearch(raw) {
+      function hideCorrection() {
+        correction.classList.remove('visible');
+        correction.dataset.mode = 'prompt';
+        findCorrect.disabled = false;
+      }
+      function partFamilyLabel() {
+        if (!activeResearch || !activeResearch.identity) return 'part';
+        var names = activeResearch.identity.alternateNames || [];
+        return names[0] || activeResearch.identity.description || 'part';
+      }
+      function showCorrectionPrompt(data) {
+        correction.classList.add('visible');
+        correction.dataset.mode = 'prompt';
+        rejectedPartNumber = data.partNumber || partInput.value.trim().toUpperCase();
+        var family = partFamilyLabel();
+        correctionTitle.textContent = 'This ' + family + ' does not fit. Want the right one?';
+        correctionDetail.textContent = lastVerifiedVin
+          ? 'PartQuill can reuse this VIN once to find the exact ' + family + '. The seller’s part and listing will not change.'
+          : 'Enter the VIN again above to run the correct-part search. The seller’s part and listing will not change.';
+        findCorrect.textContent = 'Find the correct ' + family;
+        findCorrect.disabled = !lastVerifiedVin;
+      }
+      function renderResearch(raw, preserveStatus, mediaMeta) {
         var data = structured(raw);
         if (!data.identity || !data.identity.partNumber) return false;
         activeResearch = data;
+        if (!preserveStatus) hideCorrection();
         partInput.value = data.identity.partNumber;
         document.getElementById('title').textContent = data.identity.partNumber + ' — ' + data.identity.description;
         document.getElementById('subtitle').textContent = data.identity.replacedBy && data.identity.replacedBy.length ? 'Superseded by ' + data.identity.replacedBy.join(', ') : 'Exact OEM catalog result';
@@ -176,9 +215,9 @@ export function buildPartQuillOemWidgetHtml(): string {
         });
         if (!applications.length) { var li = document.createElement('li'); li.textContent = 'No potential application groups returned.'; list.appendChild(li); }
         document.getElementById('fitment-more').textContent = applications.length > 6 ? '+' + (applications.length - 6) + ' more grouped applications. Use the VIN check instead of relying on this broad list.' : '';
-        renderMedia(resultMeta(raw));
+        renderMedia(mediaMeta || resultMeta(raw));
         result.classList.add('visible');
-        setStatus('Exact part number found. Vehicle fitment remains unverified until the VIN check is completed.', 'warn');
+        if (!preserveStatus) setStatus('Exact part number found. Vehicle fitment remains unverified until the VIN check is completed.', 'warn');
         return true;
       }
       function renderVin(raw) {
@@ -189,6 +228,32 @@ export function buildPartQuillOemWidgetHtml(): string {
         var detail = vehicle + '. ' + data.explanation + ' VIN ending ' + data.vinLastFour + '.';
         renderVerdict(data.verdictTone || (data.status === 'CATALOG_MATCH' ? 'GREEN' : data.status === 'CATALOG_NO_MATCH' ? 'RED' : 'AMBER'), data.statusLabel, detail);
         setStatus(data.statusLabel + ' — VIN ending ' + data.vinLastFour + '.', data.status === 'CATALOG_MATCH' ? 'good' : data.status === 'CATALOG_NO_MATCH' ? 'bad' : 'warn');
+        if (data.status === 'CATALOG_NO_MATCH') showCorrectionPrompt(data); else { hideCorrection(); lastVerifiedVin = ''; }
+        return true;
+      }
+      function renderCorrection(raw) {
+        var data = structured(raw);
+        if (!data.status || !data.rejectedPartNumber || !data.vinLastFour) return false;
+        if (data.status === 'EXACT_MATCH' && data.correctPart) {
+          renderResearch(data.correctPart, true, resultMeta(raw));
+          var vehicle = data.vehicle.modelYear + ' ' + data.vehicle.make + ' ' + data.vehicle.model;
+          renderVerdict('GREEN', 'Correct part for this vehicle', vehicle + '. ' + data.correctPart.identity.partNumber + ' is the unique VIN-filtered ' + data.partFamily + ' match. VIN ending ' + data.vinLastFour + '.');
+          correction.classList.add('visible');
+          correction.dataset.mode = 'result';
+          correctionTitle.textContent = 'Correct part found: ' + data.correctPart.identity.partNumber;
+          correctionDetail.textContent = 'The rejected part ' + data.rejectedPartNumber + ' was not substituted into the seller listing. This result is buyer purchase assistance only.';
+          setStatus('Correct part found for VIN ending ' + data.vinLastFour + '. Seller listing unchanged.', 'good');
+        } else {
+          correction.classList.add('visible');
+          correction.dataset.mode = 'result';
+          renderVerdict('AMBER', data.statusLabel || 'Correct part not verified', data.explanation + ' VIN ending ' + data.vinLastFour + '.');
+          correctionTitle.textContent = data.statusLabel || 'Correct part not verified';
+          correctionDetail.textContent = data.candidatePartNumbers && data.candidatePartNumbers.length
+            ? 'Possible part numbers: ' + data.candidatePartNumbers.join(', ') + '. PartQuill will not choose between them without stronger evidence.'
+            : 'No unique replacement was claimed. The seller’s part and listing remain unchanged.';
+          setStatus('No unique correct part was claimed. Seller listing unchanged.', 'warn');
+        }
+        lastVerifiedVin = '';
         return true;
       }
       async function verifyVinIfPresent() {
@@ -198,11 +263,30 @@ export function buildPartQuillOemWidgetHtml(): string {
         if (!window.openai || !window.openai.callTool) { setStatus('VIN checking requires the connected PartQuill app inside ChatGPT.', 'bad'); return; }
         setStatus('Decoding the VIN and cross-checking three anonymous OEM catalog paths…');
         try {
+          lastVerifiedVin = vin;
+          rejectedPartNumber = partInput.value.trim().toUpperCase();
           var checked = await window.openai.callTool('verify_oem_part_vin', { part_number:partInput.value.trim(), vin:vin });
           renderVin(checked);
           vinInput.value = '';
-        } catch (error) { renderVerdict('AMBER', 'May fit — not verified', 'VIN verification could not complete, so no compatibility claim was made.'); setStatus('VIN verification could not complete. No compatibility claim was made.', 'warn'); }
+        } catch (error) { lastVerifiedVin = ''; renderVerdict('AMBER', 'May fit — not verified', 'VIN verification could not complete, so no compatibility claim was made.'); setStatus('VIN verification could not complete. No compatibility claim was made.', 'warn'); }
       }
+      findCorrect.addEventListener('click', async function () {
+        if (!lastVerifiedVin || !rejectedPartNumber) { setStatus('Enter the buyer VIN again to run a fresh correct-part search.', 'warn'); return; }
+        if (!window.openai || !window.openai.callTool) { setStatus('Correct-part lookup requires the connected PartQuill app inside ChatGPT.', 'bad'); return; }
+        findCorrect.disabled = true;
+        setStatus('Searching this VIN for one exact ' + partFamilyLabel() + '…');
+        try {
+          var corrected = await window.openai.callTool('find_correct_oem_part', { rejected_part_number:rejectedPartNumber, vin:lastVerifiedVin });
+          if (!renderCorrection(corrected)) throw new Error('missing correct-part result');
+        } catch (error) {
+          lastVerifiedVin = '';
+          correction.dataset.mode = 'result';
+          correctionTitle.textContent = 'Correct part not verified';
+          correctionDetail.textContent = 'The vehicle-specific search could not establish one exact replacement, so PartQuill made no claim.';
+          renderVerdict('AMBER', 'Correct part not verified', 'The correct-part search could not complete. The seller listing was not changed.');
+          setStatus('Correct-part search could not complete. Nothing was changed.', 'warn');
+        }
+      });
       lookup.addEventListener('click', async function () {
         var part = partInput.value.trim().toUpperCase();
         if (!/^[A-Z0-9][A-Z0-9-]{3,38}[A-Z0-9]$/.test(part)) { setStatus('Enter an exact OEM part number using letters, numbers and hyphens.', 'bad'); return; }
@@ -218,10 +302,10 @@ export function buildPartQuillOemWidgetHtml(): string {
       vinInput.addEventListener('keydown', function (event) { if (event.key === 'Enter') lookup.click(); });
       partInput.addEventListener('keydown', function (event) { if (event.key === 'Enter') lookup.click(); });
       var initialOutput = window.openai && window.openai.toolOutput;
-      if (initialOutput) { renderResearch(initialOutput); renderVin(initialOutput); }
+      if (initialOutput) { renderResearch(initialOutput); renderVin(initialOutput); renderCorrection(initialOutput); }
       window.addEventListener('openai:set_globals', function () {
         var latest = window.openai && window.openai.toolOutput;
-        if (latest && latest !== activeResearch) { renderResearch(latest); renderVin(latest); }
+        if (latest) { renderResearch(latest); renderVin(latest); renderCorrection(latest); }
       });
     }());
   </script>

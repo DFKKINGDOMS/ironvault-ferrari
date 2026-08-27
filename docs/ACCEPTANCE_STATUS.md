@@ -40,6 +40,7 @@ Status legend: `implemented`, `tested`, `scaffolded`, `blocked-external`.
 | A34 Catalog image rendering | tested-contract | `research_oem_part` hydrates the inline PartQuill card with widget-only product-photo and diagram bytes, labels diagram callout/PNC, never claims transcript attachments, blocks dealer identity, and marks both reference-only with `primaryEbayImageApproved=false` |
 | A35 Buyer VIN cross-check | tested-contract | `verify_oem_part_vin` decodes a 17-character Toyota/Lexus/Scion VIN, intersects the decoded year/make/model/engine with three-path catalog evidence, returns only the last four characters, stores no VIN, and presents explicit green Fits, amber May fit/not verified, or red Does not fit verdicts while failing closed on broad or conflicting evidence |
 | A36 Fitment information hierarchy | tested-contract | Part-only research is always amber and VIN-required; raw option-code rows are replaced by grouped year/make/model applications, seller diagnostics are collapsed, and a catalog condition can never establish seller-item condition |
+| A37 Buyer correct-part recovery | tested-contract | A red VIN mismatch exposes a buyer-only Find the correct part action. It reuses the VIN once, isolates the original part family by diagram callout/PNC, requires one unique VIN-filtered candidate, independently exact-matches that candidate, returns only the VIN last four, and leaves multiple or adjacent parts amber. Dealer identity, the seller listing and all eBay writes remain blocked. |
 
 Production publishing remains disabled until every P0 gate is proven against one authorized seller and the exact current eBay environment.
 
@@ -47,7 +48,7 @@ Production publishing remains disabled until every P0 gate is proven against one
 
 - TypeScript build: pass.
 - ESLint: pass.
-- Automated tests cover configuration, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking and fitment decisions, multi-catalog research, approvals, HTTP and post-publish lifecycle.
+- Automated tests cover configuration, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking, red-mismatch correct-part recovery, ambiguity blocking, multi-catalog research, approvals, HTTP and post-publish lifecycle.
 - Live multi-catalog smoke tests: exact parts returned Toyota/Lexus/Scion crossover evidence, anonymous MSRP/current-price comparisons, proxied images, supersession and normalized fitment rows without source identity or contact data.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.
