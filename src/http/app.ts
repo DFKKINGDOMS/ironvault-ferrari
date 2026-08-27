@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -24,8 +24,9 @@ import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.
 import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
 import { resolveCatalogImage } from '../catalog/image-proxy.js';
-import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema } from '../seller/command-preview.js';
+import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema, parseListingCommand } from '../seller/command-preview.js';
 import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
+import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -62,6 +63,21 @@ const imageSchema = z.object({
   watermarkStatus: z.enum(['NONE', 'SELLER_OWNED', 'AUTHORIZED_SUPPLIER', 'SUSPECTED_THIRD_PARTY']),
   itemPixelsPreserved: z.boolean().optional()
 });
+
+const gmCatalogImportSchema = z.object({
+  records: z.array(z.object({
+    partNumber: z.string().regex(/^[A-Z0-9]+$/),
+    verificationState: z.string().min(1)
+  }).passthrough()).min(1).max(100),
+  complete: z.boolean().default(false)
+});
+
+function secureTokenMatches(provided: string | undefined, expected: string | undefined): boolean {
+  if (!provided || !expected) return false;
+  const actual = Buffer.from(provided);
+  const target = Buffer.from(expected);
+  return actual.length === target.length && timingSafeEqual(actual, target);
+}
 
 export interface AppDependencies {
   config: AppConfig;
@@ -131,6 +147,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     )) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
+    if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
@@ -188,17 +205,31 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const permit = sellerPreviewGuard.acquire(request.ip);
     try {
       const { command } = listingCommandRequestSchema.parse(request.body);
+      const intent = parseListingCommand(command);
+      const gmCatalog = intent.partNumber
+        ? await store.lookupGmCatalogPart?.(intent.partNumber)
+        : undefined;
       return reply
         .header('cache-control', 'no-store')
         .header('x-content-type-options', 'nosniff')
-        .send({ preview: buildSellerCommandPreview(command) });
+        .send({ preview: buildSellerCommandPreview(command, gmCatalog) });
     } finally {
       permit.release();
     }
   });
+  app.post('/internal/gm-catalog/import', { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
+    const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (!secureTokenMatches(supplied, config.GM_IMPORT_TOKEN) || !store.importGmCatalogRecords) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
+    }
+    const { records, complete } = gmCatalogImportSchema.parse(request.body);
+    await store.importGmCatalogRecords(records as unknown as GmCatalogPart[], complete);
+    return reply.header('cache-control', 'no-store').send({ imported: records.length, complete });
+  });
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
+      const gmCatalog = await store.getGmCatalogStatus?.();
       return {
         ready: true,
         ebay: { environment: config.EBAY_ENV, mode: config.EBAY_MODE, writesEnabled: config.ALLOW_EBAY_WRITES },
@@ -213,6 +244,13 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           version: '0.11.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
+        },
+        gmCatalog: gmCatalog ?? {
+          datasetId: null,
+          status: 'not_started',
+          importedParts: 0,
+          availableParts: 0,
+          lastPartNumber: null
         },
         oemResearch: {
           mode: config.OEM_RESEARCH_MODE,

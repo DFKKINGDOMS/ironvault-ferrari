@@ -81,6 +81,26 @@ describe('HTTP contract', () => {
     });
   });
 
+  it('keeps catalog ingestion hidden behind its dedicated temporary token', async () => {
+    const h = harness({ GM_IMPORT_TOKEN: 'test-gm-import-token-that-is-long-enough' });
+    app = await buildApp(h);
+    const record = { partNumber: '5459066', verificationState: 'CATALOG_STATED' };
+    expect((await app.inject({
+      method: 'POST',
+      url: '/internal/gm-catalog/import',
+      payload: { records: [record] }
+    })).statusCode).toBe(404);
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/internal/gm-catalog/import',
+      headers: { authorization: 'Bearer test-gm-import-token-that-is-long-enough' },
+      payload: { records: [record], complete: true }
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(await h.store.lookupGmCatalogPart('5459066')).toMatchObject(record);
+    expect(await h.store.getGmCatalogStatus()).toMatchObject({ status: 'completed', availableParts: 1 });
+  });
+
   it('creates a held draft and exposes an exception-first queue', async () => {
     const h = harness();
     app = await buildApp(h);

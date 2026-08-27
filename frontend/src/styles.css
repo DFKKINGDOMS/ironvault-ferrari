@@ -3038,6 +3038,59 @@ input:focus-visible {
   font-size: 7px;
 }
 
+.catalog-evidence-links {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+  padding: 8px;
+  background: #f4efe5;
+  border: 1px solid #cbbd9f;
+}
+
+.catalog-evidence-links > div:first-child,
+.catalog-evidence-links > a,
+.catalog-evidence-static {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.catalog-evidence-links > div:first-child {
+  justify-content: flex-start;
+  padding-bottom: 5px;
+  border-bottom: 1px solid #d9cfbb;
+}
+
+.catalog-evidence-links > a {
+  padding: 5px 0;
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid #e2d9c8;
+}
+
+.catalog-evidence-links > a:hover {
+  color: var(--orange-dark);
+}
+
+.catalog-evidence-links span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.catalog-evidence-links strong {
+  font-size: 8px;
+}
+
+.catalog-evidence-links small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .media-add-button {
   width: 100%;
   display: inline-flex;

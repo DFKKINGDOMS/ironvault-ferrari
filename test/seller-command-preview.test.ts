@@ -1,5 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
 import { buildSellerCommandPreview, parseListingCommand } from '../src/seller/command-preview.js';
+
+const gm5459066 = JSON.parse(
+  readFileSync(new URL('../data/gm-catalog-smoke-5459066.json', import.meta.url), 'utf8')
+) as GmCatalogPart;
 
 describe('one-command seller preview', () => {
   it('extracts the primary sample command without making an external request', () => {
@@ -36,6 +42,30 @@ describe('one-command seller preview', () => {
     expect(preview.fitment.totalApplications).toBe(0);
     expect(preview.gates.privatePreflight).toBe('HELD');
     expect(preview.issues).toContainEqual(expect.objectContaining({ code: 'CATALOG_LOOKUP_REQUIRED', blocking: true }));
+  });
+
+  it('fills catalog identity, model candidates and diagram references from PostgreSQL evidence', () => {
+    const preview = buildSellerCommandPreview('List part 5459066 for $9.99', gm5459066);
+    expect(preview.status).toBe('HELD');
+    expect(preview.identity).toMatchObject({
+      state: 'CATALOG_STATED',
+      brand: 'Oldsmobile',
+      manufacturerPartNumber: '5459066',
+      productType: 'Vacuum power-brake air cleaner/filter'
+    });
+    expect(preview.fitment.state).toBe('CATALOG_STATED');
+    expect(preview.fitment.applications).toHaveLength(3);
+    expect(preview.fitment.applications.map((row) => row.vehicle)).toEqual(expect.arrayContaining([
+      '1959 Oldsmobile Dynamic 88',
+      '1959 Oldsmobile Ninety-Eight',
+      '1959 Oldsmobile Super 88'
+    ]));
+    expect(preview.media.catalogReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'catalog-row', pageId: 2166, exactPartDepiction: true }),
+      expect.objectContaining({ kind: 'diagram', pageId: 2145, callout: 'FRONT ELEMENT' })
+    ]));
+    expect(preview.issues.map((issue) => issue.code)).toContain('CATALOG_EVIDENCE_REVIEW_REQUIRED');
+    expect(preview.issues.map((issue) => issue.code)).not.toContain('CATALOG_LOOKUP_REQUIRED');
   });
 
   it('routes an item without a part number to photo-first intake', () => {

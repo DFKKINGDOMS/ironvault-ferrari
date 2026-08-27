@@ -1,0 +1,98 @@
+export interface GmCatalogModel {
+  year: number | null;
+  division: string | null;
+  modelName: string;
+  seriesCode: string | null;
+  derivationMethod: string;
+  confidence: number;
+  verificationState: string;
+  sourcePageId: number;
+}
+
+export interface GmCatalogApplication {
+  claimId: number;
+  manufacturer: string;
+  division: string | null;
+  catalogTitle: string | null;
+  catalogGroup: string | null;
+  partName: string | null;
+  description: string | null;
+  groupHeading: string | null;
+  componentFamily: string | null;
+  supplier: string | null;
+  applicationText: string | null;
+  yearStart: number | null;
+  yearEnd: number | null;
+  modelScope: string | null;
+  equipmentQualifier: string | null;
+  exclusion: string | null;
+  position: string | null;
+  quantity: string | null;
+  sourcePageId: number;
+  sourceUrl: string | null;
+  imageRef: string | null;
+  imageBlobKey: string | null;
+  evidenceBox: Record<string, unknown> | null;
+  evidenceContext: string | null;
+  layoutLine: string | null;
+  crossReference: string | null;
+  relationMethod: string;
+  confidence: number;
+  verificationState: string;
+  modelExpansionState: string;
+  models: GmCatalogModel[];
+}
+
+export interface GmCatalogDiagram {
+  pageId: number;
+  catalogGroup: string | null;
+  calloutLabel: string | null;
+  title: string | null;
+  illustrationNumber: string | null;
+  yearStart: number | null;
+  yearEnd: number | null;
+  sourceUrl: string;
+  imageRef: string;
+  imageBlobKey: string;
+  displayRotationDegrees: number | null;
+  evidenceBox: Record<string, unknown> | null;
+  relationshipState: string;
+  linkMethod: string;
+  confidence: number;
+  supplierMatch: string;
+  yearRelationship: string;
+  exactPartDepiction: boolean;
+  isPrimary: boolean;
+  rationale: string;
+  verificationState: string;
+}
+
+export interface GmCatalogPart {
+  partNumber: string;
+  manufacturer: string;
+  divisions: string[];
+  productType: string | null;
+  description: string | null;
+  catalogGroup: string | null;
+  verificationState: string;
+  rollup: {
+    occurrenceCount: number;
+    pageCount: number;
+    catalogStatedOccurrences: number;
+    firstPageId: number;
+    lastPageId: number;
+    representativePageId: number | null;
+    representativeImageRef: string | null;
+    bestLayoutConfidence: number | null;
+  };
+  applications: GmCatalogApplication[];
+  diagrams: GmCatalogDiagram[];
+}
+
+export interface GmCatalogStatus {
+  datasetId: string | null;
+  status: 'not_started' | 'running' | 'completed' | 'failed';
+  importedParts: number;
+  availableParts: number;
+  lastPartNumber: string | null;
+}

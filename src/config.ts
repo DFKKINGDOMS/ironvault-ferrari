@@ -14,6 +14,7 @@ const schema = z
     TOKEN_ENCRYPTION_KEY: z.string().optional(),
     OAUTH_STATE_SECRET: z.string().min(24).default('development-only-oauth-state-change-me'),
     DATABASE_URL: z.string().optional(),
+    GM_IMPORT_TOKEN: z.string().min(32).optional(),
     PILOT_EPHEMERAL_MODE: booleanString,
     EBAY_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
     EBAY_MODE: z.enum(['mock', 'live']).default('mock'),

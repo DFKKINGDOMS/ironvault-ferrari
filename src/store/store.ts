@@ -8,6 +8,7 @@ import type {
   SellerAcknowledgement,
   StoredImage
 } from '../domain/types.js';
+import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 
 export interface Store {
   ping?(): Promise<void>;
@@ -37,4 +38,7 @@ export interface Store {
   consumeOAuthNonce(nonce: string, sellerId: string, at: string): Promise<boolean>;
   saveAcknowledgement(record: SellerAcknowledgement): Promise<void>;
   getAcknowledgement(sellerId: string, type: SellerAcknowledgement['type']): Promise<SellerAcknowledgement | undefined>;
+  lookupGmCatalogPart?(partNumber: string): Promise<GmCatalogPart | undefined>;
+  getGmCatalogStatus?(): Promise<GmCatalogStatus>;
+  importGmCatalogRecords?(records: GmCatalogPart[], complete?: boolean): Promise<void>;
 }

@@ -9,6 +9,7 @@ import type {
   StoredImage
 } from '../domain/types.js';
 import type { Store } from './store.js';
+import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -25,6 +26,29 @@ export class MemoryStore implements Store {
   private readonly publishSlots = new Map<string, { sellerId: string; status: 'RESERVED' | 'SUCCEEDED' }>();
   private readonly oauthNonces = new Map<string, { sellerId: string; expiresAt: string; consumedAt?: string }>();
   private readonly acknowledgements = new Map<string, SellerAcknowledgement>();
+  private readonly gmCatalog = new Map<string, GmCatalogPart>();
+  private gmCatalogComplete = false;
+
+  async importGmCatalogRecords(records: GmCatalogPart[], complete = false): Promise<void> {
+    for (const record of records) this.gmCatalog.set(record.partNumber, clone(record));
+    this.gmCatalogComplete = complete;
+  }
+
+  async lookupGmCatalogPart(partNumber: string): Promise<GmCatalogPart | undefined> {
+    const record = this.gmCatalog.get(partNumber.toUpperCase().replace(/[^A-Z0-9]/g, ''));
+    return record ? clone(record) : undefined;
+  }
+
+  async getGmCatalogStatus(): Promise<GmCatalogStatus> {
+    const partNumbers = [...this.gmCatalog.keys()].sort();
+    return {
+      datasetId: partNumbers.length ? 'gm-catalog-memory' : null,
+      status: this.gmCatalogComplete ? 'completed' : partNumbers.length ? 'running' : 'not_started',
+      importedParts: partNumbers.length,
+      availableParts: partNumbers.length,
+      lastPartNumber: partNumbers.at(-1) ?? null
+    };
+  }
 
   async createItem(item: ItemRecord): Promise<void> {
     if (this.items.has(item.id)) throw new Error('item already exists');

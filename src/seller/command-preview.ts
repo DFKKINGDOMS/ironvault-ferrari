@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 import type { AppConfig } from '../config.js';
 
 export const listingCommandRequestSchema = z.object({
@@ -54,7 +55,7 @@ export interface SellerCommandPreview {
     international: 'Held until origin is verified';
   };
   identity: {
-    state: 'ILLUSTRATIVE_NOT_EVIDENCE' | 'NOT_VERIFIED' | 'PHOTO_IDENTIFICATION_PENDING' | 'SAFETY_REVIEW_PENDING';
+    state: 'ILLUSTRATIVE_NOT_EVIDENCE' | 'CATALOG_STATED' | 'NOT_VERIFIED' | 'PHOTO_IDENTIFICATION_PENDING' | 'SAFETY_REVIEW_PENDING';
     brand: string | null;
     manufacturerPartNumber: string | null;
     productType: string | null;
@@ -62,11 +63,11 @@ export interface SellerCommandPreview {
     sourceDetail: string;
   };
   fitment: {
-    state: 'NOT_VERIFIED' | 'OMITTED_BY_SELLER';
+    state: 'CATALOG_STATED' | 'NOT_VERIFIED' | 'OMITTED_BY_SELLER';
     totalApplications: number;
     sourceLabel: string;
     sourceDetail: string;
-    applications: Array<{ vehicle: string; qualifier: string; state: 'NOT_VERIFIED' }>;
+    applications: Array<{ vehicle: string; qualifier: string; state: 'CATALOG_STATED' | 'CATALOG_DERIVED' | 'NOT_VERIFIED' }>;
   };
   media: {
     state: 'SELLER_PHOTO_REQUIRED' | 'LABEL_AND_PHOTOS_REQUIRED';
@@ -75,6 +76,17 @@ export interface SellerCommandPreview {
     minimumPhotos: number;
     requiredViews: Array<{ id: string; label: string; detail: string; required: boolean }>;
     analysisState: 'NOT_UPLOADED';
+    catalogReferences: Array<{
+      kind: 'catalog-row' | 'diagram';
+      pageId: number;
+      label: string;
+      sourceUrl: string | null;
+      imageRef: string | null;
+      imageBlobKey: string | null;
+      callout: string | null;
+      confidence: number | null;
+      exactPartDepiction: boolean;
+    }>;
   };
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
@@ -240,11 +252,89 @@ function buildDescription(intent: ListingCommandIntent, productType: string | nu
   return `${identity}, part ${number}. Quantity ${intent.quantity}. Condition is set to ${intent.condition} and must be confirmed against the physical item. Unsupported fitment, origin, contents and media claims remain excluded until evidence is attached.`;
 }
 
-export function buildSellerCommandPreview(command: string): SellerCommandPreview {
+function catalogYears(catalog: GmCatalogPart): string | null {
+  const years = catalog.applications.flatMap((application) => {
+    if (application.yearStart == null) return [];
+    return [application.yearEnd && application.yearEnd !== application.yearStart
+      ? `${application.yearStart}–${application.yearEnd}`
+      : String(application.yearStart)];
+  });
+  return [...new Set(years)].slice(0, 3).join(', ') || null;
+}
+
+function catalogFitmentApplications(catalog: GmCatalogPart): SellerCommandPreview['fitment']['applications'] {
+  const rows: SellerCommandPreview['fitment']['applications'] = [];
+  const seen = new Set<string>();
+  for (const application of catalog.applications) {
+    const yearText = application.yearStart == null
+      ? application.applicationText ?? 'Year not decoded'
+      : application.yearEnd && application.yearEnd !== application.yearStart
+        ? `${application.yearStart}–${application.yearEnd}`
+        : String(application.yearStart);
+    const qualifier = [
+      application.description,
+      application.supplier ? `${application.supplier} system` : null,
+      application.equipmentQualifier,
+      application.exclusion ? `Excludes ${application.exclusion}` : null,
+      `Catalog page ${application.sourcePageId}`
+    ].filter(Boolean).join(' · ');
+    if (application.models.length) {
+      for (const model of application.models) {
+        const vehicle = [model.year ?? yearText, model.division ?? application.division, model.modelName]
+          .filter(Boolean)
+          .join(' ');
+        const key = `${vehicle}|${qualifier}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          rows.push({ vehicle, qualifier, state: 'CATALOG_DERIVED' });
+        }
+      }
+    } else {
+      const vehicle = [yearText, application.division ?? catalog.divisions.join('/'), application.modelScope ?? 'catalog application']
+        .filter(Boolean)
+        .join(' ');
+      const key = `${vehicle}|${qualifier}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        rows.push({ vehicle, qualifier, state: 'CATALOG_STATED' });
+      }
+    }
+  }
+  return rows;
+}
+
+function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media']['catalogReferences'] {
+  const rowReferences = catalog.applications.map((application) => ({
+    kind: 'catalog-row' as const,
+    pageId: application.sourcePageId,
+    label: `${application.catalogTitle ?? 'GM catalog'} · Group ${application.catalogGroup ?? 'not decoded'}`,
+    sourceUrl: application.sourceUrl,
+    imageRef: application.imageRef,
+    imageBlobKey: application.imageBlobKey,
+    callout: null,
+    confidence: application.confidence,
+    exactPartDepiction: true
+  }));
+  const diagramReferences = catalog.diagrams.map((diagram) => ({
+    kind: 'diagram' as const,
+    pageId: diagram.pageId,
+    label: diagram.title ?? `GM illustration · Group ${diagram.catalogGroup ?? 'not decoded'}`,
+    sourceUrl: diagram.sourceUrl,
+    imageRef: diagram.imageRef,
+    imageBlobKey: diagram.imageBlobKey,
+    callout: diagram.calloutLabel,
+    confidence: diagram.confidence,
+    exactPartDepiction: diagram.exactPartDepiction
+  }));
+  return [...rowReferences, ...diagramReferences];
+}
+
+export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalogPart): SellerCommandPreview {
   const intent = parseListingCommand(command);
   const isSafetyReview = intent.route === 'SAFETY_REVIEW';
   const isPhotoFirst = intent.route === 'PHOTO_FIRST';
   const isIllustrativeFixture = intent.partNumber === '58487514' && !isSafetyReview;
+  const catalogMatch = !isSafetyReview && !isPhotoFirst && !isIllustrativeFixture ? gmCatalog : undefined;
   const omittedFitment = intent.fitmentMode === 'DO_NOT_PUBLISH';
   const status: CommandPreviewStatus = isSafetyReview
     ? 'SAFETY_REVIEW_REQUIRED'
@@ -262,7 +352,16 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
         sourceLabel: 'Illustrative catalog-adapter fixture',
         sourceDetail: 'Shows the approved filled state. It is not live catalog evidence and cannot authorize an eBay claim.'
       }
-    : isSafetyReview
+    : catalogMatch
+      ? {
+          state: 'CATALOG_STATED' as const,
+          brand: catalogMatch.divisions.length === 1 ? catalogMatch.divisions[0] ?? catalogMatch.manufacturer : catalogMatch.manufacturer,
+          manufacturerPartNumber: catalogMatch.partNumber,
+          productType: catalogMatch.productType,
+          sourceLabel: `GM catalog scan · page ${catalogMatch.rollup.representativePageId ?? catalogMatch.rollup.firstPageId}`,
+          sourceDetail: `${catalogMatch.description ?? 'Catalog identity'} is stated in GM group ${catalogMatch.catalogGroup ?? 'not decoded'}. Evidence is preserved separately from seller condition and marketplace compatibility.`
+        }
+      : isSafetyReview
       ? {
           state: 'SAFETY_REVIEW_PENDING' as const,
           brand: null,
@@ -291,14 +390,20 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
   const title = titleGuard(
     isIllustrativeFixture
       ? `ACDelco ${intent.partNumber} Cabin Air Filter OE Replacement ${intent.condition}`
+      : catalogMatch
+        ? `${identity.brand ?? catalogMatch.manufacturer} ${catalogMatch.partNumber} ${catalogMatch.description ?? catalogMatch.productType ?? 'GM Part'}${catalogYears(catalogMatch) ? ` ${catalogYears(catalogMatch)}` : ''}`
       : isSafetyReview
         ? `${intent.itemDescription ?? 'Possible airbag or restraint item'} — Safety review required`
         : isPhotoFirst
           ? `${intent.itemDescription ?? 'Unidentified automotive item'} — Photos required`
           : `Part ${intent.partNumber} — catalog identity required`
   );
-  const fitmentApplications = !omittedFitment && isIllustrativeFixture
-    ? [
+  const fitmentApplications: SellerCommandPreview['fitment']['applications'] = omittedFitment
+    ? []
+    : catalogMatch
+      ? catalogFitmentApplications(catalogMatch)
+      : isIllustrativeFixture
+      ? [
         { vehicle: '2018–2020 Chevrolet Equinox', qualifier: '1.5L Turbo · illustrative row', state: 'NOT_VERIFIED' as const },
         { vehicle: '2018–2020 GMC Terrain', qualifier: '1.5L Turbo · illustrative row', state: 'NOT_VERIFIED' as const }
       ]
@@ -320,6 +425,12 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
     issues.push({
       code: 'PHOTO_IDENTIFICATION_REQUIRED',
       message: 'No part number was supplied. Continue with seller-owned item photos instead.',
+      blocking: true
+    });
+  } else if (catalogMatch) {
+    issues.push({
+      code: 'CATALOG_EVIDENCE_REVIEW_REQUIRED',
+      message: 'GM scan evidence was found. Review the catalog-stated application and derived model expansion before publishing compatibility.',
       blocking: true
     });
   } else if (!isIllustrativeFixture) {
@@ -347,6 +458,13 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
 
   const aspects: Record<string, string> = isIllustrativeFixture
     ? { Brand: 'ACDelco', 'Manufacturer Part Number': intent.partNumber ?? '', Type: 'Cabin Air Filter' }
+    : catalogMatch
+      ? {
+          Brand: identity.brand ?? catalogMatch.manufacturer,
+          'Manufacturer Part Number': catalogMatch.partNumber,
+          ...(catalogMatch.productType ? { Type: catalogMatch.productType } : {}),
+          ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {})
+        }
     : intent.partNumber
       ? { 'Manufacturer Part Number': intent.partNumber }
       : {};
@@ -361,7 +479,9 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
       titleLength: title.length,
       format: 'Buy It Now · GTC' as const,
       sku: intent.partNumber ? `PQ-${intent.partNumber}` : null,
-      description: buildDescription(intent, identity.productType),
+      description: catalogMatch
+        ? `${catalogMatch.description ?? catalogMatch.productType ?? 'General Motors part'}, part ${catalogMatch.partNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
+        : buildDescription(intent, identity.productType),
       category: isIllustrativeFixture ? 'Air & Fuel Delivery › Filters' : null,
       aspects,
       handlingTime: '1 business day' as const,
@@ -370,10 +490,12 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
     },
     identity,
     fitment: {
-      state: omittedFitment ? 'OMITTED_BY_SELLER' as const : 'NOT_VERIFIED' as const,
-      totalApplications: fitmentApplications.length ? 12 : 0,
+      state: omittedFitment ? 'OMITTED_BY_SELLER' as const : catalogMatch ? 'CATALOG_STATED' as const : 'NOT_VERIFIED' as const,
+      totalApplications: catalogMatch ? fitmentApplications.length : fitmentApplications.length ? 12 : 0,
       sourceLabel: omittedFitment
         ? 'Seller instruction: do not publish fitment'
+        : catalogMatch
+          ? `GM catalog evidence · ${catalogMatch.applications.length} application claim${catalogMatch.applications.length === 1 ? '' : 's'}`
         : isSafetyReview
           ? 'Compatibility blocked during safety review'
           : isPhotoFirst
@@ -381,6 +503,8 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
             : 'Fitment not verified',
       sourceDetail: omittedFitment
         ? 'Compatibility rows are excluded from the public payload.'
+        : catalogMatch
+          ? `${catalogMatch.applications.length} catalog-stated application claim${catalogMatch.applications.length === 1 ? '' : 's'} produced ${fitmentApplications.length} model-level row${fitmentApplications.length === 1 ? '' : 's'}. Model expansion remains catalog-derived and must stay visibly attributed.`
         : isSafetyReview
           ? 'Typed year, make and model words are not fitment evidence. No compatibility can publish during the restricted-item hold.'
           : isPhotoFirst
@@ -401,7 +525,9 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
         ? 'PartQuill will not identify or assemble this restricted item from the typed description alone.'
         : isPhotoFirst
           ? 'The photos become the primary item evidence; typed year, make and model words remain unverified seller hints.'
-          : 'Licensed catalog media may assist presentation later, but a placeholder can never enter a listing payload.',
+          : catalogMatch
+            ? `${catalogMatch.diagrams.length} related diagram reference${catalogMatch.diagrams.length === 1 ? '' : 's'} and ${catalogMatch.applications.length} catalog row reference${catalogMatch.applications.length === 1 ? '' : 's'} are attached. They are evidence, not seller-item photographs.`
+            : 'Licensed catalog media may assist presentation later, but a placeholder can never enter a listing payload.',
       minimumPhotos: isSafetyReview ? 4 : isPhotoFirst ? 3 : 1,
       requiredViews: isSafetyReview
         ? [
@@ -420,7 +546,8 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
               { id: 'whole-item', label: 'Actual item', detail: 'Show the exact physical item that will ship.', required: true },
               { id: 'label', label: 'Part-number label', detail: 'Recommended when a readable label exists.', required: false }
             ],
-      analysisState: 'NOT_UPLOADED' as const
+      analysisState: 'NOT_UPLOADED' as const,
+      catalogReferences: catalogMatch ? catalogReferences(catalogMatch) : []
     },
     confirmations: [
       {

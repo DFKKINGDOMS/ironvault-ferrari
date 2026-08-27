@@ -37,7 +37,7 @@ type SellerPreview = {
     international: string;
   };
   identity: {
-    state: "ILLUSTRATIVE_NOT_EVIDENCE" | "NOT_VERIFIED" | "PHOTO_IDENTIFICATION_PENDING" | "SAFETY_REVIEW_PENDING";
+    state: "ILLUSTRATIVE_NOT_EVIDENCE" | "CATALOG_STATED" | "NOT_VERIFIED" | "PHOTO_IDENTIFICATION_PENDING" | "SAFETY_REVIEW_PENDING";
     brand: string | null;
     manufacturerPartNumber: string | null;
     productType: string | null;
@@ -45,11 +45,11 @@ type SellerPreview = {
     sourceDetail: string;
   };
   fitment: {
-    state: "NOT_VERIFIED" | "OMITTED_BY_SELLER";
+    state: "CATALOG_STATED" | "NOT_VERIFIED" | "OMITTED_BY_SELLER";
     totalApplications: number;
     sourceLabel: string;
     sourceDetail: string;
-    applications: Array<{ vehicle: string; qualifier: string; state: "NOT_VERIFIED" }>;
+    applications: Array<{ vehicle: string; qualifier: string; state: "CATALOG_STATED" | "CATALOG_DERIVED" | "NOT_VERIFIED" }>;
   };
   media: {
     state: "SELLER_PHOTO_REQUIRED" | "LABEL_AND_PHOTOS_REQUIRED";
@@ -58,6 +58,17 @@ type SellerPreview = {
     minimumPhotos: number;
     requiredViews: Array<{ id: string; label: string; detail: string; required: boolean }>;
     analysisState: "NOT_UPLOADED";
+    catalogReferences: Array<{
+      kind: "catalog-row" | "diagram";
+      pageId: number;
+      label: string;
+      sourceUrl: string | null;
+      imageRef: string | null;
+      imageBlobKey: string | null;
+      callout: string | null;
+      confidence: number | null;
+      exactPartDepiction: boolean;
+    }>;
   };
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
@@ -353,6 +364,7 @@ export default function Home() {
   const instantPhotoFirst = instantPreview?.status === "PHOTO_REQUIRED";
   const instantSafety = instantPreview?.status === "SAFETY_REVIEW_REQUIRED";
   const instantCatalogRoute = instantPreview?.intent.route === "CATALOG_ASSISTED";
+  const instantCatalogMatch = instantPreview?.identity.state === "CATALOG_STATED";
   const instantHeld = Boolean(instantPreview && !instantSample);
   const instantReady = Boolean(
     instantPartConfirmed
@@ -370,6 +382,8 @@ export default function Home() {
       ? instantPhotos.length
         ? "Photos staged — review not connected yet"
         : "Waiting for item photos"
+      : instantCatalogMatch
+        ? "Catalog evidence found — review required"
       : instantHeld
         ? "Held — catalog match required"
         : instantDirty
@@ -379,6 +393,8 @@ export default function Home() {
     ? "Potential airbag or restraint terminology triggered eBay eligibility, donor-VIN, recall and hazmat checks."
     : instantPhotoFirst
       ? "A part number is optional. Add actual-item photos; PartQuill will keep identity and fitment blank until they can be supported."
+      : instantCatalogMatch
+        ? "The GM scan supplied identity, applications and diagram references. Seller-item photos and catalog-derived model rows still require review."
       : instantHeld
         ? "The command was understood, but unsupported identity, fitment and media claims remain blocked."
         : "Seller defaults are filled; the physical item still needs confirmation.";
@@ -402,8 +418,8 @@ export default function Home() {
         ] as const
       : [
           ["01", "Understand", "Part + price extracted", true],
-          ["02", "Resolve", instantHeld ? "Identity held" : "Identity state returned", !instantHeld],
-          ["03", "Map", instantHeld ? "Awaiting category" : "Category + aspects", !instantHeld],
+          ["02", "Resolve", instantCatalogMatch ? "GM identity found" : instantHeld ? "Identity held" : "Identity state returned", instantCatalogMatch || !instantHeld],
+          ["03", "Map", instantCatalogMatch ? "Applications + diagrams" : instantHeld ? "Awaiting category" : "Category + aspects", instantCatalogMatch || !instantHeld],
           ["04", "Protect", "Fitment + policy", true],
           ["05", "Assemble", "Media + description", !instantHeld],
           ["06", "Review", "Exceptions visible", true]
@@ -469,7 +485,7 @@ export default function Home() {
           </div>
 
           {!instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your prefilled review will appear here.</h2><p>Run the command above to see the complete approval experience.</p></div> : <>
-            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
+            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
 
             <div className="instant-draft-grid">
               <div className="instant-draft-main">
@@ -479,6 +495,7 @@ export default function Home() {
                     <div className="instant-thumbs">{(instantPreview?.media.requiredViews ?? [ { id: "hero", label: "Hero", detail: "Whole item", required: true }, { id: "label", label: "Label", detail: "Readable markings", required: false } ]).slice(0, 4).map((view) => <button key={view.id} onClick={() => showNotice(`${view.label}: ${view.detail}`)}><Icon name={view.id.includes("label") || view.id.includes("oem") ? "search" : "camera"}/><span>{view.label}</span></button>)}</div>
                     {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo) => <figure key={`${photo.name}-${photo.url.length}`}><img src={photo.url} alt="Seller-selected local preview"/><figcaption>{photo.name}</figcaption></figure>)}</div>}
                     <div className="media-source"><Icon name="alert"/><span><strong>{instantPreview?.media.sourceLabel ?? "Seller-owned item photo required"}</strong><small>No grey placeholder can enter the eBay payload.</small></span></div>
+                    {(instantPreview?.media.catalogReferences.length ?? 0) > 0 && <div className="catalog-evidence-links"><div><Icon name="search"/><span><strong>Catalog scan evidence</strong><small>{instantPreview?.media.catalogReferences.length} row and diagram references attached</small></span></div>{instantPreview?.media.catalogReferences.slice(0, 8).map((reference) => reference.sourceUrl ? <a href={reference.sourceUrl} target="_blank" rel="noreferrer" key={`${reference.kind}-${reference.pageId}-${reference.callout ?? "row"}`}><span><strong>{reference.kind === "diagram" ? `Diagram page ${reference.pageId}` : `Catalog row page ${reference.pageId}`}</strong><small>{reference.callout ? `Callout: ${reference.callout}` : reference.label}</small></span><Badge tone="amber">{reference.exactPartDepiction ? "Direct row" : "Related diagram"}</Badge></a> : <div className="catalog-evidence-static" key={`${reference.kind}-${reference.pageId}-${reference.callout ?? "row"}`}><span><strong>{reference.kind === "diagram" ? `Diagram page ${reference.pageId}` : `Catalog row page ${reference.pageId}`}</strong><small>{reference.callout ?? reference.label}</small></span></div>)}</div>}
                     <label className="media-add-button"><Icon name="camera"/> {instantSafety ? "Add label + item photos" : instantPhotoFirst ? "Add item photos to continue" : "Add seller-owned item photo"}<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => stageInstantPhotos(event.target.files)}/></label>
                     <p className="local-photo-note"><Icon name="shield"/> Private pilot: selected images stay in this browser preview. Photo analysis and durable upload are not connected yet.</p>
                   </div>
@@ -489,7 +506,7 @@ export default function Home() {
                       <article><span>Fitment source</span><strong><i className="amber"/>{instantPreview?.fitment.sourceLabel}</strong><small>{instantPreview?.fitment.sourceDetail}</small></article>
                       <article><span>Seller facts</span><strong><i className={instantReady ? "green" : instantSafety ? "red" : "amber"}/>{instantReady ? "Complete" : instantSafety ? "Policy evidence missing" : instantPhotoFirst ? `${instantPreview?.media.minimumPhotos ?? 3} photos + condition` : "2 confirms left"}</strong><small>Physical item only</small></article>
                     </div>
-                    <div className="copy-heading"><div><span>{instantSample ? "BUYER-FACING LISTING DEMO" : "WORKING DRAFT · NOT PUBLISHABLE"}</span><Badge tone="orange">TitleGuard · {instantTitle.length}/80</Badge></div><label><span>{instantSample ? "Illustrative catalog/title-guarded title" : instantSafety ? "Safety-held working title" : instantPhotoFirst ? "Seller-described working title" : "Catalog-held title"}</span><input value={instantTitle} readOnly/><small>{instantSample ? "This filled state demonstrates the approved UI. It is not live catalog evidence." : instantSafety ? "This title cannot enter a marketplace payload during the restricted-item hold." : instantPhotoFirst ? "PartQuill preserves what the seller said but does not treat it as verified identity or fitment." : "Brand, part type and category are intentionally absent until a unique authorized match exists."}</small></label></div>
+                    <div className="copy-heading"><div><span>{instantSample ? "BUYER-FACING LISTING DEMO" : "WORKING DRAFT · NOT PUBLISHABLE"}</span><Badge tone="orange">TitleGuard · {instantTitle.length}/80</Badge></div><label><span>{instantSample ? "Illustrative catalog/title-guarded title" : instantSafety ? "Safety-held working title" : instantPhotoFirst ? "Seller-described working title" : instantCatalogMatch ? "GM catalog-supported working title" : "Catalog-held title"}</span><input value={instantTitle} readOnly/><small>{instantSample ? "This filled state demonstrates the approved UI. It is not live catalog evidence." : instantSafety ? "This title cannot enter a marketplace payload during the restricted-item hold." : instantPhotoFirst ? "PartQuill preserves what the seller said but does not treat it as verified identity or fitment." : instantCatalogMatch ? "Identity and application text come from the scanned GM catalog; seller condition and marketplace fitment remain separately controlled." : "Brand, part type and category are intentionally absent until a unique authorized match exists."}</small></label></div>
                     {!instantCatalogRoute ? <div className={`instant-fitment-strip held ${instantSafety ? "safety" : ""}`}>
                       <div><span><i className={instantSafety ? "red" : "amber"}/><strong>{instantSafety ? "Compatibility blocked during safety review" : "Fitment is blank by design"}</strong></span><Badge tone={instantSafety ? "red" : "amber"}>No public claims</Badge></div>
                       <p>{instantPreview?.fitment.sourceDetail}</p>
@@ -497,9 +514,9 @@ export default function Home() {
                       <div><span><i className="amber"/><strong>Fitment will not be published</strong></span><Badge tone="amber">Seller instruction</Badge></div>
                       <p>The command said “no fitment,” so compatibility rows are removed from the public payload.</p>
                     </div> : <div className="instant-fitment-strip held">
-                      <div><span><i className="amber"/><strong>Fitment · {instantPreview?.fitment.totalApplications ?? 0} unverified applications</strong></span><Badge tone="amber">Not publishable</Badge></div>
+                      <div><span><i className="amber"/><strong>Fitment · {instantPreview?.fitment.totalApplications ?? 0} {instantCatalogMatch ? "catalog-derived" : "unverified"} applications</strong></span><Badge tone="amber">Review required</Badge></div>
                       <p>{instantPreview?.fitment.sourceDetail}</p>
-                      {instantPreview?.fitment.applications.map((application) => <div className="fitment-sample-row" key={application.vehicle}><span><strong>{application.vehicle}</strong><small>{application.qualifier}</small></span><Badge tone="amber">Not verified</Badge></div>)}
+                      {instantPreview?.fitment.applications.map((application) => <div className="fitment-sample-row" key={`${application.vehicle}-${application.qualifier}`}><span><strong>{application.vehicle}</strong><small>{application.qualifier}</small></span><Badge tone="amber">{application.state === "CATALOG_DERIVED" ? "Catalog derived" : application.state === "CATALOG_STATED" ? "Catalog stated" : "Not verified"}</Badge></div>)}
                       <button onClick={() => openDraft("fitment")}>Inspect compatibility evidence <Icon name="arrow"/></button>
                     </div>}
                     <div className="instant-key-fields">
@@ -508,12 +525,12 @@ export default function Home() {
                       <label><span>Condition</span><input value={instantCondition} readOnly/><Badge tone="amber">{instantCondition === "Not specified" ? "Selection required" : "Confirm actual item"}</Badge></label>
                       <label><span>Custom SKU</span><input value={instantPreview?.listing.sku ?? "Pending identity"} readOnly/><Badge tone={instantHeld ? "amber" : "green"}>{instantHeld ? "Reservation only" : "Generated"}</Badge></label>
                     </div>
-                    <div className="catalog-prefill"><div><span>{instantPreview?.identity.sourceLabel}</span><Badge tone={instantSample ? "amber" : instantSafety ? "red" : "orange"}>{instantSample ? "Illustrative fixture" : instantSafety ? "Safety hold" : instantPhotoFirst ? "Photo intake" : "Held"}</Badge></div><dl><div><dt>Brand</dt><dd>{instantPreview?.identity.brand ?? "Not verified"}</dd></div><div><dt>MPN / OE number</dt><dd>{instantPreview?.identity.manufacturerPartNumber ?? (instantPhotoFirst ? "Optional — add if found" : "Required for review")}</dd></div><div><dt>Product type</dt><dd>{instantPreview?.identity.productType ?? "Not verified"}</dd></div><div><dt>Supersessions</dt><dd>Included only when verified</dd></div><div><dt>eBay category</dt><dd>{instantPreview?.listing.category ?? (instantSafety ? "Blocked during policy review" : instantPhotoFirst ? "After photo identification" : "Held until identity resolves")}</dd></div><div><dt>Required aspects</dt><dd>{Object.keys(instantPreview?.listing.aspects ?? {}).length ? `${Object.keys(instantPreview?.listing.aspects ?? {}).length} currently supported` : "After category is verified"}</dd></div></dl></div>
+                    <div className="catalog-prefill"><div><span>{instantPreview?.identity.sourceLabel}</span><Badge tone={instantSample ? "amber" : instantSafety ? "red" : "orange"}>{instantSample ? "Illustrative fixture" : instantSafety ? "Safety hold" : instantPhotoFirst ? "Photo intake" : instantCatalogMatch ? "Catalog stated" : "Held"}</Badge></div><dl><div><dt>Brand</dt><dd>{instantPreview?.identity.brand ?? "Not verified"}</dd></div><div><dt>MPN / OE number</dt><dd>{instantPreview?.identity.manufacturerPartNumber ?? (instantPhotoFirst ? "Optional — add if found" : "Required for review")}</dd></div><div><dt>Product type</dt><dd>{instantPreview?.identity.productType ?? "Not verified"}</dd></div><div><dt>Supersessions</dt><dd>Included only when verified</dd></div><div><dt>eBay category</dt><dd>{instantPreview?.listing.category ?? (instantSafety ? "Blocked during policy review" : instantPhotoFirst ? "After photo identification" : instantCatalogMatch ? "Awaiting eBay category mapping" : "Held until identity resolves")}</dd></div><div><dt>Required aspects</dt><dd>{Object.keys(instantPreview?.listing.aspects ?? {}).length ? `${Object.keys(instantPreview?.listing.aspects ?? {}).length} currently supported` : "After category is verified"}</dd></div></dl></div>
                   </div>
                 </div>
 
                 {instantCatalogRoute ? <div className="instant-fitment-card">
-                  <div className="fitment-prefill-title"><div><span className="traffic-light amber"/><span><strong>Full compatibility inspector</strong><small>Green requires a direct verified source. Amber stays held. Red is excluded.</small></span></div><Badge tone="amber">{instantPreview?.fitment.totalApplications ?? 0} unverified rows</Badge></div>
+                  <div className="fitment-prefill-title"><div><span className="traffic-light amber"/><span><strong>Full compatibility inspector</strong><small>Catalog-stated and catalog-derived rows remain visibly attributed until publication review.</small></span></div><Badge tone="amber">{instantPreview?.fitment.totalApplications ?? 0} {instantCatalogMatch ? "catalog rows" : "unverified rows"}</Badge></div>
                   <div className="fitment-preview-table"><div><span>Scope</span><span>Rows</span><span>Source</span><span>Publish rule</span><span>State</span></div><div><strong>Vehicle compatibility</strong><span>{instantPreview?.fitment.totalApplications ?? 0}</span><span>{instantPreview?.fitment.sourceLabel}</span><span>{instantPreview?.fitment.state === "OMITTED_BY_SELLER" ? "Exclude every row" : "Hold until verified"}</span><Badge tone="amber">Not verified</Badge></div></div>
                   <div className="fitment-states"><span><i className="green"/>Green: proven fit</span><span><i className="amber"/>Amber: may fit / not verified</span><span><i className="red"/>Red: does not fit</span><button onClick={() => openDraft("fitment")}>Open compatibility inspector <Icon name="arrow"/></button></div>
                   <div className="vin-sandbox"><Icon name="shield"/><div><strong>{instantPreview?.recovery.label}</strong><p>Buyer-only recovery after a red mismatch. The seller listing is never silently changed.</p></div><input aria-label="Buyer VIN for correct-part recovery" placeholder="17-character VIN"/><button onClick={() => showNotice(instantPreview?.recovery.privacyNote ?? "A VIN lookup was not run.")}>Find correct part</button></div>
@@ -531,7 +548,7 @@ export default function Home() {
                 <div className={`instant-score ${instantSafety ? "safety" : instantPhotoFirst ? "photo-first" : ""}`}><div><span>Listing status</span><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo facts complete" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photo intake" : "Action required"}</Badge></div><strong>{instantReady ? "Ready for simulated preflight" : instantStatusHeading}</strong><p>{instantReady ? "Next: private preflight binds the exact demo payload before final approval." : instantStatusCopy}</p></div>
                 <div className="autofill-summary"><span>Automatically prefilled</span>{[ ["Price", instantPrice ? `$${instantPrice}` : "Required", instantPrice ? "green" : "amber"], ["Quantity", instantQuantity, "green"], ["Condition", instantCondition, instantCondition === "Not specified" ? "amber" : "green"], ["Listing format", instantPreview?.listing.format ?? "Buy It Now · GTC", "green"], ["Shipping", instantShipping, instantSafety ? "amber" : "green"], ["Handling", instantPreview?.listing.handlingTime ?? "1 business day", "green"], ["Returns", instantPreview?.listing.returns ?? "30 days · buyer-paid", "green"], ["Media", instantPhotos.length ? `${instantPhotos.length} staged locally` : `${instantPreview?.media.minimumPhotos ?? 1} required`, "amber"], ["International", instantSafety ? "Disabled for airbag route" : "Held until origin", "amber"] ].map(([label,value,tone]) => <div key={label}><Icon name={tone === "green" ? "check" : "alert"}/><span><strong>{label}</strong><small>{value}</small></span></div>)}</div>
                 <div className="smallest-confirmations"><span>{instantSafety ? "Seller confirmations do not replace policy evidence" : instantPhotoFirst ? "Confirm the physical item after adding photos" : "Only confirm what the catalog cannot know"}</span><label className={instantPartConfirmed ? "confirmed" : ""}><input type="checkbox" checked={instantPartConfirmed} onChange={(event) => setInstantPartConfirmed(event.target.checked)}/><span><strong>{instantPreview?.confirmations[0]?.label ?? "This is the exact part I have in hand"}</strong><small>{instantPreview?.confirmations[0]?.detail}</small></span></label><label className={instantConditionConfirmed ? "confirmed" : ""}><input type="checkbox" disabled={instantCondition === "Not specified"} checked={instantConditionConfirmed} onChange={(event) => setInstantConditionConfirmed(event.target.checked)}/><span><strong>{instantPreview?.confirmations[1]?.label ?? `Condition = ${instantCondition}`}</strong><small>{instantPreview?.confirmations[1]?.detail} Open the full editor to change it.</small></span></label></div>
-                <div className={`instant-submit-state ${instantReady ? "ready" : "held"}`}><Icon name={instantReady ? "check" : "alert"}/><span><strong>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Submit disabled — restricted-item review incomplete" : instantPhotoFirst ? "Submit disabled — photos and identification incomplete" : instantHeld ? "Held — unique catalog identity required" : instantDirty ? "Payload changed — rebuild the command" : "Held — two seller facts remain"}</strong><small>{instantReady ? "Gate 1 validates this exact fingerprint; Gate 2 is separate. Actual eBay writes remain disabled." : "Nothing has been sent to eBay."}</small></span></div>
+                <div className={`instant-submit-state ${instantReady ? "ready" : "held"}`}><Icon name={instantReady ? "check" : "alert"}/><span><strong>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Submit disabled — restricted-item review incomplete" : instantPhotoFirst ? "Submit disabled — photos and identification incomplete" : instantCatalogMatch ? "Held — review catalog fitment and add seller photo" : instantHeld ? "Held — unique catalog identity required" : instantDirty ? "Payload changed — rebuild the command" : "Held — two seller facts remain"}</strong><small>{instantReady ? "Gate 1 validates this exact fingerprint; Gate 2 is separate. Actual eBay writes remain disabled." : "Nothing has been sent to eBay."}</small></span></div>
                 <button className="primary full" disabled={!instantReady} onClick={() => navigate("review")}>Review simulated private preflight <Icon name="arrow"/></button>
                 <button className="text-button center" onClick={() => instantPhotoFirst || instantSafety ? showNotice("The photo-first editor is being connected progressively; no unsupported listing was created.") : openDraft("listing")}>{instantPhotoFirst || instantSafety ? "Continue after evidence review" : "Open the full editor"}</button>
                 <p className="prototype-note"><Icon name="shield"/> Backend connected. Catalog and eBay writes remain fail-closed; the final handoff opens ebay.com without transmitting this payload.</p>
