@@ -1,4 +1,4 @@
-export const PARTQUILL_OEM_WIDGET_URI = 'ui://partquill/oem-part-finder-v3.html';
+export const PARTQUILL_OEM_WIDGET_URI = 'ui://partquill/oem-part-finder-v4.html';
 
 export function buildPartQuillOemWidgetHtml(): string {
   return `<!doctype html>
@@ -45,6 +45,18 @@ export function buildPartQuillOemWidgetHtml(): string {
     .verdict[data-tone=amber] .verdict-icon { background:var(--amber); }
     .verdict[data-tone=red] { border-color:#e4a49d; background:var(--red-bg); color:#7e211d; }
     .verdict[data-tone=red] .verdict-icon { background:var(--red); }
+    .legend { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:0 0 13px; }
+    .legend-item { padding:8px 9px; border:1px solid var(--line); border-radius:9px; font-size:11px; font-weight:800; }
+    .legend-item b { display:block; font-size:12px; }
+    .legend-green { color:#075c37; background:var(--mint); border-color:#9ed5b5; }
+    .legend-amber { color:#6d4900; background:var(--amber-bg); border-color:#e4bf67; }
+    .legend-red { color:#7e211d; background:var(--red-bg); border-color:#e4a49d; }
+    .vin-table { display:none; margin:0 0 13px; overflow:hidden; border:1px solid var(--line); border-radius:11px; }
+    .vin-table.visible { display:block; }
+    .vin-table table { width:100%; border-collapse:collapse; font-size:12px; }
+    .vin-table caption { padding:9px 11px; color:var(--ink); background:#f5f8f6; font-weight:850; text-align:left; }
+    .vin-table th,.vin-table td { padding:7px 10px; border-top:1px solid #edf2ef; text-align:left; vertical-align:top; }
+    .vin-table th { width:28%; color:var(--muted); font-weight:750; }
     .correction { display:none; margin:-3px 0 14px; padding:14px 15px; border:1px solid #e4a49d; border-radius:14px; background:#fffaf8; }
     .correction.visible { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; }
     .correction strong,.correction span { display:block; }
@@ -97,6 +109,8 @@ export function buildPartQuillOemWidgetHtml(): string {
       <section id="result" class="result">
         <div class="headline"><div><h1 id="title"></h1><div id="subtitle" class="sub"></div></div><div id="callout" class="callout"></div></div>
         <div id="fitment-verdict" class="verdict" data-tone="amber" role="status" aria-live="polite"><div id="verdict-icon" class="verdict-icon">!</div><div><strong id="verdict-title">Fitment not verified</strong><span id="verdict-detail">Enter the buyer VIN above for a vehicle-specific check.</span></div></div>
+        <div class="legend" aria-label="Fitment status guide"><div class="legend-item legend-green"><b>🟢 GREEN</b>Fits this vehicle</div><div class="legend-item legend-amber"><b>🟠 AMBER</b>May fit / not verified</div><div class="legend-item legend-red"><b>🔴 RED</b>Does not fit</div></div>
+        <div id="vin-table" class="vin-table"><table><caption>VIN fitment check</caption><tbody><tr><th>Vehicle</th><td id="vin-vehicle"></td></tr><tr><th>Part checked</th><td id="vin-part"></td></tr><tr><th>Result</th><td id="vin-result"></td></tr><tr><th>Why</th><td id="vin-why"></td></tr></tbody></table></div>
         <section id="correction" class="correction" aria-live="polite"><div><strong id="correction-title">This part does not fit. Want the right one?</strong><span id="correction-detail">PartQuill can reuse this VIN once to find the exact part in the same family. The seller’s part and listing will not change.</span></div><button id="find-correct" type="button">Find the correct part</button></section>
         <div class="facts"><div class="fact"><b>Part number</b><span id="part-fact"></span></div><div class="fact"><b>Superseded by</b><span id="superseded"></span></div><div class="fact"><b>Diagram callout</b><span id="pnc"></span></div></div>
         <div class="media">
@@ -120,6 +134,7 @@ export function buildPartQuillOemWidgetHtml(): string {
       var correctionTitle = document.getElementById('correction-title');
       var correctionDetail = document.getElementById('correction-detail');
       var findCorrect = document.getElementById('find-correct');
+      var vinTable = document.getElementById('vin-table');
       var activeResearch = null;
       var lastVerifiedVin = '';
       var rejectedPartNumber = '';
@@ -190,7 +205,7 @@ export function buildPartQuillOemWidgetHtml(): string {
         var data = structured(raw);
         if (!data.identity || !data.identity.partNumber) return false;
         activeResearch = data;
-        if (!preserveStatus) hideCorrection();
+        if (!preserveStatus) { hideCorrection(); vinTable.classList.remove('visible'); }
         partInput.value = data.identity.partNumber;
         document.getElementById('title').textContent = data.identity.partNumber + ' — ' + data.identity.description;
         document.getElementById('subtitle').textContent = data.identity.replacedBy && data.identity.replacedBy.length ? 'Superseded by ' + data.identity.replacedBy.join(', ') : 'Exact OEM catalog result';
@@ -227,6 +242,11 @@ export function buildPartQuillOemWidgetHtml(): string {
         var vehicle = data.vehicle.modelYear + ' ' + data.vehicle.make + ' ' + data.vehicle.model + ', ' + engine;
         var detail = vehicle + '. ' + data.explanation + ' VIN ending ' + data.vinLastFour + '.';
         renderVerdict(data.verdictTone || (data.status === 'CATALOG_MATCH' ? 'GREEN' : data.status === 'CATALOG_NO_MATCH' ? 'RED' : 'AMBER'), data.statusLabel, detail);
+        document.getElementById('vin-vehicle').textContent = vehicle;
+        document.getElementById('vin-part').textContent = data.partNumber || partInput.value.trim().toUpperCase();
+        document.getElementById('vin-result').textContent = data.statusLabel;
+        document.getElementById('vin-why').textContent = data.explanation;
+        vinTable.classList.add('visible');
         setStatus(data.statusLabel + ' — VIN ending ' + data.vinLastFour + '.', data.status === 'CATALOG_MATCH' ? 'good' : data.status === 'CATALOG_NO_MATCH' ? 'bad' : 'warn');
         if (data.status === 'CATALOG_NO_MATCH') showCorrectionPrompt(data); else { hideCorrection(); lastVerifiedVin = ''; }
         return true;
@@ -238,6 +258,11 @@ export function buildPartQuillOemWidgetHtml(): string {
           renderResearch(data.correctPart, true, resultMeta(raw));
           var vehicle = data.vehicle.modelYear + ' ' + data.vehicle.make + ' ' + data.vehicle.model;
           renderVerdict('GREEN', 'Correct part for this vehicle', vehicle + '. ' + data.correctPart.identity.partNumber + ' is the unique VIN-filtered ' + data.partFamily + ' match. VIN ending ' + data.vinLastFour + '.');
+          document.getElementById('vin-vehicle').textContent = vehicle;
+          document.getElementById('vin-part').textContent = data.rejectedPartNumber + ' → ' + data.correctPart.identity.partNumber;
+          document.getElementById('vin-result').textContent = 'Correct part found';
+          document.getElementById('vin-why').textContent = data.explanation;
+          vinTable.classList.add('visible');
           correction.classList.add('visible');
           correction.dataset.mode = 'result';
           correctionTitle.textContent = 'Correct part found: ' + data.correctPart.identity.partNumber;
@@ -247,6 +272,11 @@ export function buildPartQuillOemWidgetHtml(): string {
           correction.classList.add('visible');
           correction.dataset.mode = 'result';
           renderVerdict('AMBER', data.statusLabel || 'Correct part not verified', data.explanation + ' VIN ending ' + data.vinLastFour + '.');
+          document.getElementById('vin-vehicle').textContent = data.vehicle.modelYear + ' ' + data.vehicle.make + ' ' + data.vehicle.model;
+          document.getElementById('vin-part').textContent = data.rejectedPartNumber;
+          document.getElementById('vin-result').textContent = data.statusLabel || 'Correct part not verified';
+          document.getElementById('vin-why').textContent = data.explanation;
+          vinTable.classList.add('visible');
           correctionTitle.textContent = data.statusLabel || 'Correct part not verified';
           correctionDetail.textContent = data.candidatePartNumbers && data.candidatePartNumbers.length
             ? 'Possible part numbers: ' + data.candidatePartNumbers.join(', ') + '. PartQuill will not choose between them without stronger evidence.'

@@ -151,8 +151,8 @@ describe('PartQuill connected ChatGPT contract', () => {
     const verify = tools.tools.find((tool) => tool.name === 'verify_oem_part_vin');
     const prepare = tools.tools.find((tool) => tool.name === 'prepare_protected_image_job');
     const returned = tools.tools.find((tool) => tool.name === 'return_edited_images');
-    expect(research?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v3.html' });
-    expect(verify?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v3.html' });
+    expect(research?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v4.html' });
+    expect(verify?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v4.html' });
     expect(prepare?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(returned?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(prepare?._meta?.ui).toBeUndefined();
@@ -277,9 +277,9 @@ describe('PartQuill connected ChatGPT contract', () => {
   it('serves the inline OEM widget with product, diagram and VIN controls', async () => {
     const resources = await client.listResources();
     expect(resources.resources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ uri: 'ui://partquill/oem-part-finder-v3.html' })
+      expect.objectContaining({ uri: 'ui://partquill/oem-part-finder-v4.html' })
     ]));
-    const resource = await client.readResource({ uri: 'ui://partquill/oem-part-finder-v3.html' });
+    const resource = await client.readResource({ uri: 'ui://partquill/oem-part-finder-v4.html' });
     const firstContent = resource.contents[0];
     const html = firstContent && 'text' in firstContent ? firstContent.text : '';
     expect(firstContent?._meta?.ui).toMatchObject({
@@ -299,6 +299,8 @@ describe('PartQuill connected ChatGPT contract', () => {
     expect(html).toContain('Find the correct part');
     expect(html).toContain('find_correct_oem_part');
     expect(html).toContain('seller’s part and listing will not change');
+    expect(html).toContain('Fitment status guide');
+    expect(html).toContain('VIN fitment check');
     expect(html).not.toMatch(/lexuspartsnow|toyotapartsdeal|longotoyota|revolutionparts/i);
   });
 
