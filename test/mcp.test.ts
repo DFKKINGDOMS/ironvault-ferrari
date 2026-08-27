@@ -215,6 +215,10 @@ describe('PartQuill connected ChatGPT contract', () => {
     const resource = await client.readResource({ uri: 'ui://partquill/oem-part-finder-v2.html' });
     const firstContent = resource.contents[0];
     const html = firstContent && 'text' in firstContent ? firstContent.text : '';
+    expect(firstContent?._meta?.ui).toMatchObject({
+      prefersBorder: true,
+      csp: { connectDomains: [], resourceDomains: [] }
+    });
     expect(html).toContain('PartQuill OEM Part Finder');
     expect(html).toContain('Buyer VIN (optional)');
     expect(html).toContain('Exact product reference photo');

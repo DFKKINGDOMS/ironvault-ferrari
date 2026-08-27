@@ -134,7 +134,15 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
           uri: PARTQUILL_OEM_WIDGET_URI,
           mimeType: RESOURCE_MIME_TYPE,
           text: buildPartQuillOemWidgetHtml(),
-          _meta: { ui: { prefersBorder: true } }
+          _meta: {
+            ui: {
+              prefersBorder: true,
+              csp: {
+                connectDomains: [],
+                resourceDomains: []
+              }
+            }
+          }
         }
       ]
     })
