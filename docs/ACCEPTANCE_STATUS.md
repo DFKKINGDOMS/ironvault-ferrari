@@ -46,6 +46,8 @@ Status legend: `implemented`, `tested`, `scaffolded`, `blocked-external`.
 | A40 Unknown-part claim hold | tested | Unverified parts receive no fabricated brand, part type, category, fitment or licensed-media claim; private preflight remains held |
 | A41 Seller review surface | tested-contract | Identity source, fitment source, green/amber/red legend, seller-photo requirement and explicit physical-item/condition confirmations are visible before preflight |
 | A42 Safe eBay handoff | tested-contract | Public writes remain disabled; the final approved button opens only eBay's public home page without transmitting the listing payload |
+| A43 No-MPN photo-first intake | tested-contract | Plain descriptions route to three seller-owned photo views; part number is optional and identity, category and fitment remain blank pending evidence |
+| A44 Restricted restraint route | tested | Airbag, SRS, inflator and pretensioner terms trigger a policy hold requiring item label, donor VIN, seller eligibility, recall/deployment and hazmat evidence |
 
 Production publishing remains disabled until every P0 gate is proven against one authorized seller and the exact current eBay environment.
 
@@ -53,7 +55,7 @@ Production publishing remains disabled until every P0 gate is proven against one
 
 - TypeScript build: pass.
 - ESLint: pass.
-- 75 automated tests cover configuration, request limits, seller-command parsing, unknown-part holds, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking, red-mismatch correct-part recovery, ambiguity blocking, catalog-adapter contracts, approvals, HTTP and post-publish lifecycle.
+- Automated tests cover configuration, request limits, seller-command parsing, catalog holds, photo-first routing, restricted-restraint gating, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking, red-mismatch correct-part recovery, ambiguity blocking, catalog-adapter contracts, approvals, HTTP and post-publish lifecycle.
 - Production OEM research requests remain disabled while data-rights confirmation is false; test fixtures prove the output contract without treating those fixtures as licensed production evidence.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
 - Render Blueprint: valid YAML and fail-closed environment defaults.

@@ -19,14 +19,18 @@ const quantityWords: Readonly<Record<string, number>> = {
   ten: 10
 };
 
-export type CommandPreviewStatus = 'ILLUSTRATIVE_SAMPLE' | 'HELD';
+export type ListingCommandRoute = 'CATALOG_ASSISTED' | 'PHOTO_FIRST' | 'SAFETY_REVIEW';
+export type CommandPreviewStatus = 'ILLUSTRATIVE_SAMPLE' | 'HELD' | 'PHOTO_REQUIRED' | 'SAFETY_REVIEW_REQUIRED';
 
 export interface ListingCommandIntent {
   partNumber: string | null;
+  itemDescription: string | null;
+  route: ListingCommandRoute;
+  safetyClass: 'STANDARD' | 'RESTRAINT_SYSTEM';
   price: string | null;
   quantity: number;
-  condition: 'New' | 'Used' | 'Remanufactured';
-  conditionSource: 'COMMAND' | 'SELLER_DEFAULT_REQUIRES_CONFIRMATION';
+  condition: 'New' | 'Used' | 'Remanufactured' | 'Not specified';
+  conditionSource: 'COMMAND' | 'SELLER_DEFAULT_REQUIRES_CONFIRMATION' | 'REQUIRES_SELLER_SELECTION';
   shipping: 'Seller default' | 'Free domestic shipping' | 'Calculated shipping' | 'Local pickup only';
   fitmentMode: 'CATALOG_CONTROLLED' | 'DO_NOT_PUBLISH';
   channel: 'eBay';
@@ -50,7 +54,7 @@ export interface SellerCommandPreview {
     international: 'Held until origin is verified';
   };
   identity: {
-    state: 'ILLUSTRATIVE_NOT_EVIDENCE' | 'NOT_VERIFIED';
+    state: 'ILLUSTRATIVE_NOT_EVIDENCE' | 'NOT_VERIFIED' | 'PHOTO_IDENTIFICATION_PENDING' | 'SAFETY_REVIEW_PENDING';
     brand: string | null;
     manufacturerPartNumber: string | null;
     productType: string | null;
@@ -65,17 +69,26 @@ export interface SellerCommandPreview {
     applications: Array<{ vehicle: string; qualifier: string; state: 'NOT_VERIFIED' }>;
   };
   media: {
-    state: 'SELLER_PHOTO_REQUIRED';
+    state: 'SELLER_PHOTO_REQUIRED' | 'LABEL_AND_PHOTOS_REQUIRED';
     sourceLabel: string;
     sourceDetail: string;
+    minimumPhotos: number;
+    requiredViews: Array<{ id: string; label: string; detail: string; required: boolean }>;
+    analysisState: 'NOT_UPLOADED';
   };
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
   recovery: {
     label: 'Find the correct part for a vehicle';
-    enabled: true;
+    enabled: boolean;
     requires: ['17-character VIN', 'part type'];
     privacyNote: string;
+  };
+  policy: {
+    state: 'STANDARD_REVIEW' | 'RESTRICTED_ITEM_HOLD';
+    label: string;
+    sourceUrl: string | null;
+    requirements: string[];
   };
   gates: {
     privatePreflight: 'SIMULATION_AVAILABLE' | 'HELD';
@@ -112,6 +125,55 @@ function findPartNumber(command: string): string | null {
   return candidate?.toUpperCase() ?? null;
 }
 
+const restraintPattern = /\b(?:air\s*bag|airbag|srs|inflator|pretensioner|supplemental\s+restraint)\b/i;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function titleCaseSellerText(value: string): string {
+  return value
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => /^\d{2,4}$/.test(word) || /^(?:OEM|OE|SRS|ABS)$/i.test(word)
+      ? word.toUpperCase()
+      : `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(' ');
+}
+
+function findItemDescription(command: string, partNumber: string | null): string | null {
+  let value = command
+    .replace(/\b(?:and\s+)?i\s+(?:want|would\s+like)\s+to\s+(?:list|sell|draft)\s+(?:it|this)(?:\s+now)?\b/gi, ' ')
+    .replace(/\b(?:list|sell|draft)\s+(?:it|this)\b/gi, ' ')
+    .replace(/\$\s*\d+(?:\.\d{1,2})?/g, ' ')
+    .replace(/\b(?:for|at|price(?:d)?(?:\s+at)?)\s+\d+(?:\.\d{1,2})?\b/gi, ' ')
+    .replace(/\b(?:local\s+pickup\s+only|free\s+(?:domestic\s+)?shipping|calculated\s+shipping|no\s+fitment|without\s+fitment)\b/gi, ' ')
+    .replace(/\b(?:on\s+)?ebay\b/gi, ' ')
+    .replace(/\b(?:now|please)\b/gi, ' ')
+    .replace(/^\s*(?:list|sell|draft|create\s+(?:an?\s+)?listing\s+for)\s+/i, '')
+    .replace(/^\s*(?:an?|the)\s+/i, '')
+    .replace(/^\s*i\s+have\s+(?:an?|the)?\s*/i, '')
+    .replace(/^\s*(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+/i, '')
+    .replace(/\b(?:it\s+is|it's|its)\s+(black|white|gray|grey|red|blue|green|tan|beige|brown|silver)\b/gi, '$1')
+    .replace(/\b(?:new|used|remanufactured|reman)\b/gi, ' ');
+
+  if (partNumber) {
+    value = value
+      .replace(new RegExp(`\\b${escapeRegExp(partNumber)}\\b`, 'gi'), ' ')
+      .replace(/\b(?:part|mpn|oem)(?:\s+(?:number|no))?\s*[:#-]?\b/gi, ' ');
+  }
+
+  value = value
+    .replace(/\b(?:qty|quantity)\s*[:=]?\s*\d+\b/gi, ' ')
+    .replace(/\s+(?:and|for|at)\s*$/i, '')
+    .replace(/[^a-z0-9&/+'-]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!value || /^(?:part|item)$/i.test(value)) return null;
+  return titleCaseSellerText(value).slice(0, 72).trim();
+}
+
 export function parseListingCommand(command: string): ListingCommandIntent {
   const normalized = command.toLowerCase();
   const explicitPrice = command.match(/\$\s*(\d+(?:\.\d{1,2})?)/)?.[1]
@@ -133,12 +195,27 @@ export function parseListingCommand(command: string): ListingCommandIntent {
         ? 'Calculated shipping' as const
         : 'Seller default' as const;
 
+  const partNumber = findPartNumber(command);
+  const safetyClass = restraintPattern.test(command) ? 'RESTRAINT_SYSTEM' as const : 'STANDARD' as const;
+  const route: ListingCommandRoute = safetyClass === 'RESTRAINT_SYSTEM'
+    ? 'SAFETY_REVIEW'
+    : partNumber
+      ? 'CATALOG_ASSISTED'
+      : 'PHOTO_FIRST';
+
   return {
-    partNumber: findPartNumber(command),
+    partNumber,
+    itemDescription: findItemDescription(command, partNumber),
+    route,
+    safetyClass,
     price: normalizePrice(explicitPrice),
     quantity: quantityFrom(quantityValue),
-    condition: explicitCondition ?? 'New',
-    conditionSource: explicitCondition ? 'COMMAND' : 'SELLER_DEFAULT_REQUIRES_CONFIRMATION',
+    condition: explicitCondition ?? (route === 'CATALOG_ASSISTED' ? 'New' : 'Not specified'),
+    conditionSource: explicitCondition
+      ? 'COMMAND'
+      : route === 'CATALOG_ASSISTED'
+        ? 'SELLER_DEFAULT_REQUIRES_CONFIRMATION'
+        : 'REQUIRES_SELLER_SELECTION',
     shipping,
     fitmentMode: /\bno\s+fitment\b|\bwithout\s+fitment\b/.test(normalized) ? 'DO_NOT_PUBLISH' : 'CATALOG_CONTROLLED',
     channel: 'eBay'
@@ -152,6 +229,12 @@ function titleGuard(value: string): string {
 }
 
 function buildDescription(intent: ListingCommandIntent, productType: string | null): string {
+  if (intent.route === 'SAFETY_REVIEW') {
+    return `Seller described this item as “${intent.itemDescription ?? 'a possible restraint-system component'}.” It remains blocked from listing assembly until restricted-item eligibility, a readable OEM label, donor-vehicle VIN, recall status, deployment status and compliant hazmat shipping are verified.`;
+  }
+  if (intent.route === 'PHOTO_FIRST') {
+    return `Seller described this item as “${intent.itemDescription ?? 'an unidentified automotive item'}.” Add seller-owned photos of the whole item, reverse or connectors, and every readable label or marking. Brand, part number, category and vehicle compatibility remain blank until supported.`;
+  }
   const identity = productType ?? 'Automotive replacement part';
   const number = intent.partNumber ?? 'not yet identified';
   return `${identity}, part ${number}. Quantity ${intent.quantity}. Condition is set to ${intent.condition} and must be confirmed against the physical item. Unsupported fitment, origin, contents and media claims remain excluded until evidence is attached.`;
@@ -159,9 +242,17 @@ function buildDescription(intent: ListingCommandIntent, productType: string | nu
 
 export function buildSellerCommandPreview(command: string): SellerCommandPreview {
   const intent = parseListingCommand(command);
-  const isIllustrativeFixture = intent.partNumber === '58487514';
+  const isSafetyReview = intent.route === 'SAFETY_REVIEW';
+  const isPhotoFirst = intent.route === 'PHOTO_FIRST';
+  const isIllustrativeFixture = intent.partNumber === '58487514' && !isSafetyReview;
   const omittedFitment = intent.fitmentMode === 'DO_NOT_PUBLISH';
-  const status: CommandPreviewStatus = isIllustrativeFixture ? 'ILLUSTRATIVE_SAMPLE' : 'HELD';
+  const status: CommandPreviewStatus = isSafetyReview
+    ? 'SAFETY_REVIEW_REQUIRED'
+    : isPhotoFirst
+      ? 'PHOTO_REQUIRED'
+      : isIllustrativeFixture
+        ? 'ILLUSTRATIVE_SAMPLE'
+        : 'HELD';
   const identity = isIllustrativeFixture
     ? {
         state: 'ILLUSTRATIVE_NOT_EVIDENCE' as const,
@@ -171,18 +262,40 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
         sourceLabel: 'Illustrative catalog-adapter fixture',
         sourceDetail: 'Shows the approved filled state. It is not live catalog evidence and cannot authorize an eBay claim.'
       }
-    : {
+    : isSafetyReview
+      ? {
+          state: 'SAFETY_REVIEW_PENDING' as const,
+          brand: null,
+          manufacturerPartNumber: intent.partNumber,
+          productType: null,
+          sourceLabel: 'Restricted restraint item · evidence required',
+          sourceDetail: 'No identity, category or compatibility claim can publish until PartQuill verifies the item label and every eBay airbag eligibility requirement.'
+        }
+      : isPhotoFirst
+        ? {
+            state: 'PHOTO_IDENTIFICATION_PENDING' as const,
+            brand: null,
+            manufacturerPartNumber: null,
+            productType: null,
+            sourceLabel: 'Photo-first seller intake',
+            sourceDetail: 'A part number is optional for this path. Seller-owned photos and a few physical-item facts are required before identity can be reviewed.'
+          }
+        : {
         state: 'NOT_VERIFIED' as const,
         brand: null,
         manufacturerPartNumber: intent.partNumber,
         productType: null,
         sourceLabel: 'Catalog identity not verified',
         sourceDetail: 'A unique authorized catalog result is required before brand, product type, category or fitment can publish.'
-      };
+          };
   const title = titleGuard(
     isIllustrativeFixture
       ? `ACDelco ${intent.partNumber} Cabin Air Filter OE Replacement ${intent.condition}`
-      : `Part ${intent.partNumber ?? 'number required'} — catalog identity required`
+      : isSafetyReview
+        ? `${intent.itemDescription ?? 'Possible airbag or restraint item'} — Safety review required`
+        : isPhotoFirst
+          ? `${intent.itemDescription ?? 'Unidentified automotive item'} — Photos required`
+          : `Part ${intent.partNumber} — catalog identity required`
   );
   const fitmentApplications = !omittedFitment && isIllustrativeFixture
     ? [
@@ -191,9 +304,25 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
       ]
     : [];
   const issues: SellerCommandPreview['issues'] = [];
-  if (!intent.partNumber) issues.push({ code: 'PART_NUMBER_REQUIRED', message: 'Add a manufacturer part number.', blocking: true });
   if (!intent.price) issues.push({ code: 'PRICE_REQUIRED', message: 'Add the seller-owned Buy It Now price.', blocking: true });
-  if (!isIllustrativeFixture) {
+  if (isSafetyReview) {
+    issues.push({
+      code: 'RESTRICTED_RESTRAINT_REVIEW_REQUIRED',
+      message: 'Airbags and restraint-system parts require seller eligibility and item-level policy evidence before listing assembly.',
+      blocking: true
+    });
+    issues.push({
+      code: 'OEM_LABEL_AND_DONOR_VIN_REQUIRED',
+      message: 'Add readable label photos and the donor-vehicle VIN. A typed vehicle description is not sufficient.',
+      blocking: true
+    });
+  } else if (isPhotoFirst) {
+    issues.push({
+      code: 'PHOTO_IDENTIFICATION_REQUIRED',
+      message: 'No part number was supplied. Continue with seller-owned item photos instead.',
+      blocking: true
+    });
+  } else if (!isIllustrativeFixture) {
     issues.push({
       code: 'CATALOG_LOOKUP_REQUIRED',
       message: 'No unique authorized catalog identity has been attached to this command preview.',
@@ -206,7 +335,15 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
       blocking: true
     });
   }
-  issues.push({ code: 'SELLER_PHOTO_REQUIRED', message: 'Add at least one seller-owned photo before a real submission.', blocking: true });
+  issues.push({
+    code: isSafetyReview ? 'LABEL_AND_SELLER_PHOTOS_REQUIRED' : 'SELLER_PHOTO_REQUIRED',
+    message: isSafetyReview
+      ? 'Add the whole item, OEM label, connectors and deployment-condition views.'
+      : isPhotoFirst
+        ? 'Add the whole item, reverse or connectors, and label or marking views.'
+        : 'Add at least one seller-owned photo before a real submission.',
+    blocking: true
+  });
 
   const aspects: Record<string, string> = isIllustrativeFixture
     ? { Brand: 'ACDelco', 'Manufacturer Part Number': intent.partNumber ?? '', Type: 'Cabin Air Filter' }
@@ -235,38 +372,106 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
     fitment: {
       state: omittedFitment ? 'OMITTED_BY_SELLER' as const : 'NOT_VERIFIED' as const,
       totalApplications: fitmentApplications.length ? 12 : 0,
-      sourceLabel: omittedFitment ? 'Seller instruction: do not publish fitment' : 'Fitment not verified',
+      sourceLabel: omittedFitment
+        ? 'Seller instruction: do not publish fitment'
+        : isSafetyReview
+          ? 'Compatibility blocked during safety review'
+          : isPhotoFirst
+            ? 'Compatibility blank until identification'
+            : 'Fitment not verified',
       sourceDetail: omittedFitment
         ? 'Compatibility rows are excluded from the public payload.'
-        : isIllustrativeFixture
+        : isSafetyReview
+          ? 'Typed year, make and model words are not fitment evidence. No compatibility can publish during the restricted-item hold.'
+          : isPhotoFirst
+            ? 'Typed year, make and model words are seller hints only. Compatibility stays empty until item identity is supported.'
+            : isIllustrativeFixture
           ? 'Twelve rows are represented only to demonstrate the review UI. They remain amber and are not publishable.'
           : 'No compatibility rows will publish until the catalog adapter returns a unique, supported result.',
       applications: fitmentApplications
     },
     media: {
-      state: 'SELLER_PHOTO_REQUIRED' as const,
-      sourceLabel: 'Seller-owned item photo required',
-      sourceDetail: 'Licensed catalog media may assist presentation later, but a placeholder can never enter a listing payload.'
+      state: isSafetyReview ? 'LABEL_AND_PHOTOS_REQUIRED' as const : 'SELLER_PHOTO_REQUIRED' as const,
+      sourceLabel: isSafetyReview
+        ? 'Readable OEM label + seller photos required'
+        : isPhotoFirst
+          ? 'Three seller-owned item views required'
+          : 'Seller-owned item photo required',
+      sourceDetail: isSafetyReview
+        ? 'PartQuill will not identify or assemble this restricted item from the typed description alone.'
+        : isPhotoFirst
+          ? 'The photos become the primary item evidence; typed year, make and model words remain unverified seller hints.'
+          : 'Licensed catalog media may assist presentation later, but a placeholder can never enter a listing payload.',
+      minimumPhotos: isSafetyReview ? 4 : isPhotoFirst ? 3 : 1,
+      requiredViews: isSafetyReview
+        ? [
+            { id: 'whole-item', label: 'Whole item', detail: 'Show the complete component from edge to edge.', required: true },
+            { id: 'oem-label', label: 'OEM label / part number', detail: 'Every character must be readable.', required: true },
+            { id: 'connectors', label: 'Connectors and reverse', detail: 'Show plugs, wiring and the rear surface.', required: true },
+            { id: 'condition', label: 'Deployment condition', detail: 'Show that the component has not deployed or been rebuilt.', required: true }
+          ]
+        : isPhotoFirst
+          ? [
+              { id: 'whole-item', label: 'Whole item', detail: 'Show the complete item from edge to edge.', required: true },
+              { id: 'reverse', label: 'Back / connectors', detail: 'Show mounting points, plugs and the reverse.', required: true },
+              { id: 'label', label: 'Labels / markings', detail: 'Capture every readable number or logo.', required: true }
+            ]
+          : [
+              { id: 'whole-item', label: 'Actual item', detail: 'Show the exact physical item that will ship.', required: true },
+              { id: 'label', label: 'Part-number label', detail: 'Recommended when a readable label exists.', required: false }
+            ],
+      analysisState: 'NOT_UPLOADED' as const
     },
     confirmations: [
       {
         id: 'part-in-hand',
-        label: 'This is the exact part I have in hand',
-        detail: `The number on the physical item or package matches ${intent.partNumber ?? 'the entered part number'}.`
+        label: isSafetyReview
+          ? 'Photos and OEM label show the exact item'
+          : isPhotoFirst
+            ? 'Photos show the exact item I will ship'
+            : 'This is the exact part I have in hand',
+        detail: isSafetyReview
+          ? 'A policy review is still required; this confirmation does not establish eligibility or recall status.'
+          : isPhotoFirst
+            ? 'Do not use a stock photo or a similar item.'
+            : `The number on the physical item or package matches ${intent.partNumber}.`
       },
       {
         id: 'condition',
-        label: `Condition = ${intent.condition}`,
-        detail: intent.condition === 'New' ? 'Unused and never installed.' : 'The selected condition accurately describes the physical item.'
+        label: intent.condition === 'Not specified' ? 'Choose the actual item condition' : `Condition = ${intent.condition}`,
+        detail: intent.condition === 'New'
+          ? 'Unused and never installed.'
+          : intent.condition === 'Not specified'
+            ? 'New, used or remanufactured must come from the seller or physical-item evidence.'
+            : 'The selected condition accurately describes the physical item.'
       }
     ],
     issues,
     recovery: {
       label: 'Find the correct part for a vehicle' as const,
-      enabled: true as const,
+      enabled: intent.route === 'CATALOG_ASSISTED',
       requires: ['17-character VIN', 'part type'] as ['17-character VIN', 'part type'],
       privacyNote: 'The full VIN is used transiently for the requested lookup and is not retained by the preview service.'
     },
+    policy: isSafetyReview
+      ? {
+          state: 'RESTRICTED_ITEM_HOLD' as const,
+          label: 'eBay airbag eligibility review required',
+          sourceUrl: 'https://www.ebay.com/help/policies/prohibited-restricted-items/vehicle-parts-accessories-policy?id=4293',
+          requirements: [
+            'Seller is approved by eBay and maintains active ARA certification and membership',
+            'Used airbag has never deployed and is not rebuilt or recalled',
+            'Listing includes the donor-vehicle VIN and eBay-required certification statement',
+            'Hazmat shipment uses a compliant non-USPS carrier',
+            'International shipping is disabled'
+          ]
+        }
+      : {
+          state: 'STANDARD_REVIEW' as const,
+          label: 'Standard automotive listing review',
+          sourceUrl: null,
+          requirements: []
+        },
     gates: {
       privatePreflight: isIllustrativeFixture && intent.price ? 'SIMULATION_AVAILABLE' as const : 'HELD' as const,
       publicEbayWrite: 'DISABLED' as const,
@@ -280,7 +485,7 @@ export function buildSellerCommandPreview(command: string): SellerCommandPreview
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.10.0',
+    version: '0.11.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
@@ -304,6 +509,8 @@ export function buildSellerUiBootstrap(config: AppConfig) {
     safeguards: {
       unknownCatalogClaimsHeld: true,
       sellerPhotoRequired: true,
+      photoFirstWithoutPartNumber: true,
+      restrictedRestraintGate: true,
       dualApproval: true,
       publicEbayWritesDisabled: true
     }

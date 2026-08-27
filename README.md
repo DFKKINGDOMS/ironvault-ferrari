@@ -1,13 +1,16 @@
 # PartQuill — one-command eBay seller pilot
 
-This repository serves the PartQuill seller workspace and its evidence-gated API from one Render web service. The primary action is a sentence such as `List part 58487514 on eBay for $9.99 now`; the backend extracts seller intent, applies safe defaults, holds unsupported catalog claims, fingerprints the exact preview, and preserves two independent approval gates.
+This repository serves the PartQuill seller workspace and its evidence-gated API from one Render web service. The primary action is a sentence such as `List part 58487514 on eBay for $9.99 now` or `List a used black dashboard for $49.99`; the backend extracts seller intent, chooses the safest intake path, applies only supportable defaults, fingerprints the exact preview, and preserves two independent approval gates.
 
 It is intentionally not a universal visual parts identifier. The default runtime uses a clearly labeled mock eBay gateway, PostgreSQL-compatible storage, and `ALLOW_EBAY_WRITES=false`.
 
 ## Implemented now
 
 - Command-first React seller workspace at `/`, with the approved Understand → Resolve → Map → Protect → Assemble → Review flow.
-- Public, rate-limited `POST /v1/seller-ui/command-preview` parser for part number, price, quantity, condition, shipping and no-fitment instructions.
+- Public, rate-limited `POST /v1/seller-ui/command-preview` parser for part number or seller description, price, quantity, condition, shipping and no-fitment instructions.
+- Automatic three-way routing: catalog-assisted when an MPN is present, photo-first when it is absent, and a restricted safety review for airbag/restraint terminology. Sellers do not choose a workflow.
+- No-part-number drafts ask for whole-item, reverse/connector and label/marking photos without inventing identity, category or fitment. The current private pilot stages previews only in the browser; automatic visual identification and durable upload are explicitly not connected.
+- Airbag/restraint drafts remain blocked behind current eBay eligibility, ARA, donor-VIN, undeployed/non-recalled condition, required-statement and hazmat-shipping evidence. A typed year/make/model or seller checkbox cannot clear this gate.
 - Deterministic SHA-256 preview fingerprints. A material seller edit requires a rebuild before preflight.
 - Explicit identity, fitment and media proof states. Unknown parts never receive an invented brand, product type, category, compatibility row or catalog image.
 - A clearly labeled `58487514` illustrative adapter fixture for reviewing the fully populated UI. It is not catalog evidence and cannot authorize an eBay claim.
@@ -85,7 +88,7 @@ Health endpoints are public:
 The seller workspace endpoints are also public and read-only:
 
 - `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
-- `POST /v1/seller-ui/command-preview` — builds a held or illustrative preview; it performs no catalog or eBay request.
+- `POST /v1/seller-ui/command-preview` — builds a catalog-held, photo-first, restricted-safety, or illustrative preview; it performs no catalog or eBay request.
 
 The connected ChatGPT proof endpoint is also public:
 

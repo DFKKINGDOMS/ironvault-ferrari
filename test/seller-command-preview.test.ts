@@ -38,6 +38,59 @@ describe('one-command seller preview', () => {
     expect(preview.issues).toContainEqual(expect.objectContaining({ code: 'CATALOG_LOOKUP_REQUIRED', blocking: true }));
   });
 
+  it('routes an item without a part number to photo-first intake', () => {
+    const preview = buildSellerCommandPreview('List a used black dashboard for $49.99');
+    expect(preview.status).toBe('PHOTO_REQUIRED');
+    expect(preview.intent).toMatchObject({
+      partNumber: null,
+      itemDescription: 'Black Dashboard',
+      route: 'PHOTO_FIRST',
+      safetyClass: 'STANDARD',
+      price: '49.99',
+      condition: 'Used',
+      conditionSource: 'COMMAND'
+    });
+    expect(preview.listing.title).toBe('Black Dashboard — Photos required');
+    expect(preview.listing.category).toBeNull();
+    expect(preview.media.minimumPhotos).toBe(3);
+    expect(preview.media.requiredViews.map((view) => view.id)).toEqual(['whole-item', 'reverse', 'label']);
+    expect(preview.issues.map((issue) => issue.code)).toContain('PHOTO_IDENTIFICATION_REQUIRED');
+    expect(preview.issues.map((issue) => issue.code)).not.toContain('PART_NUMBER_REQUIRED');
+    expect(preview.gates.privatePreflight).toBe('HELD');
+  });
+
+  it('places possible airbags and restraint items behind the restricted-item gate', () => {
+    const preview = buildSellerCommandPreview('List 1990 Corvette airbag for 49.99');
+    expect(preview.status).toBe('SAFETY_REVIEW_REQUIRED');
+    expect(preview.intent).toMatchObject({
+      partNumber: null,
+      itemDescription: '1990 Corvette Airbag',
+      route: 'SAFETY_REVIEW',
+      safetyClass: 'RESTRAINT_SYSTEM',
+      price: '49.99',
+      condition: 'Not specified',
+      conditionSource: 'REQUIRES_SELLER_SELECTION'
+    });
+    expect(preview.identity.state).toBe('SAFETY_REVIEW_PENDING');
+    expect(preview.media.state).toBe('LABEL_AND_PHOTOS_REQUIRED');
+    expect(preview.media.minimumPhotos).toBe(4);
+    expect(preview.policy).toMatchObject({
+      state: 'RESTRICTED_ITEM_HOLD',
+      label: 'eBay airbag eligibility review required'
+    });
+    expect(preview.policy.requirements).toHaveLength(5);
+    expect(preview.issues).toContainEqual(expect.objectContaining({ code: 'RESTRICTED_RESTRAINT_REVIEW_REQUIRED', blocking: true }));
+    expect(preview.recovery.enabled).toBe(false);
+    expect(preview.gates.privatePreflight).toBe('HELD');
+  });
+
+  it('keeps the safety gate even when a restraint command includes a part number', () => {
+    const preview = buildSellerCommandPreview('List airbag part 12345-AB100 for $89.00');
+    expect(preview.intent.partNumber).toBe('12345-AB100');
+    expect(preview.intent.route).toBe('SAFETY_REVIEW');
+    expect(preview.status).toBe('SAFETY_REVIEW_REQUIRED');
+  });
+
   it('understands quantity, condition, pickup and the no-fitment instruction', () => {
     expect(parseListingCommand('Sell three F3TZ-15200 used for $72.60 local pickup only no fitment')).toMatchObject({
       partNumber: 'F3TZ-15200',
