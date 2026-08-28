@@ -9,6 +9,51 @@ const gm5459066 = JSON.parse(
 const gm602698 = JSON.parse(
   readFileSync(new URL('../data/gm-catalog-curated-602698.json', import.meta.url), 'utf8')
 ) as GmCatalogPart;
+const baseApplication = gm5459066.applications[0]!;
+const baseModel = baseApplication.models[0]!;
+const gm581167: GmCatalogPart = {
+  ...gm5459066,
+  partNumber: '581167',
+  divisions: ['Oldsmobile'],
+  description: 'SWITCH & BRACKET, lamp',
+  productType: 'SWITCH & BRACKET, lamp',
+  catalogGroup: '10.275',
+  diagrams: [],
+  rollup: {
+    ...gm5459066.rollup,
+    occurrenceCount: 1,
+    pageCount: 1,
+    firstPageId: 2150,
+    lastPageId: 2150,
+    representativePageId: 2150,
+    representativeImageRef: 'GM2150-FULL'
+  },
+  applications: [{
+    ...baseApplication,
+    claimId: 27723,
+    division: 'Oldsmobile',
+    catalogGroup: '10.275',
+    partName: 'SWITCH',
+    description: 'SWITCH & BRACKET, lamp',
+    groupHeading: null,
+    componentFamily: null,
+    supplier: null,
+    applicationText: '1961-1962',
+    yearStart: 1961,
+    yearEnd: 1962,
+    exclusion: null,
+    sourcePageId: 2150,
+    imageRef: 'GM2150-FULL',
+    imageBlobKey: 'gm-scans/pages/002150/full_page.png',
+    layoutLine: '1961 & 1962 exc, F85........... SWITCH & BRACKET, lamp..... 1 581167........',
+    models: [1961, 1962].flatMap((year) => ['Dynamic 88', 'F-85', 'Ninety-Eight', 'Starfire', 'Super 88'].map((modelName) => ({
+      ...baseModel,
+      year,
+      division: 'Oldsmobile',
+      modelName
+    })))
+  }]
+};
 
 describe('one-command seller preview', () => {
   it('extracts the primary sample command without making an external request', () => {
@@ -54,7 +99,7 @@ describe('one-command seller preview', () => {
       state: 'CATALOG_STATED',
       brand: 'Oldsmobile',
       manufacturerPartNumber: '5459066',
-      productType: 'Vacuum power-brake air cleaner/filter'
+      productType: 'Vacuum Power-Brake Air Cleaner/Filter'
     });
     expect(preview.fitment.state).toBe('CATALOG_STATED');
     expect(preview.fitment.applications).toHaveLength(3);
@@ -88,7 +133,7 @@ describe('one-command seller preview', () => {
       state: 'CATALOG_STATED',
       brand: 'Chevrolet',
       manufacturerPartNumber: '602698',
-      productType: 'Steering knuckle with nut'
+      productType: 'Steering Knuckle With Nut'
     });
     expect(preview.fitment.applications).toEqual([
       expect.objectContaining({
@@ -101,6 +146,36 @@ describe('one-command seller preview', () => {
       shipping: { profileId: 'steering-knuckle-hub', confirmationRequired: true }
     });
     expect(JSON.stringify(preview)).not.toContain('gmpartswiki.com');
+  });
+
+  it('keeps one OEM-keyed 581167 draft, proper-cases OCR and honors the F-85 exclusion', () => {
+    const preview = buildSellerCommandPreview('List part 581167 for $29.99', gm581167);
+    expect(preview.listing).toMatchObject({
+      sku: '581167',
+      title: 'Oldsmobile 581167 Switch & Bracket, Lamp 1961–1962'
+    });
+    expect(preview.identity.productType).toBe('Switch & Bracket, Lamp');
+    expect(preview.fitment.applications).toHaveLength(8);
+    expect(preview.fitment.applications.some((row) => row.vehicle.includes('F-85'))).toBe(false);
+    expect(preview.fitment.applications.every((row) => row.qualifier.includes('Excludes F85'))).toBe(true);
+    expect(preview.media.catalogReferences).toContainEqual(expect.objectContaining({
+      kind: 'catalog-row',
+      pageId: 2150,
+      viewUrl: '/v1/gm-catalog/pages/2150/image'
+    }));
+    expect(preview.intelligence).toMatchObject({
+      category: {
+        state: 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION',
+        categoryName: 'Lighting Switches & Controls',
+        categoryId: null
+      },
+      shipping: {
+        source: 'APPROVED_PRODUCT_FAMILY_PRESET',
+        profileId: 'lighting-switch-control',
+        suggestedPackageIn: { length: 8, width: 6, height: 4 },
+        confirmationRequired: true
+      }
+    });
   });
 
   it('routes an item without a part number to photo-first intake', () => {

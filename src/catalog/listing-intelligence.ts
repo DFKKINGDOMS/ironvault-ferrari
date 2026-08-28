@@ -19,7 +19,9 @@ export interface CatalogListingIntelligence {
   };
   shipping: {
     state: 'ESTIMATED_REQUIRES_CONFIRMATION' | 'MEASUREMENT_REQUIRED';
+    source: 'APPROVED_PRODUCT_FAMILY_PRESET' | 'MEASURED_VALUES_REQUIRED';
     profileId: string | null;
+    profileLabel: string | null;
     packageType: 'BOX' | 'MAILER' | 'TUBE' | 'FREIGHT' | null;
     estimatedItemWeightLb: { min: number; max: number; suggested: number } | null;
     suggestedPackageIn: { length: number; width: number; height: number } | null;
@@ -34,6 +36,7 @@ export interface CatalogListingIntelligence {
 
 interface IntelligenceRule {
   id: string;
+  profileLabel: string;
   pattern: RegExp;
   categoryName: string;
   categoryPath: string;
@@ -49,6 +52,7 @@ const motorsRoot = 'eBay Motors › Parts & Accessories › Car & Truck Parts & 
 const rules: IntelligenceRule[] = [
   {
     id: 'air-filter-element',
+    profileLabel: 'Small boxed filter',
     pattern: /\b(?:air\s*cleaner|air\s*filter|filter\s*element|element[^;,.]{0,30}cleaner|cleaner[^;,.]{0,30}element)\b/i,
     categoryName: 'Air Filters',
     categoryPath: `${motorsRoot} › Air & Fuel Delivery › Air Filters`,
@@ -60,6 +64,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'brake-booster',
+    profileLabel: 'Large mechanical component',
     pattern: /\b(?:power\s*brake|brake\s*booster|vacuum\s*booster|hydrovac)\b/i,
     categoryName: 'Brake Boosters & Parts',
     categoryPath: `${motorsRoot} › Brakes & Brake Parts › Brake Boosters & Parts`,
@@ -71,6 +76,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'master-cylinder',
+    profileLabel: 'Medium dense component',
     pattern: /\bmaster\s*cyl(?:inder)?\b/i,
     categoryName: 'Master Cylinders',
     categoryPath: `${motorsRoot} › Brakes & Brake Parts › Master Cylinders`,
@@ -82,6 +88,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'gasket-seal',
+    profileLabel: 'Flat small-parts mailer',
     pattern: /\b(?:gasket|seal|o[ -]?ring|packing)\b/i,
     categoryName: 'Gaskets, Seals & O-Rings',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Gaskets, Seals & O-Rings`,
@@ -92,7 +99,20 @@ const rules: IntelligenceRule[] = [
     confidence: 0.78
   },
   {
+    id: 'lighting-switch-control',
+    profileLabel: 'Small electrical component box',
+    pattern: /\b(?:(?:lamp|headlamp|light)[^;,.]{0,35}(?:switch|control)|(?:switch|control)[^;,.]{0,35}(?:lamp|headlamp|light))\b/i,
+    categoryName: 'Lighting Switches & Controls',
+    categoryPath: `${motorsRoot} › Lighting & Lamps › Switches & Controls`,
+    categoryKeywords: 'automotive headlamp lighting switch control',
+    packageType: 'BOX',
+    itemWeight: { min: 0.1, max: 2, suggested: 0.6 },
+    packageIn: { length: 8, width: 6, height: 4 },
+    confidence: 0.86
+  },
+  {
     id: 'sensor-switch-relay',
+    profileLabel: 'Small electrical component box',
     pattern: /\b(?:sensor|switch|relay|solenoid|sending\s*unit)\b/i,
     categoryName: 'Sensors & Switches',
     categoryPath: `${motorsRoot} › Electrical & Ignition › Sensors & Switches`,
@@ -104,6 +124,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'lamp-lens',
+    profileLabel: 'Protected lighting component box',
     pattern: /\b(?:lamp|light|lens|bezel|headlamp|taillamp|tail\s*lamp)\b/i,
     categoryName: 'Lighting & Lamps',
     categoryPath: `${motorsRoot} › Lighting & Lamps`,
@@ -115,6 +136,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'steering-knuckle-hub',
+    profileLabel: 'Heavy mechanical component box',
     pattern: /\b(?:steering\s*knuckle|spindle|wheel\s*hub|hub\s*assembly)\b/i,
     categoryName: 'Wheel Hubs, Bearings & Parts',
     categoryPath: `${motorsRoot} › Steering & Suspension › Wheel Hubs, Bearings & Parts`,
@@ -126,6 +148,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'bearing-bushing',
+    profileLabel: 'Small dense component box',
     pattern: /\b(?:bearing|bushing|race)\b/i,
     categoryName: 'Bearings & Bushings',
     categoryPath: `${motorsRoot} › Steering & Suspension › Bearings & Bushings`,
@@ -137,6 +160,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'molding-trim',
+    profileLabel: 'Long trim carton or tube',
     pattern: /\b(?:molding|moulding|trim|weatherstrip|ornament|emblem)\b/i,
     categoryName: 'Moldings & Trim',
     categoryPath: `${motorsRoot} › Exterior Parts & Accessories › Moldings & Trim`,
@@ -148,6 +172,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'glass',
+    profileLabel: 'Fragile oversize freight pack',
     pattern: /\b(?:windshield|windscreen|door\s*glass|quarter\s*glass|back\s*glass)\b/i,
     categoryName: 'Auto Glass',
     categoryPath: `${motorsRoot} › Exterior Parts & Accessories › Glass & Window Parts`,
@@ -159,6 +184,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'engine-transmission-assembly',
+    profileLabel: 'Freight pallet',
     pattern: /\b(?:engine\s*assembly|motor\s*assembly|transmission\s*assembly|rear\s*axle\s*assembly)\b/i,
     categoryName: 'Complete Engines or Transmissions',
     categoryPath: `${motorsRoot} › Engines & Engine Parts`,
@@ -205,7 +231,9 @@ export function buildCatalogListingIntelligence(catalog: GmCatalogPart): Catalog
       },
       shipping: {
         state: 'MEASUREMENT_REQUIRED',
+        source: 'MEASURED_VALUES_REQUIRED',
         profileId: null,
+        profileLabel: null,
         packageType: null,
         estimatedItemWeightLb: null,
         suggestedPackageIn: null,
@@ -238,7 +266,9 @@ export function buildCatalogListingIntelligence(catalog: GmCatalogPart): Catalog
     },
     shipping: {
       state: 'ESTIMATED_REQUIRES_CONFIRMATION',
+      source: 'APPROVED_PRODUCT_FAMILY_PRESET',
       profileId: rule.id,
+      profileLabel: rule.profileLabel,
       packageType: rule.packageType,
       estimatedItemWeightLb: rule.itemWeight,
       suggestedPackageIn: rule.packageIn,
@@ -247,7 +277,8 @@ export function buildCatalogListingIntelligence(catalog: GmCatalogPart): Catalog
       dimDivisor: 139,
       confidence: Math.max(0.4, rule.confidence - 0.18),
       basis: [
-        `Estimate is based on the ${rule.id} product-family profile, not a measured item.`,
+        `PartQuill approved automotive package preset: ${rule.profileLabel} (${rule.id}).`,
+        'This is a product-family starting point, not a measured item or carrier promise.',
         'DIM estimate uses L × W × H ÷ 139 and rounds up; the carrier bills the greater of dimensional or actual weight.'
       ],
       confirmationRequired: true

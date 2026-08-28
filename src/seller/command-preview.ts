@@ -160,6 +160,27 @@ function titleCaseSellerText(value: string): string {
     .join(' ');
 }
 
+const catalogTitleAcronyms = new Set([
+  'A/C', 'ABS', 'AC', 'COE', 'DC', 'GM', 'HD', 'LH', 'NOS', 'OE', 'OEM', 'RH', 'SRS'
+]);
+
+/**
+ * Catalog OCR is commonly stored in all caps. Convert human-readable words to
+ * title case while preserving part-like tokens and automotive abbreviations.
+ */
+export function properCaseCatalogText(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((token) => token.replace(/[A-Za-z]+/g, (word) => {
+      const upper = word.toUpperCase();
+      if (catalogTitleAcronyms.has(upper) || /\d/.test(word)) return upper;
+      return `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`;
+    }))
+    .join(' ');
+}
+
 function findItemDescription(command: string, partNumber: string | null): string | null {
   let value = command
     .replace(/\b(?:and\s+)?i\s+(?:want|would\s+like)\s+to\s+(?:list|sell|draft)\s+(?:it|this)(?:\s+now)?\b/gi, ' ')
@@ -269,10 +290,33 @@ function catalogYears(catalog: GmCatalogPart): string | null {
   return [...new Set(years)].slice(0, 3).join(', ') || null;
 }
 
+function decodedApplicationExclusion(application: GmCatalogPart['applications'][number]): string | null {
+  if (application.exclusion?.trim()) return application.exclusion.trim();
+  const layoutExclusion = application.layoutLine?.match(
+    /\b(?:exc(?:ept)?|excl(?:uding)?)\.?\s*,?\s*([a-z0-9][a-z0-9 -]*?)(?=\.{2,}|\s{3,}|$)/i
+  )?.[1]?.trim();
+  return layoutExclusion || null;
+}
+
+function normalizedModelToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function modelIsExcluded(modelName: string, exclusion: string | null): boolean {
+  if (!exclusion) return false;
+  const normalizedModel = normalizedModelToken(modelName);
+  return exclusion
+    .split(/[,;/]|\band\b|&/i)
+    .map(normalizedModelToken)
+    .filter(Boolean)
+    .some((token) => token === normalizedModel || token.includes(normalizedModel));
+}
+
 function catalogFitmentApplications(catalog: GmCatalogPart): SellerCommandPreview['fitment']['applications'] {
   const rows: SellerCommandPreview['fitment']['applications'] = [];
   const seen = new Set<string>();
   for (const application of catalog.applications) {
+    const decodedExclusion = decodedApplicationExclusion(application);
     const yearText = application.yearStart == null
       ? application.applicationText ?? 'Year not decoded'
       : application.yearEnd && application.yearEnd !== application.yearStart
@@ -282,11 +326,12 @@ function catalogFitmentApplications(catalog: GmCatalogPart): SellerCommandPrevie
       application.description,
       application.supplier ? `${application.supplier} system` : null,
       application.equipmentQualifier,
-      application.exclusion ? `Excludes ${application.exclusion}` : null,
+      decodedExclusion ? `Excludes ${decodedExclusion}` : null,
       `Catalog page ${application.sourcePageId}`
     ].filter(Boolean).join(' · ');
     if (application.models.length) {
       for (const model of application.models) {
+        if (modelIsExcluded(model.modelName, decodedExclusion)) continue;
         const vehicle = [model.year ?? yearText, model.division ?? application.division, model.modelName]
           .filter(Boolean)
           .join(' ');
@@ -379,9 +424,9 @@ export function buildSellerCommandPreview(
           state: 'CATALOG_STATED' as const,
           brand: catalogMatch.divisions.length === 1 ? catalogMatch.divisions[0] ?? catalogMatch.manufacturer : catalogMatch.manufacturer,
           manufacturerPartNumber: catalogMatch.partNumber,
-          productType: catalogMatch.productType,
+          productType: catalogMatch.productType ? properCaseCatalogText(catalogMatch.productType) : null,
           sourceLabel: `GM catalog scan · page ${catalogMatch.rollup.representativePageId ?? catalogMatch.rollup.firstPageId}`,
-          sourceDetail: `${catalogMatch.description ?? 'Catalog identity'} is stated in GM group ${catalogMatch.catalogGroup ?? 'not decoded'}. Evidence is preserved separately from seller condition and marketplace compatibility.`
+          sourceDetail: `${properCaseCatalogText(catalogMatch.description ?? 'Catalog identity')} is stated in GM group ${catalogMatch.catalogGroup ?? 'not decoded'}. Evidence is preserved separately from seller condition and marketplace compatibility.`
         }
       : isSafetyReview
       ? {
@@ -413,7 +458,7 @@ export function buildSellerCommandPreview(
     isIllustrativeFixture
       ? `ACDelco ${intent.partNumber} Cabin Air Filter OE Replacement ${intent.condition}`
       : catalogMatch
-        ? `${identity.brand ?? catalogMatch.manufacturer} ${catalogMatch.partNumber} ${catalogMatch.description ?? catalogMatch.productType ?? 'GM Part'}${catalogYears(catalogMatch) ? ` ${catalogYears(catalogMatch)}` : ''}`
+        ? `${identity.brand ?? catalogMatch.manufacturer} ${catalogMatch.partNumber} ${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'GM Part')}${catalogYears(catalogMatch) ? ` ${catalogYears(catalogMatch)}` : ''}`
       : isSafetyReview
         ? `${intent.itemDescription ?? 'Possible airbag or restraint item'} — Safety review required`
         : isPhotoFirst
@@ -493,7 +538,7 @@ export function buildSellerCommandPreview(
       ? {
           Brand: identity.brand ?? catalogMatch.manufacturer,
           'Manufacturer Part Number': catalogMatch.partNumber,
-          ...(catalogMatch.productType ? { Type: catalogMatch.productType } : {}),
+          ...(identity.productType ? { Type: identity.productType } : {}),
           ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {})
         }
     : intent.partNumber
@@ -509,9 +554,11 @@ export function buildSellerCommandPreview(
       title,
       titleLength: title.length,
       format: 'Buy It Now · GTC' as const,
-      sku: intent.partNumber ? `PQ-${intent.partNumber}` : null,
+      // PartQuill's seller contract uses the exact normalized OEM/MPN as the
+      // inventory key. A previous prototype prefix caused cross-draft leakage.
+      sku: identity.manufacturerPartNumber ?? intent.partNumber,
       description: catalogMatch
-        ? `${catalogMatch.description ?? catalogMatch.productType ?? 'General Motors part'}, part ${catalogMatch.partNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
+        ? `${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'General Motors part')}, part ${catalogMatch.partNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
         : buildDescription(intent, identity.productType),
       category: isIllustrativeFixture
         ? 'Air & Fuel Delivery › Filters'
