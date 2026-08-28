@@ -57,6 +57,7 @@ interface IntelligenceRule {
 
 const motorsRoot = 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories';
 const officialMotorsTreeVersion = 'US_JUNE_2026';
+const genericOtherCategoryIds = new Set(['9886']);
 
 
 export interface IronVaultPackageProfile {
@@ -508,6 +509,7 @@ export function buildCatalogListingIntelligence(catalog: GmCatalogPart): Catalog
   // A previously stored generic fallback must never outrank a current exact
   // product-family leaf. A stored exact assignment still remains authoritative.
   const category: CatalogListingIntelligence['category'] = embeddedCategory?.state === 'EBAY_TAXONOMY_VERIFIED'
+    && !genericOtherCategoryIds.has(embeddedCategory.categoryId ?? '')
     ? embeddedCategory
     : exactRuleCategory ?? embeddedCategory ?? (rule
     ? {
