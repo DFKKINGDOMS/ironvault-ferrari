@@ -114,14 +114,22 @@ describe('HTTP contract', () => {
       method: 'POST',
       url: '/internal/gm-catalog/import',
       headers: { authorization: 'Bearer test-gm-import-token-that-is-long-enough' },
-      payload: { records: [record], complete: true }
+      payload: {
+        datasetId: 'gm-exact-links-100001-235000-test',
+        records: [record],
+        complete: true
+      }
     });
     expect(accepted.statusCode).toBe(200);
     expect(await h.store.lookupGmCatalogPart('545 5055')).toMatchObject({
       ...record,
       partNumber: '5455055'
     });
-    expect(await h.store.getGmCatalogStatus()).toMatchObject({ status: 'completed', availableParts: 1 });
+    expect(await h.store.getGmCatalogStatus()).toMatchObject({
+      datasetId: 'gm-exact-links-100001-235000-test',
+      status: 'completed',
+      availableParts: 1
+    });
   });
 
   it('serves recovered first-party GM catalog scans from PartQuill storage', async () => {

@@ -8,7 +8,7 @@ import type {
   SellerAcknowledgement,
   StoredImage
 } from '../domain/types.js';
-import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
+import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
@@ -42,7 +42,7 @@ export interface Store {
   getAcknowledgement(sellerId: string, type: SellerAcknowledgement['type']): Promise<SellerAcknowledgement | undefined>;
   lookupGmCatalogPart?(partNumber: string): Promise<GmCatalogPart | undefined>;
   getGmCatalogStatus?(): Promise<GmCatalogStatus>;
-  importGmCatalogRecords?(records: GmCatalogPart[], complete?: boolean): Promise<void>;
+  importGmCatalogRecords?(records: GmCatalogPart[], options?: GmCatalogImportOptions): Promise<void>;
   getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined>;
   saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void>;
   deleteEbayReferenceCache(partNumber: string): Promise<void>;

@@ -56,6 +56,32 @@ describe('GM catalog exact-key and OCR quality controls', () => {
     });
   });
 
+  it('accepts 10110988 only from its preserved exact catalog link', () => {
+    const catalog = emptyCatalog('10110988', 'HOSE PORTED PURGE SOL');
+    catalog.productType = 'Hose';
+    catalog.catalogGroup = '1.762';
+    catalog.rollup.firstPageId = 138445;
+    catalog.rollup.lastPageId = 138445;
+    catalog.rollup.representativePageId = 138445;
+    catalog.identityEvidence = {
+      method: 'gmpartswiki_exact_part_link',
+      verificationState: 'catalog_stated',
+      sourcePages: [138445]
+    };
+
+    expect(assessGmCatalogMapping(catalog, '10110988')).toMatchObject({
+      state: 'CATALOG_LINKED_EXACT',
+      exactKeyMatch: true,
+      sellerFacingAllowed: true,
+      sourcePages: [138445]
+    });
+    expect(normalizeGmCatalogPart(catalog, '10110988')).toMatchObject({
+      partNumber: '10110988',
+      productType: 'Hose',
+      description: 'HOSE PORTED PURGE SOL'
+    });
+  });
+
   it('holds an exact-key OCR candidate until catalog-stated evidence is available', () => {
     const catalog = emptyCatalog('5455999', 'Ail Moraine');
     catalog.verificationState = 'candidate';

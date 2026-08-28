@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { createGunzip } from 'node:zlib';
 import pg from 'pg';
-import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
+import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
+import { mergeGmCatalogParts } from '../catalog/gm-catalog-merge.js';
 import type {
   ApprovalRecord,
   AuditEvent,
@@ -157,8 +158,9 @@ export class PostgresStore implements Store {
     await this.upsertGmCatalogBatch([record]);
   }
 
-  async importGmCatalogRecords(records: GmCatalogPart[], complete = false): Promise<void> {
+  async importGmCatalogRecords(records: GmCatalogPart[], options: GmCatalogImportOptions = {}): Promise<void> {
     if (!records.length) return;
+    const datasetId = options.datasetId ?? GM_DATASET_ID;
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -180,7 +182,7 @@ export class PostgresStore implements Store {
            completed_at = EXCLUDED.completed_at,
            updated_at = now(),
            error_detail = NULL`,
-        [GM_DATASET_ID, complete ? 'completed' : 'running', lastPartNumber]
+        [datasetId, options.complete ? 'completed' : 'running', lastPartNumber]
       );
       await client.query('COMMIT');
     } catch (error) {
@@ -271,12 +273,24 @@ export class PostgresStore implements Store {
 
   private async upsertGmCatalogBatch(records: GmCatalogPart[], client: pg.Pool | pg.PoolClient = this.pool): Promise<void> {
     if (!records.length) return;
-    const payload = records
-      .map((record) => {
-        const partNumber = canonicalOemPartNumber(record.partNumber);
-        return partNumber ? { part_number: partNumber, data: { ...record, partNumber } } : null;
-      })
-      .filter((record): record is { part_number: string; data: GmCatalogPart } => record !== null);
+    const payloadByPart = new Map<string, GmCatalogPart>();
+    for (const record of records) {
+      const partNumber = canonicalOemPartNumber(record.partNumber);
+      if (!partNumber) continue;
+      const incoming = { ...record, partNumber };
+      const duplicate = payloadByPart.get(partNumber);
+      payloadByPart.set(partNumber, duplicate ? mergeGmCatalogParts(duplicate, incoming) : incoming);
+    }
+    if (!payloadByPart.size) return;
+    const existing = await client.query<{ part_number: string; data: GmCatalogPart }>(
+      'SELECT part_number, data FROM partquill.gm_catalog_parts WHERE part_number = ANY($1::text[])',
+      [[...payloadByPart.keys()]]
+    );
+    for (const row of existing.rows) {
+      const incoming = payloadByPart.get(row.part_number);
+      if (incoming) payloadByPart.set(row.part_number, mergeGmCatalogParts(row.data, incoming));
+    }
+    const payload = [...payloadByPart].map(([part_number, data]) => ({ part_number, data }));
     if (!payload.length) return;
     await client.query(
       `INSERT INTO partquill.gm_catalog_parts(part_number, verification_state, data, updated_at)

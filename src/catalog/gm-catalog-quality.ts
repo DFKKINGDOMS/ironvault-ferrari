@@ -169,6 +169,7 @@ const catalogCurations: Readonly<Record<string, CatalogCuration>> = {
 
 export type GmCatalogMappingState =
   | 'CURATED_EXACT'
+  | 'CATALOG_LINKED_EXACT'
   | 'CATALOG_STATED_EXACT'
   | 'OCR_CANDIDATE_HELD'
   | 'PART_NUMBER_MISMATCH'
@@ -215,6 +216,12 @@ export function assessGmCatalogMapping(
   }
 
   const curation = catalogCurations[canonicalOemPartNumber(requested)];
+  const exactLinkedPages = catalog.identityEvidence?.method === 'gmpartswiki_exact_part_link'
+    && catalog.identityEvidence.verificationState.toLowerCase() === 'catalog_stated'
+    ? [...new Set(catalog.identityEvidence.sourcePages.filter((pageId) =>
+        Number.isInteger(pageId) && pageId > 0
+      ))].sort((left, right) => left - right)
+    : [];
   const catalogStatedApplications = catalog.applications.filter((application) =>
     application.verificationState === 'catalog_stated'
     && application.confidence >= 0.8
@@ -240,6 +247,19 @@ export function assessGmCatalogMapping(
       sellerFacingAllowed: true,
       sourcePages,
       reasons: ['Exact OEM key matched a manually curated catalog transcription with first-party page evidence.']
+    };
+  }
+  if (exactLinkedPages.length) {
+    return {
+      state: 'CATALOG_LINKED_EXACT',
+      requestedPartNumber: requested,
+      returnedPartNumber: returned,
+      exactKeyMatch: true,
+      sellerFacingAllowed: true,
+      sourcePages: exactLinkedPages,
+      reasons: [
+        'The normalized OEM number is an exact GMPartsWiki catalog link on the preserved source page; optional description and fitment fields remain limited to separately bounded catalog rows.'
+      ]
     };
   }
   if (catalogStated) {

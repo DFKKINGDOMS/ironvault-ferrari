@@ -9,8 +9,9 @@ import type {
   StoredImage
 } from '../domain/types.js';
 import type { Store } from './store.js';
-import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
+import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
+import { mergeGmCatalogParts } from '../catalog/gm-catalog-merge.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
@@ -34,6 +35,7 @@ export class MemoryStore implements Store {
   private readonly communitySubmissions = new Map<string, CommunitySubmissionRecord>();
   private readonly communityImages = new Map<string, StoredCommunityImage>();
   private gmCatalogComplete = false;
+  private gmCatalogDatasetId: string | null = null;
 
   async saveCommunitySubmission(record: CommunitySubmissionRecord): Promise<void> {
     this.communitySubmissions.set(record.id, clone(record));
@@ -109,13 +111,16 @@ export class MemoryStore implements Store {
     return deleted;
   }
 
-  async importGmCatalogRecords(records: GmCatalogPart[], complete = false): Promise<void> {
+  async importGmCatalogRecords(records: GmCatalogPart[], options: GmCatalogImportOptions = {}): Promise<void> {
     for (const record of records) {
       const partNumber = canonicalOemPartNumber(record.partNumber);
       if (!partNumber) continue;
-      this.gmCatalog.set(partNumber, clone({ ...record, partNumber }));
+      const incoming = clone({ ...record, partNumber });
+      const current = this.gmCatalog.get(partNumber);
+      this.gmCatalog.set(partNumber, current ? mergeGmCatalogParts(current, incoming) : incoming);
     }
-    this.gmCatalogComplete = complete;
+    this.gmCatalogDatasetId = options.datasetId ?? this.gmCatalogDatasetId ?? 'gm-catalog-memory';
+    this.gmCatalogComplete = options.complete ?? false;
   }
 
   async lookupGmCatalogPart(partNumber: string): Promise<GmCatalogPart | undefined> {
@@ -126,7 +131,7 @@ export class MemoryStore implements Store {
   async getGmCatalogStatus(): Promise<GmCatalogStatus> {
     const partNumbers = [...this.gmCatalog.keys()].sort();
     return {
-      datasetId: partNumbers.length ? 'gm-catalog-memory' : null,
+      datasetId: partNumbers.length ? this.gmCatalogDatasetId ?? 'gm-catalog-memory' : null,
       status: this.gmCatalogComplete ? 'completed' : partNumbers.length ? 'running' : 'not_started',
       importedParts: partNumbers.length,
       availableParts: partNumbers.length,

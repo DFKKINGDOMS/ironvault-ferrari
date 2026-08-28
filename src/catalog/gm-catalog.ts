@@ -79,6 +79,12 @@ export interface GmCatalogEbayCategory {
   verifiedAt: string;
 }
 
+export interface GmCatalogIdentityEvidence {
+  method: string;
+  verificationState: string;
+  sourcePages: number[];
+}
+
 export interface GmCatalogPart {
   partNumber: string;
   manufacturer: string;
@@ -87,6 +93,7 @@ export interface GmCatalogPart {
   description: string | null;
   catalogGroup: string | null;
   verificationState: string;
+  identityEvidence?: GmCatalogIdentityEvidence;
   ebayCategory?: GmCatalogEbayCategory;
   rollup: {
     occurrenceCount: number;
@@ -108,4 +115,9 @@ export interface GmCatalogStatus {
   importedParts: number;
   availableParts: number;
   lastPartNumber: string | null;
+}
+
+export interface GmCatalogImportOptions {
+  complete?: boolean;
+  datasetId?: string;
 }

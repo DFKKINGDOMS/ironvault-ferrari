@@ -82,6 +82,7 @@ const imageSchema = z.object({
 });
 
 const gmCatalogImportSchema = z.object({
+  datasetId: z.string().trim().min(3).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
   records: z.array(z.object({
     partNumber: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9\s./-]*$/),
     verificationState: z.string().min(1)
@@ -413,9 +414,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (!secureTokenMatches(supplied, config.GM_IMPORT_TOKEN) || !store.importGmCatalogRecords) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
     }
-    const { records, complete } = gmCatalogImportSchema.parse(request.body);
-    await store.importGmCatalogRecords(records as unknown as GmCatalogPart[], complete);
-    return reply.header('cache-control', 'no-store').send({ imported: records.length, complete });
+    const { datasetId, records, complete } = gmCatalogImportSchema.parse(request.body);
+    await store.importGmCatalogRecords(records as unknown as GmCatalogPart[], { datasetId, complete });
+    return reply.header('cache-control', 'no-store').send({ datasetId: datasetId ?? null, imported: records.length, complete });
   });
   app.get('/ready', async (_request, reply) => {
     try {
