@@ -22,7 +22,12 @@ const store = config.DATABASE_URL
   : new MemoryStore();
 if (store instanceof PostgresStore) {
   await store.initializeGmCatalog();
-  await store.seedGmCatalogPart(resolve('data/gm-catalog-smoke-5459066.json'));
+  for (const curatedRecord of [
+    'data/gm-catalog-smoke-5459066.json',
+    'data/gm-catalog-curated-602698.json'
+  ]) {
+    await store.seedGmCatalogPart(resolve(curatedRecord));
+  }
 }
 const ebay = config.EBAY_MODE === 'mock' ? new MockEbayGateway() : new LiveEbayGateway(config);
 const tokenVault = config.TOKEN_ENCRYPTION_KEY ? new TokenVault(config.TOKEN_ENCRYPTION_KEY) : undefined;
