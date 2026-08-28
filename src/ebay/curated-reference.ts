@@ -38,6 +38,7 @@ export class CuratedEbayReferenceProvider implements EbayReferenceProvider {
       archiveState: 'PRIVATE_PERSONAL_REFERENCE_ONLY',
       images: candidate.images.map((image, index) => ({
         ...image,
+        alt: `Permanent archived reference ${index + 1} for OEM part 5455055`,
         url: `/v1/reference-assets/5455055${index === 0 ? '' : `_${index}`}.png`,
         contentReview: {
           decision: 'ACCEPT_PART_ONLY',

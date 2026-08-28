@@ -740,7 +740,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.15.5',
+    version: '0.15.6',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
