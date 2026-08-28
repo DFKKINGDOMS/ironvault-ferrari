@@ -83,6 +83,12 @@ services:
         sync: false
       - key: AZURE_OPENAI_IMAGE_DEPLOYMENT
         sync: false
+      - key: AZURE_FOUNDRY_ENDPOINT
+        sync: false
+      - key: AZURE_FOUNDRY_API_KEY
+        sync: false
+      - key: AZURE_FOUNDRY_REVIEW_DEPLOYMENT
+        sync: false
       - key: OEM_RESEARCH_MODE
         value: private-pilot
       - key: OEM_DATA_RIGHTS_CONFIRMED

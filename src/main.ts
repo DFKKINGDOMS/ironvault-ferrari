@@ -18,6 +18,7 @@ import { CuratedEbayReferenceProvider } from './ebay/curated-reference.js';
 import { CommunityImageService } from './community/service.js';
 import { DisabledCommunityModerator, OpenAiCommunityModerator } from './community/moderation.js';
 import { DisabledCommunityArchive, GitHubCommunityArchive } from './community/github-archive.js';
+import { ConservativeBackgroundEngine } from './image-studio/local-background-engine.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -38,12 +39,20 @@ if (store instanceof PostgresStore) {
 const ebay = config.EBAY_MODE === 'mock' ? new MockEbayGateway() : new LiveEbayGateway(config);
 const tokenVault = config.TOKEN_ENCRYPTION_KEY ? new TokenVault(config.TOKEN_ENCRYPTION_KEY) : undefined;
 const service = new PartQuillService(store, ebay, config, tokenVault);
-const aiKey = config.PARTQUILL_AI_PROVIDER === 'azure'
+const aiKey = config.PARTQUILL_AI_PROVIDER === 'azure-local'
+  ? config.AZURE_FOUNDRY_API_KEY
+  : config.PARTQUILL_AI_PROVIDER === 'azure'
   ? config.AZURE_OPENAI_API_KEY
   : config.PARTQUILL_AI_PROVIDER === 'openai'
     ? config.OPENAI_API_KEY
     : undefined;
-const aiOptions = config.PARTQUILL_AI_PROVIDER === 'azure'
+const aiOptions = config.PARTQUILL_AI_PROVIDER === 'azure-local'
+  ? {
+      baseUrl: `${config.AZURE_FOUNDRY_ENDPOINT?.replace(/\/$/, '')}/openai/v1`,
+      authMode: 'api-key' as const,
+      reviewModel: config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT
+    }
+  : config.PARTQUILL_AI_PROVIDER === 'azure'
   ? {
       baseUrl: config.AZURE_OPENAI_ENDPOINT,
       authMode: 'api-key' as const,
@@ -53,10 +62,17 @@ const aiOptions = config.PARTQUILL_AI_PROVIDER === 'azure'
       supportsBackgroundControl: true
     }
   : {};
-const completeAiEngine = Boolean(aiKey && (config.PARTQUILL_AI_PROVIDER !== 'azure'
-  || (config.AZURE_OPENAI_ENDPOINT && config.AZURE_OPENAI_REVIEW_DEPLOYMENT && config.AZURE_OPENAI_IMAGE_DEPLOYMENT)));
+const completeAiEngine = Boolean(aiKey
+  && (config.PARTQUILL_AI_PROVIDER !== 'azure'
+    || (config.AZURE_OPENAI_ENDPOINT && config.AZURE_OPENAI_REVIEW_DEPLOYMENT && config.AZURE_OPENAI_IMAGE_DEPLOYMENT))
+  && (config.PARTQUILL_AI_PROVIDER !== 'azure-local'
+    || (config.AZURE_FOUNDRY_ENDPOINT && config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT)));
+const comparisonEngine = completeAiEngine ? new OpenAiImageEngine(aiKey, fetch, aiOptions) : new DisabledImageEngine();
+const selectedImageEngine = config.PARTQUILL_AI_PROVIDER === 'azure-local'
+  ? new ConservativeBackgroundEngine(comparisonEngine)
+  : comparisonEngine;
 const imageEngine = config.IMAGE_STUDIO_MODE === 'live' && completeAiEngine
-  ? new OpenAiImageEngine(aiKey, fetch, aiOptions)
+  ? selectedImageEngine
   : new DisabledImageEngine();
 const imageStudio = new ImageStudioService(
   new StudioFileStore(config.IMAGE_STUDIO_STORAGE_DIR),
@@ -69,7 +85,7 @@ const communityImages = config.COMMUNITY_IMAGES_ENABLED
   ? new CommunityImageService(
       store,
       completeAiEngine ? new OpenAiCommunityModerator(aiKey, fetch, aiOptions) : new DisabledCommunityModerator(),
-      completeAiEngine ? new OpenAiImageEngine(aiKey, fetch, aiOptions) : new DisabledImageEngine(),
+      completeAiEngine ? selectedImageEngine : new DisabledImageEngine(),
       config.COMMUNITY_GITHUB_TOKEN
         ? new GitHubCommunityArchive(
             config.COMMUNITY_GITHUB_REPOSITORY,

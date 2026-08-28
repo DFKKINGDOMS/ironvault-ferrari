@@ -79,6 +79,24 @@ describe('production configuration fail-closed behavior', () => {
     expect(config.PARTQUILL_AI_PROVIDER).toBe('azure');
   });
 
+  it('requires Foundry review credentials for conservative local editing', () => {
+    expect(() => loadConfig({
+      IMAGE_STUDIO_MODE: 'live',
+      IMAGE_STUDIO_ACCESS_TOKEN: 'private-studio-token-long-enough',
+      PARTQUILL_AI_PROVIDER: 'azure-local'
+    })).toThrow('AZURE_FOUNDRY_ENDPOINT');
+
+    const config = loadConfig({
+      IMAGE_STUDIO_MODE: 'live',
+      IMAGE_STUDIO_ACCESS_TOKEN: 'private-studio-token-long-enough',
+      PARTQUILL_AI_PROVIDER: 'azure-local',
+      AZURE_FOUNDRY_ENDPOINT: 'https://partquill.services.ai.azure.com',
+      AZURE_FOUNDRY_API_KEY: 'foundry-test-key',
+      AZURE_FOUNDRY_REVIEW_DEPLOYMENT: 'partquill-grok-review'
+    });
+    expect(config.PARTQUILL_AI_PROVIDER).toBe('azure-local');
+  });
+
   it('permits an explicit fail-closed ephemeral owner preview', () => {
     const config = loadConfig({
       NODE_ENV: 'production',

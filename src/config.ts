@@ -30,12 +30,15 @@ const schema = z
     EBAY_REFERENCE_MAX_IMAGES: z.coerce.number().int().min(1).max(3).default(3),
     PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
     CORS_ORIGINS: z.string().default('http://localhost:5173'),
-    PARTQUILL_AI_PROVIDER: z.enum(['disabled', 'openai', 'azure']).default('disabled'),
+    PARTQUILL_AI_PROVIDER: z.enum(['disabled', 'openai', 'azure', 'azure-local']).default('disabled'),
     OPENAI_API_KEY: z.string().optional(),
     AZURE_OPENAI_ENDPOINT: z.string().url().optional(),
     AZURE_OPENAI_API_KEY: z.string().optional(),
     AZURE_OPENAI_REVIEW_DEPLOYMENT: z.string().min(1).optional(),
     AZURE_OPENAI_IMAGE_DEPLOYMENT: z.string().min(1).optional(),
+    AZURE_FOUNDRY_ENDPOINT: z.string().url().optional(),
+    AZURE_FOUNDRY_API_KEY: z.string().optional(),
+    AZURE_FOUNDRY_REVIEW_DEPLOYMENT: z.string().min(1).optional(),
     IMAGE_STUDIO_MODE: z.enum(['preview', 'live']).default('preview'),
     IMAGE_STUDIO_ACCESS_TOKEN: z.string().min(16).optional(),
     IMAGE_STUDIO_STORAGE_DIR: z.string().default('.partquill-image-studio'),
@@ -122,6 +125,16 @@ const schema = z
         ] as const;
         for (const [path, value] of required) {
           if (!value) context.addIssue({ code: 'custom', path: [path], message: `Azure provider requires ${path}` });
+        }
+      }
+      if (env.PARTQUILL_AI_PROVIDER === 'azure-local') {
+        const required = [
+          ['AZURE_FOUNDRY_ENDPOINT', env.AZURE_FOUNDRY_ENDPOINT],
+          ['AZURE_FOUNDRY_API_KEY', env.AZURE_FOUNDRY_API_KEY],
+          ['AZURE_FOUNDRY_REVIEW_DEPLOYMENT', env.AZURE_FOUNDRY_REVIEW_DEPLOYMENT]
+        ] as const;
+        for (const [path, value] of required) {
+          if (!value) context.addIssue({ code: 'custom', path: [path], message: `Azure local provider requires ${path}` });
         }
       }
       if (env.NODE_ENV === 'production' && !env.IMAGE_STUDIO_ACCESS_TOKEN) {
