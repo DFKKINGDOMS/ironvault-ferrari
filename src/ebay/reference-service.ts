@@ -7,6 +7,7 @@ import type {
   EbayReferenceCacheRecord,
   EbayReferenceLookup
 } from './reference-types.js';
+import { acceptedReferenceImage } from './reference-image-policy.js';
 
 export class EbayReferenceService {
   private readonly inFlight = new Map<string, Promise<EbayReferenceLookup>>();
@@ -95,6 +96,12 @@ export class EbayReferenceService {
     candidate: Awaited<ReturnType<EbayReferenceProvider['searchExact']>> & {},
     at: Date
   ): Promise<EbayReferenceLookup> {
+    const approvedImages = candidate.images
+      .filter(acceptedReferenceImage)
+      .slice(0, this.config.EBAY_REFERENCE_MAX_IMAGES);
+    if (!approvedImages.length) {
+      return { status: 'TEMPORARILY_UNAVAILABLE', reference: null, searchSuppressed: false };
+    }
     const cacheHours = Math.min(6, this.config.EBAY_REFERENCE_CACHE_HOURS);
     const expiresAt = new Date(at.getTime() + cacheHours * 3_600_000).toISOString();
     const record: EbayReferenceCacheRecord = {
@@ -107,7 +114,7 @@ export class EbayReferenceService {
       title: candidate.title,
       categoryId: candidate.categoryId,
       categoryPath: candidate.categoryPath,
-      images: candidate.images.slice(0, this.config.EBAY_REFERENCE_MAX_IMAGES),
+      images: approvedImages,
       matchEvidence: candidate.matchEvidence,
       checkedAt: at.toISOString(),
       expiresAt,

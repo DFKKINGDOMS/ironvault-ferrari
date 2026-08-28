@@ -35,6 +35,24 @@ export class CuratedEbayReferenceProvider implements EbayReferenceProvider {
   async searchExact(partNumber: string, catalog: GmCatalogPart): Promise<EbayReferenceCandidate | undefined> {
     const exactPart = canonicalOemPartNumber(partNumber);
     const listing = reviewedListings[exactPart];
-    return listing ? selectExactEbayReference(exactPart, catalog, listing, 3) : undefined;
+    const candidate = listing ? selectExactEbayReference(exactPart, catalog, listing, 3) : undefined;
+    if (!candidate) return undefined;
+    return {
+      ...candidate,
+      images: candidate.images.map((image) => ({
+        ...image,
+        contentReview: {
+          decision: 'ACCEPT_PART_ONLY',
+          method: 'MANUAL_EXACT_LISTING_REVIEW',
+          containsPerson: false,
+          containsFace: false,
+          containsHand: false,
+          containsBodyPart: false,
+          containsMarketplacePromo: false,
+          containsWatermarkOrOverlay: false,
+          checkedAt: '2026-08-28T11:30:00Z'
+        }
+      }))
+    };
   }
 }

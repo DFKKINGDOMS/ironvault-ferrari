@@ -6,6 +6,17 @@ export type EbayReferenceCacheStatus =
 export interface EbayReferenceImage {
   url: string;
   alt: string;
+  contentReview?: {
+    decision: 'ACCEPT_PART_ONLY' | 'REJECT' | 'QUARANTINE';
+    method: 'MANUAL_EXACT_LISTING_REVIEW' | 'AUTOMATED_VISUAL_REVIEW';
+    containsPerson: boolean;
+    containsFace: boolean;
+    containsHand: boolean;
+    containsBodyPart: boolean;
+    containsMarketplacePromo: boolean;
+    containsWatermarkOrOverlay: boolean;
+    checkedAt: string;
+  };
 }
 
 /**

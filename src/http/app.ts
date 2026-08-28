@@ -31,6 +31,7 @@ import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 import { applyEbayCategorySuggestion, buildCatalogListingIntelligence } from '../catalog/listing-intelligence.js';
 import { EbayTaxonomyClient } from '../ebay/taxonomy-client.js';
 import type { EbayReferenceService } from '../ebay/reference-service.js';
+import { isBlockedReferenceImageBytes } from '../ebay/reference-image-policy.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -198,7 +199,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.1' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.2' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -306,6 +307,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       if (!bytes.length || bytes.length > 10 * 1024 * 1024) {
         return reply.code(502).send({ error: { code: 'INVALID_REFERENCE_IMAGE', message: 'reference image size was rejected' } });
       }
+      if (isBlockedReferenceImageBytes(bytes)) {
+        return reply.code(404).send({ error: { code: 'REFERENCE_IMAGE_BLOCKED', message: 'reference image was blocked by visual policy' } });
+      }
       return reply
         .header('cache-control', 'no-store, max-age=0')
         .header('pragma', 'no-cache')
@@ -373,7 +377,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.15.1',
+          version: '0.15.2',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

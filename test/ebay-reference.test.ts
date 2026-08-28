@@ -67,7 +67,23 @@ function ebay165201602251(overrides: Partial<EbayBrowseItem> = {}): EbayBrowseIt
 function candidate(): EbayReferenceCandidate {
   const match = selectExactEbayReference('5455055', catalog5455055(), ebay165201602251(), 3);
   if (!match) throw new Error('expected exact fixture match');
-  return match;
+  return {
+    ...match,
+    images: match.images.map((image) => ({
+      ...image,
+      contentReview: {
+        decision: 'ACCEPT_PART_ONLY',
+        method: 'MANUAL_EXACT_LISTING_REVIEW',
+        containsPerson: false,
+        containsFace: false,
+        containsHand: false,
+        containsBodyPart: false,
+        containsMarketplacePromo: false,
+        containsWatermarkOrOverlay: false,
+        checkedAt: '2026-08-28T07:00:00Z'
+      }
+    }))
+  };
 }
 
 function liveConfig() {
@@ -170,6 +186,22 @@ describe('eBay exact-reference discovery', () => {
     await store.saveEbayReferenceCache(expired);
     const provider: EbayReferenceProvider = { searchExact: vi.fn(async () => { throw new Error('offline'); }) };
     const service = new EbayReferenceService(store, provider, liveConfig(), () => new Date('2026-08-28T07:00:00Z'));
+    expect(await service.lookup('5455055', catalog5455055())).toEqual({
+      status: 'TEMPORARILY_UNAVAILABLE', reference: null, searchSuppressed: false
+    });
+    expect(await store.getEbayReferenceCache('5455055')).toBeUndefined();
+  });
+
+  it('quarantines otherwise exact marketplace images until part-only visual review passes', async () => {
+    const store = new MemoryStore();
+    const unreviewed = selectExactEbayReference('5455055', catalog5455055(), ebay165201602251(), 3);
+    if (!unreviewed) throw new Error('expected exact fixture match');
+    const service = new EbayReferenceService(
+      store,
+      { searchExact: vi.fn(async () => unreviewed) },
+      liveConfig(),
+      () => new Date('2026-08-28T07:00:00Z')
+    );
     expect(await service.lookup('5455055', catalog5455055())).toEqual({
       status: 'TEMPORARILY_UNAVAILABLE', reference: null, searchSuppressed: false
     });
