@@ -3,9 +3,20 @@ import type { EditRequest, EditResult, ImageEditEngine, QaResult, StudioRoute } 
 
 type JsonObject = Record<string, unknown>;
 
-function routeSettings(route: StudioRoute): { model: string; quality: string } {
-  if (route === 'SECONDARY_ECONOMY') return { model: 'gpt-image-1-mini', quality: 'high' };
-  return { model: 'gpt-image-2', quality: route === 'QA_ESCALATION' ? 'medium' : 'high' };
+export interface AiEndpointOptions {
+  baseUrl?: string;
+  authMode?: 'bearer' | 'api-key';
+  reviewModel?: string;
+  premiumImageModel?: string;
+  economyImageModel?: string;
+  supportsBackgroundControl?: boolean;
+}
+
+const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+
+function routeSettings(route: StudioRoute, options: AiEndpointOptions): { model: string; quality: string } {
+  if (route === 'SECONDARY_ECONOMY') return { model: options.economyImageModel ?? 'gpt-image-1-mini', quality: 'high' };
+  return { model: options.premiumImageModel ?? 'gpt-image-2', quality: route === 'QA_ESCALATION' ? 'medium' : 'high' };
 }
 
 async function readJson(response: Response): Promise<JsonObject> {
@@ -52,15 +63,29 @@ export class OpenAiImageEngine implements ImageEditEngine {
 
   constructor(
     private readonly apiKey?: string,
-    private readonly fetcher: typeof fetch = fetch
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly options: AiEndpointOptions = {}
   ) {
     this.available = Boolean(apiKey);
   }
 
+  private url(path: string): string {
+    return `${(this.options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '')}/${path}`;
+  }
+
+  private headers(json = false): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.options.authMode === 'api-key') headers['api-key'] = this.apiKey!;
+    else headers.authorization = `Bearer ${this.apiKey}`;
+    if (json) headers['content-type'] = 'application/json';
+    return headers;
+  }
+
   async edit(input: EditRequest): Promise<EditResult> {
     if (!this.apiKey) throw new Error('OpenAI image processing is not activated');
-    const settings = routeSettings(input.route);
-    const outputFormat = input.background === 'TRANSPARENT' && settings.model === 'gpt-image-2' ? 'png' : 'jpeg';
+    const settings = routeSettings(input.route, this.options);
+    const backgroundControl = this.options.supportsBackgroundControl ?? settings.model === 'gpt-image-2';
+    const outputFormat = input.background === 'TRANSPARENT' && backgroundControl ? 'png' : 'jpeg';
     const form = new FormData();
     form.append('model', settings.model);
     form.append('image', new Blob([Buffer.from(input.source)], { type: input.mediaType }), input.filename);
@@ -69,14 +94,14 @@ export class OpenAiImageEngine implements ImageEditEngine {
     form.append('quality', settings.quality);
     form.append('output_format', outputFormat);
     if (outputFormat === 'jpeg') form.append('output_compression', '94');
-    if (settings.model === 'gpt-image-2') {
+    if (backgroundControl) {
       form.append('background', input.background === 'TRANSPARENT' ? 'transparent' : 'opaque');
     }
 
     const payload = await readJson(
-      await this.fetcher('https://api.openai.com/v1/images/edits', {
+      await this.fetcher(this.url('images/edits'), {
         method: 'POST',
-        headers: { authorization: `Bearer ${this.apiKey}` },
+        headers: this.headers(),
         body: form
       })
     );
@@ -93,11 +118,11 @@ export class OpenAiImageEngine implements ImageEditEngine {
 
   async compare(source: Uint8Array, sourceMediaType: string, candidate: EditResult): Promise<QaResult> {
     if (!this.apiKey) throw new Error('OpenAI image QA is not activated');
-    const model = 'gpt-5.4-mini';
+    const model = this.options.reviewModel ?? 'gpt-5.4-mini';
     const payload = await readJson(
-      await this.fetcher('https://api.openai.com/v1/responses', {
+      await this.fetcher(this.url('responses'), {
         method: 'POST',
-        headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
+        headers: this.headers(true),
         body: JSON.stringify({
           model,
           max_output_tokens: 300,
@@ -134,9 +159,9 @@ export class OpenAiImageEngine implements ImageEditEngine {
 export class DisabledImageEngine implements ImageEditEngine {
   readonly available = false;
   async edit(): Promise<EditResult> {
-    throw new Error('Image Studio is awaiting OpenAI API activation');
+    throw new Error('Image Studio is awaiting AI provider activation');
   }
   async compare(): Promise<QaResult> {
-    throw new Error('Image Studio is awaiting OpenAI API activation');
+    throw new Error('Image Studio is awaiting AI provider activation');
   }
 }

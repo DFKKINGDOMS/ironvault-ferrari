@@ -102,7 +102,7 @@ The community contribution surface is public and rate limited:
 - `GET /v1/community/submissions/:submissionId?token=...` — receipt-protected status; the token is returned only at intake.
 - `GET /v1/community-assets/:fileName` — immutable public derivative, available only after automated screening, human approval, editing, source-comparison QA and Git archival.
 
-Review endpoints under `/internal/community-images/` require the normal PartQuill bearer credential. Approved files do not publish unless `COMMUNITY_GITHUB_TOKEN` is configured with narrowly scoped write access to the configured archive repository; they remain in `READY_FOR_ARCHIVE` and queue recovery retries them. The server-side OpenAI credential is required for automated screening and editing. Originals are never exposed by public endpoints.
+Review endpoints under `/internal/community-images/` require the normal PartQuill bearer credential. Approved files do not publish unless `COMMUNITY_GITHUB_TOKEN` is configured with narrowly scoped write access to the configured archive repository; they remain in `READY_FOR_ARCHIVE` and queue recovery retries them. Automated screening and editing require an explicitly selected `PARTQUILL_AI_PROVIDER`. Azure uses `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, and separate review/image deployment names; PartQuill never falls back from Azure to the separately billed OpenAI API. Originals are never exposed by public endpoints.
 
 The connected ChatGPT proof endpoint is also public:
 

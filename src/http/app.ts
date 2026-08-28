@@ -216,7 +216,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.16.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.16.1' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -423,12 +423,14 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         persistence: config.DATABASE_URL ? 'postgres' : config.PILOT_EPHEMERAL_MODE ? 'ephemeral-memory-pilot' : 'memory',
         imageStudio: {
           mode: config.IMAGE_STUDIO_MODE,
+          provider: config.PARTQUILL_AI_PROVIDER,
           activated: imageStudio?.activated ?? false,
           maxImages: config.IMAGE_STUDIO_MAX_IMAGES,
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         communityImages: {
           enabled: Boolean(communityImages),
+          aiProvider: config.PARTQUILL_AI_PROVIDER,
           maxImages: config.COMMUNITY_IMAGE_MAX_IMAGES,
           automatedReviewActive: communityImages?.activated ?? false,
           gitArchiveConnected: communityImages?.archiveActivated ?? false,
@@ -436,7 +438,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.16.0',
+          version: '0.16.1',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

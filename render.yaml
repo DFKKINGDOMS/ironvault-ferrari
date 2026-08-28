@@ -71,7 +71,17 @@ services:
         value: main
       - key: COMMUNITY_GITHUB_TOKEN
         sync: false
+      - key: PARTQUILL_AI_PROVIDER
+        value: disabled
       - key: OPENAI_API_KEY
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_KEY
+        sync: false
+      - key: AZURE_OPENAI_REVIEW_DEPLOYMENT
+        sync: false
+      - key: AZURE_OPENAI_IMAGE_DEPLOYMENT
         sync: false
       - key: OEM_RESEARCH_MODE
         value: private-pilot

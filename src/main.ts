@@ -38,7 +38,26 @@ if (store instanceof PostgresStore) {
 const ebay = config.EBAY_MODE === 'mock' ? new MockEbayGateway() : new LiveEbayGateway(config);
 const tokenVault = config.TOKEN_ENCRYPTION_KEY ? new TokenVault(config.TOKEN_ENCRYPTION_KEY) : undefined;
 const service = new PartQuillService(store, ebay, config, tokenVault);
-const imageEngine = config.IMAGE_STUDIO_MODE === 'live' ? new OpenAiImageEngine(config.OPENAI_API_KEY) : new DisabledImageEngine();
+const aiKey = config.PARTQUILL_AI_PROVIDER === 'azure'
+  ? config.AZURE_OPENAI_API_KEY
+  : config.PARTQUILL_AI_PROVIDER === 'openai'
+    ? config.OPENAI_API_KEY
+    : undefined;
+const aiOptions = config.PARTQUILL_AI_PROVIDER === 'azure'
+  ? {
+      baseUrl: config.AZURE_OPENAI_ENDPOINT,
+      authMode: 'api-key' as const,
+      reviewModel: config.AZURE_OPENAI_REVIEW_DEPLOYMENT,
+      premiumImageModel: config.AZURE_OPENAI_IMAGE_DEPLOYMENT,
+      economyImageModel: config.AZURE_OPENAI_IMAGE_DEPLOYMENT,
+      supportsBackgroundControl: true
+    }
+  : {};
+const completeAiEngine = Boolean(aiKey && (config.PARTQUILL_AI_PROVIDER !== 'azure'
+  || (config.AZURE_OPENAI_ENDPOINT && config.AZURE_OPENAI_REVIEW_DEPLOYMENT && config.AZURE_OPENAI_IMAGE_DEPLOYMENT)));
+const imageEngine = config.IMAGE_STUDIO_MODE === 'live' && completeAiEngine
+  ? new OpenAiImageEngine(aiKey, fetch, aiOptions)
+  : new DisabledImageEngine();
 const imageStudio = new ImageStudioService(
   new StudioFileStore(config.IMAGE_STUDIO_STORAGE_DIR),
   imageEngine,
@@ -49,8 +68,8 @@ await imageStudio.initialize();
 const communityImages = config.COMMUNITY_IMAGES_ENABLED
   ? new CommunityImageService(
       store,
-      config.OPENAI_API_KEY ? new OpenAiCommunityModerator(config.OPENAI_API_KEY) : new DisabledCommunityModerator(),
-      config.OPENAI_API_KEY ? new OpenAiImageEngine(config.OPENAI_API_KEY) : new DisabledImageEngine(),
+      completeAiEngine ? new OpenAiCommunityModerator(aiKey, fetch, aiOptions) : new DisabledCommunityModerator(),
+      completeAiEngine ? new OpenAiImageEngine(aiKey, fetch, aiOptions) : new DisabledImageEngine(),
       config.COMMUNITY_GITHUB_TOKEN
         ? new GitHubCommunityArchive(
             config.COMMUNITY_GITHUB_REPOSITORY,

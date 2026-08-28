@@ -22,6 +22,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     EBAY_REFERENCE_MAX_IMAGES: 3,
     PUBLIC_BASE_URL: 'http://localhost:3000',
     CORS_ORIGINS: 'http://localhost:5173',
+    PARTQUILL_AI_PROVIDER: 'disabled',
     IMAGE_STUDIO_MODE: 'preview',
     IMAGE_STUDIO_STORAGE_DIR: '.partquill-image-studio-test',
     IMAGE_STUDIO_MAX_IMAGES: 24,

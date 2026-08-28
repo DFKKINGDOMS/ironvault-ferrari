@@ -51,13 +51,32 @@ describe('production configuration fail-closed behavior', () => {
     expect(config.EBAY_REFERENCE_MAX_IMAGES).toBe(3);
   });
 
-  it('refuses live Image Studio without a server-side OpenAI credential', () => {
+  it('refuses live Image Studio without an explicit AI provider', () => {
     expect(() =>
       loadConfig({
         IMAGE_STUDIO_MODE: 'live',
         IMAGE_STUDIO_ACCESS_TOKEN: 'private-studio-token-long-enough'
       })
-    ).toThrow('live Image Studio requires an OpenAI API key');
+    ).toThrow('live Image Studio requires an explicit AI provider');
+  });
+
+  it('requires the complete Azure endpoint and deployment configuration', () => {
+    expect(() => loadConfig({
+      IMAGE_STUDIO_MODE: 'live',
+      IMAGE_STUDIO_ACCESS_TOKEN: 'private-studio-token-long-enough',
+      PARTQUILL_AI_PROVIDER: 'azure'
+    })).toThrow('AZURE_OPENAI_ENDPOINT');
+
+    const config = loadConfig({
+      IMAGE_STUDIO_MODE: 'live',
+      IMAGE_STUDIO_ACCESS_TOKEN: 'private-studio-token-long-enough',
+      PARTQUILL_AI_PROVIDER: 'azure',
+      AZURE_OPENAI_ENDPOINT: 'https://example.openai.azure.com/openai/v1',
+      AZURE_OPENAI_API_KEY: 'azure-test-key',
+      AZURE_OPENAI_REVIEW_DEPLOYMENT: 'partquill-review',
+      AZURE_OPENAI_IMAGE_DEPLOYMENT: 'partquill-image'
+    });
+    expect(config.PARTQUILL_AI_PROVIDER).toBe('azure');
   });
 
   it('permits an explicit fail-closed ephemeral owner preview', () => {

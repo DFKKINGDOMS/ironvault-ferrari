@@ -1,4 +1,5 @@
 import type { CommunityModerationEngine, CommunityModerationResult } from './types.js';
+import type { AiEndpointOptions } from '../image-studio/openai-engine.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -35,16 +36,24 @@ function parseJson(value: string): JsonObject {
 export class OpenAiCommunityModerator implements CommunityModerationEngine {
   readonly available: boolean;
 
-  constructor(private readonly apiKey?: string, private readonly fetcher: typeof fetch = fetch) {
+  constructor(
+    private readonly apiKey?: string,
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly options: Pick<AiEndpointOptions, 'baseUrl' | 'authMode' | 'reviewModel'> = {}
+  ) {
     this.available = Boolean(apiKey);
   }
 
   async review(input: { bytes: Uint8Array; mediaType: string; partNumber: string }): Promise<CommunityModerationResult> {
     if (!this.apiKey) return unavailableReview();
-    const model = 'gpt-5.4-mini';
-    const response = await this.fetcher('https://api.openai.com/v1/responses', {
+    const model = this.options.reviewModel ?? 'gpt-5.4-mini';
+    const baseUrl = (this.options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
+    const auth: Record<string, string> = {};
+    if (this.options.authMode === 'api-key') auth['api-key'] = this.apiKey;
+    else auth.authorization = `Bearer ${this.apiKey}`;
+    const response = await this.fetcher(`${baseUrl}/responses`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
+      headers: { ...auth, 'content-type': 'application/json' },
       body: JSON.stringify({
         model,
         max_output_tokens: 420,
