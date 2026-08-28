@@ -81,6 +81,26 @@ describe('HTTP contract', () => {
     });
   });
 
+  it('serves the downloaded read-only eBay VeRO participant snapshot', async () => {
+    const links = Array.from({ length: 60 }, (_, index) =>
+      '<a href="https://ir.ebaystatic.com/pictures/aw/pics/vero/profile-' + index + '.pdf">Brand ' + index + '</a>'
+    ).join('');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.method).toBe('GET');
+      return new Response('<h2>VeRO participant profiles</h2>' + links, { status: 200 });
+    }));
+    app = await buildApp(harness());
+
+    const response = await app.inject({ method: 'GET', url: '/v1/seller-ui/vero-profiles' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'CURRENT',
+      participantCount: 60,
+      completeness: 'OFFICIAL_PARTICIPANT_PROFILES_ARE_NOT_COMPLETE'
+    });
+  });
+
   it('keeps catalog ingestion hidden behind its dedicated temporary token', async () => {
     const h = harness({ GM_IMPORT_TOKEN: 'test-gm-import-token-that-is-long-enough' });
     app = await buildApp(h);
