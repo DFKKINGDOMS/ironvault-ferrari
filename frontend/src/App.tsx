@@ -573,21 +573,24 @@ function ActiveDraftEditor({
     return <section className="view editor-view"><div className="empty-state"><h2>No active draft</h2><p>Build or select a part first. PartQuill will not reuse fields from a previous item.</p><button className="primary" onClick={() => navigate("instant")}>List a part</button></div></section>;
   }
 
+  const activePreview = preview;
+  const activeFields = fields;
+
   function editField<K extends keyof EditableDraftFields>(key: K, value: EditableDraftFields[K]) {
     setFields((current) => current ? { ...current, [key]: value } : current);
     onMaterialEdit();
   }
 
   function updateFitment(index: number, field: "vehicle" | "qualifier", value: string) {
-    editField("fitment", fields.fitment.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value, state: "SELLER_EDITED" } : row));
+    editField("fitment", activeFields.fitment.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value, state: "SELLER_EDITED" } : row));
   }
 
   function updateAspect(name: string, value: string) {
-    editField("aspects", { ...fields.aspects, [name]: value });
+    editField("aspects", { ...activeFields.aspects, [name]: value });
   }
 
   function removeAspect(name: string) {
-    const next = { ...fields.aspects };
+    const next = { ...activeFields.aspects };
     delete next[name];
     editField("aspects", next);
   }
@@ -595,7 +598,7 @@ function ActiveDraftEditor({
   function renameAspect(name: string, nextName: string) {
     const clean = nextName.trim();
     if (!clean || clean === name) return;
-    const next = { ...fields.aspects };
+    const next = { ...activeFields.aspects };
     const value = next[name] ?? "";
     delete next[name];
     next[clean] = value;
@@ -608,7 +611,7 @@ function ActiveDraftEditor({
       editField("packageProfileId", "");
       return;
     }
-    const itemWeight = Number(fields.itemWeight || 0);
+    const itemWeight = Number(activeFields.itemWeight || 0);
     setFields((current) => current ? {
       ...current,
       packageProfileId: profile[0],
@@ -625,8 +628,8 @@ function ActiveDraftEditor({
   const sku = preview.listing.sku ?? (preview.intent.partNumber || "OEM part number required");
 
   function saveDraft() {
-    const key = "partquill-draft-v2:" + sku + ":" + preview.fingerprint;
-    window.localStorage.setItem(key, JSON.stringify({ sku, fingerprint: preview.fingerprint, fields, title, price, quantity, photos: photos.map(({ id, name, source, publishEligible, rightsState }) => ({ id, name, source, publishEligible, rightsState })) }));
+    const key = "partquill-draft-v2:" + sku + ":" + activePreview.fingerprint;
+    window.localStorage.setItem(key, JSON.stringify({ sku, fingerprint: activePreview.fingerprint, fields: activeFields, title, price, quantity, photos: photos.map(({ id, name, source, publishEligible, rightsState }) => ({ id, name, source, publishEligible, rightsState })) }));
     showNotice("Draft saved under the exact OEM SKU and fingerprint. No other item can inherit these fields.");
   }
 
@@ -692,18 +695,18 @@ function ActiveDraftEditor({
   ];
 
   function applyCompliantTitle() {
-    const years = fields.fitment.map((row) => row.vehicle.match(/\b\d{4}(?:[–-]\d{4})?\b/)?.[0]).find(Boolean) ?? "";
-    const cleanProduct = (fields.productType || preview.identity.productType || "Automotive Part")
+    const years = activeFields.fitment.map((row) => row.vehicle.match(/\b\d{4}(?:[–-]\d{4})?\b/)?.[0]).find(Boolean) ?? "";
+    const cleanProduct = (activeFields.productType || activePreview.identity.productType || "Automotive Part")
       .replace(compatibleBrand ? new RegExp("\\b" + escapedBrand + "\\b", "gi") : /$^/, " ")
       .replace(/\s+/g, " ")
       .trim();
-    const actualBrand = fields.actualBrand.trim();
-    const prefix = fields.authenticity === "GENUINE_BRANDED_ITEM"
+    const actualBrand = activeFields.actualBrand.trim();
+    const prefix = activeFields.authenticity === "GENUINE_BRANDED_ITEM"
       ? (actualBrand || compatibleBrand)
-      : fields.authenticity === "AFTERMARKET_COMPATIBLE" && actualBrand && actualBrand.toLowerCase() !== compatibleBrand.toLowerCase()
+      : activeFields.authenticity === "AFTERMARKET_COMPATIBLE" && actualBrand && actualBrand.toLowerCase() !== compatibleBrand.toLowerCase()
         ? actualBrand
         : "";
-    const compatibility = fields.authenticity === "GENUINE_BRANDED_ITEM" || !compatibleBrand ? "" : "Fits " + compatibleBrand;
+    const compatibility = activeFields.authenticity === "GENUINE_BRANDED_ITEM" || !compatibleBrand ? "" : "Fits " + compatibleBrand;
     setTitle(properCaseTitle([prefix, sku, cleanProduct, compatibility, years].filter(Boolean).join(" ")));
     onMaterialEdit();
     showNotice("The title was rebuilt using the selected genuine-versus-compatible brand relationship.");
