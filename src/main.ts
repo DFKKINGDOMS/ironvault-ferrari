@@ -19,6 +19,7 @@ import { CommunityImageService } from './community/service.js';
 import { DisabledCommunityModerator, OpenAiCommunityModerator } from './community/moderation.js';
 import { DisabledCommunityArchive, GitHubCommunityArchive } from './community/github-archive.js';
 import { ConservativeBackgroundEngine } from './image-studio/local-background-engine.js';
+import { startEbayCategoryTaxonomySync } from './ebay/category-taxonomy-sync.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -127,6 +128,10 @@ const app = await buildApp({
 
 await app.listen({ host: config.HOST, port: config.PORT });
 
+// Read-only eBay Motors taxonomy import and resumable PartQuill category mapping.
+// This uses application-level Taxonomy API reads only; seller/listing writes remain disabled.
+const ebayCategorySync = startEbayCategoryTaxonomySync(config);
+
 const recoverCommunityQueue = async () => {
   if (!communityImages) return;
   for (const row of await communityImages.listReviewQueue(25)) {
@@ -157,6 +162,7 @@ const close = async (): Promise<void> => {
   clearInterval(ebayReferenceCleanup);
   clearInterval(communityRecovery);
   await app.close();
+  await ebayCategorySync?.stop();
   if (store instanceof PostgresStore) await store.close();
 };
 process.once('SIGTERM', () => void close());
