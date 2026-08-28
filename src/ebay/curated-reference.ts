@@ -6,6 +6,7 @@ import {
   type EbayReferenceProvider
 } from './reference-discovery.js';
 import type { EbayReferenceCandidate } from './reference-types.js';
+import { referenceAssetUrl } from './reference-assets.js';
 
 /** Exact public listings reviewed against PartQuill catalog evidence. */
 const reviewedListings: Record<string, EbayBrowseItem> = {
@@ -39,7 +40,7 @@ export class CuratedEbayReferenceProvider implements EbayReferenceProvider {
       images: candidate.images.map((image, index) => ({
         ...image,
         alt: `Permanent archived reference ${index + 1} for OEM part 5455055`,
-        url: `/v1/reference-assets/5455055${index === 0 ? '' : `_${index}`}.png`,
+        url: referenceAssetUrl(exactPart, index),
         contentReview: {
           decision: 'ACCEPT_PART_ONLY',
           method: 'MANUAL_EXACT_LISTING_REVIEW',
