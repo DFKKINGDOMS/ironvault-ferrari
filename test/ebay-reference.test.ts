@@ -138,6 +138,29 @@ describe('eBay exact-reference discovery', () => {
     expect(first.reference?.listingPayloadEligible).toBe(false);
   });
 
+  it('purges a fresh cache record if any image lacks the required clean visual review', async () => {
+    const store = new MemoryStore();
+    const savedAt = new Date('2026-08-28T07:00:00Z');
+    const unsafe = candidate();
+    await store.saveEbayReferenceCache({
+      ...unsafe,
+      partNumber: '5455055',
+      status: 'MATCHED_LIVE_REFERENCE',
+      source: 'EBAY_BROWSE_API',
+      rightsState: 'EBAY_PUBLIC_REFERENCE_ONLY',
+      images: unsafe.images.map((image, index) => index === 0 ? { ...image, contentReview: undefined } : image),
+      checkedAt: savedAt.toISOString(),
+      expiresAt: new Date(savedAt.getTime() + 6 * 3_600_000).toISOString(),
+      retryAfter: null,
+      archiveAllowed: false,
+      listingPayloadEligible: false
+    });
+    const searchExact = vi.fn(async () => undefined);
+    const service = new EbayReferenceService(store, { searchExact }, liveConfig(), () => savedAt);
+    expect(await service.lookup('5455055', catalog5455055())).toMatchObject({ status: 'NO_EXACT_MATCH' });
+    expect(searchExact).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a reviewed 5455055 live reference even before global Browse credentials are configured', async () => {
     const store = new MemoryStore();
     const service = new EbayReferenceService(

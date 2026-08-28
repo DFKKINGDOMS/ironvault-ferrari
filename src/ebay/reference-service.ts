@@ -42,7 +42,13 @@ export class EbayReferenceService {
     if (cached?.status === 'RIGHTS_CLEARED_ARCHIVE') {
       return { status: cached.status, reference: cached, searchSuppressed: true };
     }
-    if (cached?.status === 'MATCHED_LIVE_REFERENCE' && cached.expiresAt && Date.parse(cached.expiresAt) > at.getTime()) {
+    if (
+      cached?.status === 'MATCHED_LIVE_REFERENCE'
+      && cached.expiresAt
+      && Date.parse(cached.expiresAt) > at.getTime()
+      && cached.images.length > 0
+      && cached.images.every(acceptedReferenceImage)
+    ) {
       return { status: cached.status, reference: cached, searchSuppressed: true };
     }
     if (cached?.status === 'NO_EXACT_MATCH' && cached.retryAfter && Date.parse(cached.retryAfter) > at.getTime()) {
