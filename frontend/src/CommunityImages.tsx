@@ -101,7 +101,7 @@ export function CommunityImages({ maxImages, enabled, automatedReviewActive, edi
 
   return <section className="view community-view">
     <div className="community-hero">
-      <div><span>PARTQUILL COMMUNITY IMAGE WIKI</span><h1>Help preserve a part<br/>before its photos disappear.</h1><p>Contribute owner-authorized part photographs. PartQuill reviews them, checks each exact part number, performs the protected ChatGPT Ferrari-style white-background edit, and preserves approved references permanently by SKU.</p></div>
+      <div><span>PARTQUILL COMMUNITY IMAGE WIKI</span><h1>Help preserve a part<br/>before its photos disappear.</h1><p>Contribute owner-authorized part photographs. PartQuill reviews them, checks each exact part number, performs the protected PartQuill white-background edit, and preserves approved references permanently by SKU.</p></div>
       <aside><strong>FREE</strong><span>Community archive</span><small>Up to {maxImages} images per contribution</small></aside>
     </div>
 

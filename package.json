@@ -1,6 +1,6 @@
 {
   "name": "partquill-api",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "private": true,
   "description": "Evidence-gated eBay Motors listing pilot API for PartQuill",
   "type": "module",

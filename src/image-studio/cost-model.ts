@@ -1,6 +1,6 @@
 import type { StudioQuote } from './types.js';
 
-const PRICING_VERSION = 'adaptive-ferrari-qa-2026-08-26';
+const PRICING_VERSION = 'adaptive-partquill-qa-2026-08-28';
 
 /*
  * Conservative operating estimates, not a representation of an OpenAI invoice.

@@ -13,9 +13,36 @@ interface CategorySuggestionResponse {
   }>;
 }
 
+export interface EbayItemConditionOption {
+  conditionId: string;
+  description: string;
+  helpText: string;
+  usage: 'REQUIRED' | 'OPTIONAL' | 'RESTRICTED' | string;
+}
+
+export interface EbayItemConditionPolicy {
+  categoryId: string;
+  itemConditionRequired: boolean;
+  conditions: EbayItemConditionOption[];
+}
+
+interface ItemConditionPolicyResponse {
+  itemConditionPolicies?: Array<{
+    categoryId?: string;
+    itemConditionRequired?: boolean;
+    itemConditions?: Array<{
+      conditionId?: string;
+      conditionDescription?: string;
+      conditionHelpText?: string;
+      usage?: string;
+    }>;
+  }>;
+}
+
 export class EbayTaxonomyClient {
   private token: { value: string; expiresAt: number } | undefined;
   private treeId: string | undefined;
+  private readonly conditionPolicies = new Map<string, EbayItemConditionPolicy>();
 
   constructor(private readonly config: AppConfig) {}
 
@@ -90,5 +117,31 @@ export class EbayTaxonomyClient {
       categoryName,
       categoryPath: [...ancestors, categoryName].join(' › ')
     };
+  }
+
+  async getItemConditionPolicy(categoryId: string): Promise<EbayItemConditionPolicy | undefined> {
+    const cached = this.conditionPolicies.get(categoryId);
+    if (cached) return cached;
+    const filter = `categoryIds:{${categoryId}}`;
+    const result = await this.request(
+      `/sell/metadata/v1/marketplace/EBAY_US/get_item_condition_policies?filter=${encodeURIComponent(filter)}`
+    ) as ItemConditionPolicyResponse;
+    const policy = result.itemConditionPolicies?.find((row) => row.categoryId === categoryId)
+      ?? result.itemConditionPolicies?.[0];
+    if (!policy) return undefined;
+    const normalized: EbayItemConditionPolicy = {
+      categoryId: policy.categoryId ?? categoryId,
+      itemConditionRequired: policy.itemConditionRequired ?? true,
+      conditions: (policy.itemConditions ?? [])
+        .filter((condition) => Boolean(condition.conditionId && condition.conditionDescription))
+        .map((condition) => ({
+          conditionId: condition.conditionId!,
+          description: condition.conditionDescription!,
+          helpText: condition.conditionHelpText ?? '',
+          usage: condition.usage ?? 'OPTIONAL'
+        }))
+    };
+    this.conditionPolicies.set(categoryId, normalized);
+    return normalized;
   }
 }

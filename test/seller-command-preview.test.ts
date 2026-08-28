@@ -355,22 +355,21 @@ describe('one-command seller preview', () => {
     });
   });
 
-  it('preserves quantity zero and only accepts price zero as an explicit giveaway', () => {
+  it('preserves quantity zero while enforcing the $0.99 eBay Motors floor', () => {
     const outOfStock = parseListingCommand('List part 5455055 for $49.99 qty 0');
     expect(outOfStock).toMatchObject({ quantity: 0, price: '49.99', saleMode: 'FIXED_PRICE' });
 
-    const invalidZero = buildSellerCommandPreview('List part 5455055 for $0 qty 0', gm5455055);
-    expect(invalidZero.issues).toContainEqual(expect.objectContaining({ code: 'ZERO_PRICE_REQUIRES_GIVEAWAY' }));
+    const zero = buildSellerCommandPreview('List part 5455055 for $0 qty 0', gm5455055);
+    expect(zero.intent).toMatchObject({ quantity: 0, price: '0.99', saleMode: 'FIXED_PRICE' });
 
-    const giveaway = buildSellerCommandPreview('Give away part 5455055 qty 0', gm5455055);
-    expect(giveaway.intent).toMatchObject({ quantity: 0, price: '0.00', saleMode: 'GIVEAWAY' });
-    expect(giveaway.issues).toContainEqual(expect.objectContaining({ code: 'GIVEAWAY_NOT_EBAY_ELIGIBLE' }));
-    expect(giveaway.issues.map((issue) => issue.code)).not.toContain('ZERO_PRICE_REQUIRES_GIVEAWAY');
+    const omitted = buildSellerCommandPreview('Give away part 5455055 qty 0', gm5455055);
+    expect(omitted.intent).toMatchObject({ quantity: 0, price: '0.99', saleMode: 'FIXED_PRICE' });
   });
 
-  it('rejects negative and over-precision prices instead of converting partial values', () => {
-    expect(parseListingCommand('List part 5455055 for $-5')).toMatchObject({ price: null, saleMode: 'FIXED_PRICE' });
-    expect(parseListingCommand('List part 5455055 for $12.345')).toMatchObject({ price: null, saleMode: 'FIXED_PRICE' });
+  it('defaults malformed or under-floor prices to $0.99', () => {
+    expect(parseListingCommand('List part 5455055 for $-5')).toMatchObject({ price: '0.99', saleMode: 'FIXED_PRICE' });
+    expect(parseListingCommand('List part 5455055 for $12.345')).toMatchObject({ price: '0.99', saleMode: 'FIXED_PRICE' });
+    expect(parseListingCommand('List part 5455055')).toMatchObject({ price: '0.99', saleMode: 'FIXED_PRICE' });
   });
 
   it('shows VIN recovery only when every supported year is 1989 or newer', () => {

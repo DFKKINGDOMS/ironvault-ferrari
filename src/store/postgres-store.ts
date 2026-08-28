@@ -15,7 +15,7 @@ import type {
   SellerAcknowledgement,
   StoredImage
 } from '../domain/types.js';
-import type { Store } from './store.js';
+import type { EbayLeafCategory, Store } from './store.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunityImageRecord, CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
@@ -43,6 +43,32 @@ export class PostgresStore implements Store {
 
   async ping(): Promise<void> {
     await this.pool.query('SELECT 1');
+  }
+
+  async listEbayLeafCategories(query = '', limit = 2_000): Promise<EbayLeafCategory[]> {
+    const search = query.trim();
+    const result = await this.pool.query<{
+      category_id: string;
+      category_name: string;
+      category_path: string[];
+    }>(
+      `SELECT category_id,category_name,category_path
+       FROM partquill.ebay_categories
+       WHERE marketplace_id='EBAY_US'
+         AND root_category_id='6028'
+         AND active=true
+         AND leaf_category=true
+         AND ($1='' OR category_id=$1 OR category_name ILIKE '%' || $1 || '%'
+           OR array_to_string(category_path,' › ') ILIKE '%' || $1 || '%')
+       ORDER BY category_path
+       LIMIT $2`,
+      [search, Math.min(Math.max(limit, 1), 2_500)]
+    );
+    return result.rows.map((row) => ({
+      categoryId: row.category_id,
+      categoryName: row.category_name,
+      categoryPath: row.category_path.join(' › ')
+    }));
   }
 
   async saveCommunitySubmission(record: CommunitySubmissionRecord): Promise<void> {

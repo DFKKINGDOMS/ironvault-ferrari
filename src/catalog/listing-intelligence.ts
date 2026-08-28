@@ -69,7 +69,7 @@ export interface IronVaultPackageProfile {
 }
 
 /**
- * The seller's saved Shopify package ladder, shared with the Deere workflow.
+ * The seller's saved deterministic package ladder.
  * The last value is empty-carton weight, never product capacity.
  */
 export const IRONVAULT_PACKAGE_LADDER: readonly IronVaultPackageProfile[] = [
@@ -121,7 +121,7 @@ export function selectSmallestIronVaultPackage(
 const rules: IntelligenceRule[] = [
   {
     id: 'small-hardware',
-    profileLabel: 'Ferrari/Deere small-hardware estimate',
+    profileLabel: 'Small-hardware estimate',
     pattern: /\b(?:circlip|retaining\s*ring|snap\s*ring|washer|bolt|screw|dowel|knob)\b/i,
     categoryName: 'Other Engine Parts',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Other Engine Parts`,
@@ -133,7 +133,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'exhaust-silencer',
-    profileLabel: 'Ferrari exhaust-silencer estimate',
+    profileLabel: 'Exhaust-silencer estimate',
     pattern: /\b(?:main\s*silencer|muffler)\b/i,
     categoryName: 'Mufflers & Resonators',
     categoryPath: `${motorsRoot} › Exhaust & Emission Systems › Mufflers & Resonators`,
@@ -145,7 +145,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'exhaust-manifold',
-    profileLabel: 'Ferrari exhaust-manifold estimate',
+    profileLabel: 'Exhaust-manifold estimate',
     pattern: /\b(?:front|rear|exhaust)\s*manifold\b/i,
     categoryName: 'Exhaust Manifolds & Headers',
     categoryPath: `${motorsRoot} › Exhaust & Emission Systems › Manifolds & Headers`,
@@ -157,7 +157,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'flywheel',
-    profileLabel: 'Ferrari flywheel estimate',
+    profileLabel: 'Flywheel estimate',
     pattern: /\bflywheel\b/i,
     categoryName: 'Flywheels & Flexplates',
     categoryPath: `${motorsRoot} › Transmission & Drivetrain › Flywheels & Flexplates`,
@@ -169,7 +169,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'connecting-rod',
-    profileLabel: 'Ferrari connecting-rod estimate',
+    profileLabel: 'Connecting-rod estimate',
     pattern: /\b(?:connecting\s*rod|con\s*rod)\b/i,
     categoryName: 'Connecting Rods & Parts',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Connecting Rods & Parts`,
@@ -181,7 +181,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'pulley-gear',
-    profileLabel: 'Ferrari pulley/gear estimate',
+    profileLabel: 'Pulley/gear estimate',
     pattern: /\b(?:damper\s*pulley|pulley|timing\s*gear)\b/i,
     categoryName: 'Pulleys & Tensioners',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Pulleys & Tensioners`,
@@ -193,7 +193,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'timing-chain',
-    profileLabel: 'Ferrari timing-chain estimate',
+    profileLabel: 'Timing-chain estimate',
     pattern: /\b(?:timing\s*)?chain\b/i,
     categoryName: 'Timing Chains',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Timing Components & Kits`,
@@ -205,7 +205,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'engine-valve',
-    profileLabel: 'Ferrari engine-valve estimate',
+    profileLabel: 'Engine-valve estimate',
     pattern: /\b(?:inlet|intake|exhaust)?\s*valve\b/i,
     categoryName: 'Valves',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Valves`,
@@ -217,7 +217,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'piston-pin',
-    profileLabel: 'Ferrari piston-pin estimate',
+    profileLabel: 'Piston-pin estimate',
     pattern: /\b(?:gudgeon|piston)\s*pin\b/i,
     categoryName: 'Pistons, Rings & Rods',
     categoryPath: `${motorsRoot} › Engines & Engine Parts › Pistons, Rings & Rods`,
@@ -229,7 +229,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'heat-shield',
-    profileLabel: 'Ferrari heat-shield estimate',
+    profileLabel: 'Heat-shield estimate',
     pattern: /\bheat\s*shield\b/i,
     categoryName: 'Heat Shields',
     categoryPath: `${motorsRoot} › Exhaust & Emission Systems › Heat Shields`,
@@ -387,7 +387,7 @@ const rules: IntelligenceRule[] = [
   },
   {
     id: 'spacer-plate-bracket',
-    profileLabel: 'Ferrari fabricated-part estimate',
+    profileLabel: 'Fabricated-part estimate',
     pattern: /\b(?:spacer|plate|bracket|support)\b/i,
     categoryName: 'Brackets & Hardware',
     categoryPath: `${motorsRoot} › Other Parts & Accessories`,

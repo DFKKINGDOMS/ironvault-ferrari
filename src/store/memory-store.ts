@@ -8,7 +8,7 @@ import type {
   SellerAcknowledgement,
   StoredImage
 } from '../domain/types.js';
-import type { Store } from './store.js';
+import type { EbayLeafCategory, Store } from './store.js';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
@@ -34,6 +34,18 @@ export class MemoryStore implements Store {
   private readonly communitySubmissions = new Map<string, CommunitySubmissionRecord>();
   private readonly communityImages = new Map<string, StoredCommunityImage>();
   private gmCatalogComplete = false;
+
+  async listEbayLeafCategories(query = '', limit = 2_000): Promise<EbayLeafCategory[]> {
+    const rows: EbayLeafCategory[] = [
+      { categoryId: '174021', categoryName: 'Brake Boosters', categoryPath: 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories › Brakes & Brake Parts › Brake Boosters' },
+      { categoryId: '9886', categoryName: 'Other Car & Truck Parts & Accessories', categoryPath: 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories › Other Car & Truck Parts & Accessories' }
+    ];
+    const needle = query.trim().toLowerCase();
+    return rows
+      .filter((row) => !needle || row.categoryId === needle || `${row.categoryName} ${row.categoryPath}`.toLowerCase().includes(needle))
+      .slice(0, Math.min(Math.max(limit, 1), 2_500))
+      .map(clone);
+  }
 
   async saveCommunitySubmission(record: CommunitySubmissionRecord): Promise<void> {
     this.communitySubmissions.set(record.id, clone(record));

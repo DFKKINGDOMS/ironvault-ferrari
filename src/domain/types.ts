@@ -45,7 +45,9 @@ export interface ListingPayload {
   title: string;
   description: string;
   condition: 'NEW' | 'USED' | 'REMANUFACTURED' | 'FOR_PARTS_OR_NOT_WORKING';
+  conditionId?: string;
   categoryId: string;
+  secondaryCategoryId?: string;
   brand?: string;
   mpn?: string;
   gtin?: string;

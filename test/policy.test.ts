@@ -31,15 +31,15 @@ describe('eBay-first launch policy', () => {
     expect(item.exceptions.map((row) => row.code)).not.toContain('POSITIVE_QUANTITY_REQUIRED');
   });
 
-  it('holds a zero fixed price but preserves an explicit giveaway draft', async () => {
+  it('enforces the eBay Motors $0.99 floor and blocks legacy giveaway mode', async () => {
     const fixed = await createReadyItem(harness().service, { price: { currency: 'USD', value: '0.00' } });
-    expect(fixed.exceptions.map((row) => row.code)).toContain('POSITIVE_PRICE_REQUIRED');
+    expect(fixed.exceptions.map((row) => row.code)).toContain('EBAY_MOTORS_MINIMUM_PRICE_REQUIRED');
 
     const giveaway = await createReadyItem(harness().service, {
-      price: { currency: 'USD', value: '0.00' },
+      price: { currency: 'USD', value: '0.99' },
       saleMode: 'GIVEAWAY'
     });
-    expect(giveaway.exceptions.map((row) => row.code)).not.toContain('POSITIVE_PRICE_REQUIRED');
+    expect(giveaway.exceptions.map((row) => row.code)).not.toContain('EBAY_MOTORS_MINIMUM_PRICE_REQUIRED');
     expect(giveaway.exceptions.map((row) => row.code)).toContain('GIVEAWAY_CHANNEL_HOLD');
   });
 
@@ -52,6 +52,14 @@ describe('eBay-first launch policy', () => {
       code: 'REQUIRED_EBAY_ASPECTS_MISSING',
       field: 'aspects'
     }));
+  });
+
+  it('holds missing exact condition IDs and secondary categories on the Inventory API route', async () => {
+    const missingCondition = await createReadyItem(harness().service, { conditionId: undefined });
+    expect(missingCondition.exceptions.map((row) => row.code)).toContain('EBAY_CATEGORY_CONDITION_ID_REQUIRED');
+
+    const secondary = await createReadyItem(harness().service, { secondaryCategoryId: '9886' });
+    expect(secondary.exceptions.map((row) => row.code)).toContain('SECONDARY_CATEGORY_TRADING_API_REQUIRED');
   });
 
   it('blocks safety-critical keywords in the pilot', async () => {
@@ -78,6 +86,12 @@ describe('eBay-first launch policy', () => {
     const payload = validPayload({ title: 'x'.repeat(81) });
     const { listingPayloadSchema } = await import('../src/domain/schemas.js');
     expect(() => listingPayloadSchema.parse(payload)).toThrow();
+  });
+
+  it('rejects under-floor prices and giveaway mode at the API schema boundary', async () => {
+    const { listingPayloadSchema } = await import('../src/domain/schemas.js');
+    expect(() => listingPayloadSchema.parse(validPayload({ price: { currency: 'USD', value: '0.98' } }))).toThrow();
+    expect(() => listingPayloadSchema.parse(validPayload({ saleMode: 'GIVEAWAY' }))).toThrow();
   });
 
   it('blocks an append-only conflicting evidence record even when the payload itself is unchanged', async () => {
