@@ -364,7 +364,7 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
     viewUrl: `/v1/gm-catalog/pages/${application.sourcePageId}/image`,
     imageRef: application.imageRef,
     imageBlobKey: application.imageBlobKey,
-    callout: null,
+    callout: catalog.partNumber,
     confidence: application.confidence,
     exactPartDepiction: true,
     primary: catalog.diagrams.length === 0 && index === 0,
@@ -740,7 +740,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.14.1',
+    version: '0.14.2',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {

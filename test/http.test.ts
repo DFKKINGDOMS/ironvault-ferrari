@@ -59,7 +59,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.14.1',
+      version: '0.14.2',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       safeguards: { unknownCatalogClaimsHeld: true, sellerPhotoRequired: true, dualApproval: true }
@@ -102,6 +102,15 @@ describe('HTTP contract', () => {
       partNumber: '5455055'
     });
     expect(await h.store.getGmCatalogStatus()).toMatchObject({ status: 'completed', availableParts: 1 });
+  });
+
+  it('serves recovered first-party GM catalog scans from PartQuill storage', async () => {
+    const h = harness();
+    app = await buildApp(h);
+    const scan = await app.inject({ method: 'GET', url: '/v1/gm-catalog/pages/6761/image' });
+    expect(scan.statusCode).toBe(200);
+    expect(scan.headers['content-type']).toContain('image/png');
+    expect(scan.rawPayload.byteLength).toBe(125_382);
   });
 
   it('creates a held draft and exposes an exception-first queue', async () => {

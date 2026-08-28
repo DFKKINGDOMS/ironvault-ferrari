@@ -242,16 +242,23 @@ describe('one-command seller preview', () => {
       state: 'CATALOG_STATED',
       brand: 'Oldsmobile',
       manufacturerPartNumber: '5455055',
-      productType: 'Moraine Power Brake Overhaul Kit'
+      productType: 'Moraine Vacuum Cylinder Repair Kit'
     });
     expect(preview.listing).toMatchObject({
       sku: '5455055',
-      title: 'Oldsmobile 5455055 Moraine Power Brake Overhaul Kit 1955–1956'
+      title: 'Oldsmobile 5455055 Moraine Vacuum Cylinder Repair Kit 1955–1956'
     });
     expect(preview.fitment.applications).toEqual([
       expect.objectContaining({ vehicle: '1955–1956 Oldsmobile Moraine power-brake equipped vehicles' })
     ]);
-    expect(preview.media.catalogReferences).toContainEqual(expect.objectContaining({ pageId: 6761, primary: true }));
+    expect(preview.media.catalogReferences).toContainEqual(expect.objectContaining({
+      pageId: 6761,
+      primary: true,
+      callout: '5455055',
+      imageRef: 'GM6761-FULL',
+      imageBlobKey: 'gm-scans/pages/006761/full_page.png',
+      evidenceBox: expect.objectContaining({ left: 1737, top: 718, width: 144, height: 33 })
+    }));
   });
 
   it('rejects every catalog-derived field when the returned OEM key differs', () => {

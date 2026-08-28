@@ -51,6 +51,7 @@ function curatedApplication(input: {
   claimId: number;
   partName: string;
   description: string;
+  componentFamily?: string;
   catalogGroup: string;
   supplier: string;
   applicationText: string;
@@ -58,7 +59,11 @@ function curatedApplication(input: {
   yearEnd: number;
   modelScope: string;
   sourcePageId: number;
+  evidenceBox: Record<string, unknown>;
+  evidenceContext?: string;
+  layoutLine?: string;
 }): GmCatalogApplication {
+  const pageFolder = String(input.sourcePageId).padStart(6, '0');
   return {
     claimId: input.claimId,
     manufacturer: 'General Motors',
@@ -68,7 +73,7 @@ function curatedApplication(input: {
     partName: input.partName,
     description: input.description,
     groupHeading: 'Power Brake Parts',
-    componentFamily: 'Power Brake Repair Kit',
+    componentFamily: input.componentFamily ?? 'Power Brake Repair Kit',
     supplier: input.supplier,
     applicationText: input.applicationText,
     yearStart: input.yearStart,
@@ -80,11 +85,11 @@ function curatedApplication(input: {
     quantity: '1',
     sourcePageId: input.sourcePageId,
     sourceUrl: null,
-    imageRef: null,
-    imageBlobKey: null,
-    evidenceBox: null,
-    evidenceContext: input.applicationText,
-    layoutLine: input.applicationText,
+    imageRef: `GM${input.sourcePageId}-FULL`,
+    imageBlobKey: `gm-scans/pages/${pageFolder}/full_page.png`,
+    evidenceBox: input.evidenceBox,
+    evidenceContext: input.evidenceContext ?? input.applicationText,
+    layoutLine: input.layoutLine ?? input.applicationText,
     crossReference: null,
     relationMethod: 'curated_catalog_table',
     confidence: 0.97,
@@ -118,25 +123,46 @@ const catalogCurations: Readonly<Record<string, CatalogCuration>> = {
       yearStart: 1955,
       yearEnd: 1957,
       modelScope: 'Moraine power-brake equipped vehicles',
-      sourcePageId: 2153
+      sourcePageId: 2153,
+      evidenceBox: {
+        left: 1684,
+        top: 451,
+        width: 125,
+        height: 28,
+        image_width: 2550,
+        image_height: 3300
+      },
+      evidenceContext: '1955 through 1957 W/P.B. (Moraine) 1 5455054 (4.898)',
+      layoutLine: '1955 through 1957 W/P.B. (Moraine) 1 5455054 (4.898)'
     })]
   },
   '5455055': {
     divisions: ['Oldsmobile'],
-    productType: 'Moraine Power Brake Overhaul Kit',
-    description: 'Moraine Power Brake Overhaul Kit',
+    productType: 'Moraine Vacuum Cylinder Repair Kit',
+    description: 'Moraine Vacuum Cylinder Repair Kit',
     catalogGroup: '4.658',
     applications: [curatedApplication({
       claimId: -5455055,
-      partName: 'Power Brake Overhaul Kit',
-      description: 'Moraine Power Brake Overhaul Kit',
+      partName: 'Vacuum Cylinder Repair Kit',
+      description: 'Moraine Vacuum Cylinder Repair Kit',
+      componentFamily: 'Power Brake Vacuum Cylinder Repair Kit',
       catalogGroup: '4.658',
       supplier: 'Moraine',
       applicationText: '1955 and 1956 Oldsmobile with Moraine power brakes',
       yearStart: 1955,
       yearEnd: 1956,
       modelScope: 'Moraine power-brake equipped vehicles',
-      sourcePageId: 6761
+      sourcePageId: 6761,
+      evidenceBox: {
+        left: 1737,
+        top: 718,
+        width: 144,
+        height: 33,
+        image_width: 2550,
+        image_height: 3300
+      },
+      evidenceContext: 'Oldsmobile 1955: 5455055; Oldsmobile 1956: 5455055 — Moraine vacuum-cylinder repair kit column',
+      layoutLine: 'OLDSMOBILE 1955 567095 5455055 567094 5455054; 1956 567095 5455055 567094 5455054'
     })]
   }
 };
@@ -184,7 +210,7 @@ export function normalizeGmCatalogPart(
       ? {
           ...catalog.rollup,
           representativePageId: curation.applications[0]?.sourcePageId ?? catalog.rollup.representativePageId,
-          representativeImageRef: null,
+          representativeImageRef: curation.applications[0]?.imageRef ?? null,
           bestLayoutConfidence: Math.max(catalog.rollup.bestLayoutConfidence ?? 0, 0.97)
         }
       : catalog.rollup
