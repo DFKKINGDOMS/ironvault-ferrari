@@ -108,15 +108,122 @@ class ReadOnlyEbayCategoryTreeClient {
     return body ? JSON.parse(body) : {};
   }
 
+  private async shoppingCategoryInfo(categoryId: string): Promise<{
+    version?: string;
+    categories: Array<{
+      CategoryID?: string;
+      CategoryName?: string;
+      CategoryParentID?: string;
+      CategoryLevel?: number | string;
+      LeafCategory?: boolean | string;
+    }>;
+  }> {
+    if (!this.config.EBAY_CLIENT_ID) throw new Error('eBay application ID is not configured');
+    const params = new URLSearchParams({
+      callname: 'GetCategoryInfo',
+      responseencoding: 'JSON',
+      appid: this.config.EBAY_CLIENT_ID,
+      siteid: '0',
+      version: '1193',
+      CategoryID: categoryId,
+      IncludeSelector: 'ChildCategories'
+    });
+    const response = await fetch(`https://open.api.ebay.com/shopping?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(20_000)
+    });
+    const body = await response.text();
+    if (!response.ok) throw new Error(`eBay Shopping category API failed (${response.status})`);
+    const parsed = JSON.parse(body) as {
+      Ack?: string;
+      Version?: string;
+      Errors?: Array<{ LongMessage?: string; ShortMessage?: string }>;
+      CategoryArray?: { Category?: unknown };
+    };
+    if (!['Success', 'Warning'].includes(String(parsed.Ack ?? ''))) {
+      const detail = parsed.Errors?.[0]?.LongMessage ?? parsed.Errors?.[0]?.ShortMessage ?? 'unknown response';
+      throw new Error(`eBay Shopping category API rejected request: ${detail}`);
+    }
+    const raw = parsed.CategoryArray?.Category;
+    const categories = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    return { version: parsed.Version, categories };
+  }
+
+  private async shoppingSubtree(): Promise<CategorySubtreeResponse> {
+    const nodes = new Map<string, CategoryTreeNode>();
+    const parents = new Map<string, string | null>();
+    const queue = [MOTORS_ROOT_CATEGORY_ID];
+    const visited = new Set<string>();
+    let version = 'shopping-current';
+
+    while (queue.length) {
+      const categoryId = queue.shift()!;
+      if (visited.has(categoryId)) continue;
+      visited.add(categoryId);
+      const result = await this.shoppingCategoryInfo(categoryId);
+      version = result.version ?? version;
+      for (const row of result.categories) {
+        const id = String(row.CategoryID ?? '').trim();
+        const name = String(row.CategoryName ?? '').trim();
+        if (!id || !name) continue;
+        const leaf = String(row.LeafCategory ?? '').toLowerCase() === 'true';
+        const level = Number(row.CategoryLevel ?? 0);
+        const parent = id === MOTORS_ROOT_CATEGORY_ID
+          ? null
+          : String(row.CategoryParentID ?? categoryId).trim() || categoryId;
+        const existing = nodes.get(id);
+        nodes.set(id, {
+          category: { categoryId: id, categoryName: name },
+          categoryTreeNodeLevel: Number.isFinite(level) ? level : 0,
+          leafCategoryTreeNode: leaf,
+          childCategoryTreeNodes: existing?.childCategoryTreeNodes ?? []
+        });
+        parents.set(id, parent);
+        if (parent === categoryId && !leaf && id !== categoryId && !visited.has(id)) queue.push(id);
+      }
+      for (const row of result.categories) {
+        const id = String(row.CategoryID ?? '').trim();
+        const parent = String(row.CategoryParentID ?? '').trim();
+        const leaf = String(row.LeafCategory ?? '').toLowerCase() === 'true';
+        if (id && id !== categoryId && parent === categoryId && !leaf && !visited.has(id)) queue.push(id);
+      }
+    }
+
+    for (const [id, parentId] of parents) {
+      if (!parentId || id === MOTORS_ROOT_CATEGORY_ID) continue;
+      const parent = nodes.get(parentId);
+      const child = nodes.get(id);
+      if (parent && child && !parent.childCategoryTreeNodes?.some((node) => node.category?.categoryId === id)) {
+        (parent.childCategoryTreeNodes ??= []).push(child);
+      }
+    }
+    const root = nodes.get(MOTORS_ROOT_CATEGORY_ID);
+    if (!root) throw new Error('eBay Shopping API did not return the Motors root category');
+    return {
+      categoryTreeId: '0',
+      categoryTreeVersion: version,
+      categorySubtreeNode: root
+    };
+  }
+
   async subtree(): Promise<CategorySubtreeResponse> {
-    const tree = await this.get(
-      `/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`
-    ) as { categoryTreeId?: string };
-    if (!tree.categoryTreeId) throw new Error('eBay category tree response was incomplete');
-    return this.get(
-      `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(tree.categoryTreeId)}` +
-      `/get_category_subtree?category_id=${MOTORS_ROOT_CATEGORY_ID}`
-    ) as Promise<CategorySubtreeResponse>;
+    try {
+      const tree = await this.get(
+        `/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`
+      ) as { categoryTreeId?: string };
+      if (!tree.categoryTreeId) throw new Error('eBay category tree response was incomplete');
+      return await this.get(
+        `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(tree.categoryTreeId)}` +
+        `/get_category_subtree?category_id=${MOTORS_ROOT_CATEGORY_ID}`
+      ) as CategorySubtreeResponse;
+    } catch (error) {
+      console.warn('PARTQUILL_EBAY_TAXONOMY_OAUTH_FALLBACK', JSON.stringify({
+        reason: error instanceof Error ? error.message : 'unknown',
+        fallback: 'SHOPPING_API_APP_ID_ONLY',
+        sellerTokenUsed: false
+      }));
+      return this.shoppingSubtree();
+    }
   }
 }
 
@@ -288,11 +395,33 @@ export function startEbayCategoryTaxonomySync(config: AppConfig): EbayCategorySy
         try {
           suggestion = await suggestionClient.suggestCategory(query);
         } catch (error) {
-          console.warn('PARTQUILL_EBAY_CATEGORY_SUGGESTION_RETRY', JSON.stringify({
-            partNumber: row.part_number,
-            error: error instanceof Error ? error.message : 'unknown'
-          }));
-          break;
+          const candidateName = intelligence?.category.categoryName?.trim();
+          if (candidateName) {
+            const local = await pool.query<{category_id: string; category_name: string; category_path: string[]}>(
+              `SELECT category_id,category_name,category_path
+               FROM partquill.ebay_categories
+               WHERE marketplace_id=$1 AND active=true
+                 AND lower(category_name)=lower($2)
+               ORDER BY leaf_category DESC,array_length(category_path,1) DESC
+               LIMIT 1`,
+              [MARKETPLACE_ID, candidateName]
+            );
+            const matched = local.rows[0];
+            if (matched) {
+              suggestion = {
+                categoryId: matched.category_id,
+                categoryName: matched.category_name,
+                categoryPath: matched.category_path.join(' › ')
+              };
+            }
+          }
+          if (!suggestion) {
+            console.warn('PARTQUILL_EBAY_CATEGORY_LOCAL_FALLBACK', JSON.stringify({
+              partNumber: row.part_number,
+              error: error instanceof Error ? error.message : 'unknown',
+              matched: false
+            }));
+          }
         }
         const insideMotors = suggestion
           ? await pool.query(
