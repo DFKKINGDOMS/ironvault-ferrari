@@ -37,4 +37,4 @@ CREATE INDEX IF NOT EXISTS ix_community_images_part
 COMMENT ON TABLE partquill.community_submissions IS
   'Rights-attested community reference-image submissions. Public credit is retained; private receipt and attestation fingerprints are never exposed.';
 COMMENT ON TABLE partquill.community_images IS
-  'Quarantined originals and approved derivatives. Only human-approved, AI-screened, source-QA-passed derivatives may reach the public reference archive.';
+  'Quarantined originals and approved derivatives. Only rights-attested, safety-reviewed, source-QA-passed derivatives may reach the public reference archive.';

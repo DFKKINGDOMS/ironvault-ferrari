@@ -59,6 +59,8 @@ services:
         value: "3"
       - key: COMMUNITY_IMAGES_ENABLED
         value: "true"
+      - key: COMMUNITY_EDIT_MODE
+        value: chatgpt-manual
       - key: COMMUNITY_IMAGE_MAX_IMAGES
         value: "50"
       - key: COMMUNITY_UPLOAD_RATE_LIMIT_MAX

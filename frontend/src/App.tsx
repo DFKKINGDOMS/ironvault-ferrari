@@ -11,7 +11,14 @@ type SellerBootstrap = {
   persistence: string;
   imageStudio: { mode: string; path: string };
   ebayReferenceDiscovery: { mode: "disabled" | "live"; maxImages: number; cacheHours: number; permanentArchiveRequiresRights: true };
-  communityImages: { enabled: boolean; maxImages: number; automatedReviewActive: boolean; gitArchiveConnected: boolean };
+  communityImages: {
+    enabled: boolean;
+    maxImages: number;
+    automatedReviewActive: boolean;
+    editMode: 'chatgpt-manual' | 'provider';
+    chatGptManualActive: boolean;
+    gitArchiveConnected: boolean;
+  };
 };
 
 type EbayReferenceRecord = {
@@ -898,6 +905,8 @@ export default function Home() {
           enabled={bootstrap?.communityImages.enabled ?? false}
           maxImages={bootstrap?.communityImages.maxImages ?? 50}
           automatedReviewActive={bootstrap?.communityImages.automatedReviewActive ?? false}
+          editMode={bootstrap?.communityImages.editMode ?? 'chatgpt-manual'}
+          chatGptManualActive={bootstrap?.communityImages.chatGptManualActive ?? false}
           gitArchiveConnected={bootstrap?.communityImages.gitArchiveConnected ?? false}
         />}
 

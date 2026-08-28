@@ -98,6 +98,17 @@ export class PostgresStore implements Store {
     return result.rows.map((row) => ({ ...row.record, sourceBytes: row.source_bytes, ...(row.derivative_bytes ? { derivativeBytes: row.derivative_bytes } : {}) }));
   }
 
+  async listCommunityImagesByPartNumber(partNumber: string): Promise<StoredCommunityImage[]> {
+    const result = await this.pool.query<{record: CommunityImageRecord; source_bytes: Buffer; derivative_bytes: Buffer | null}>(
+      'SELECT record,source_bytes,derivative_bytes FROM partquill.community_images WHERE part_number=$1 ORDER BY created_at ASC', [partNumber]
+    );
+    return result.rows.map((row) => ({
+      ...row.record,
+      sourceBytes: row.source_bytes,
+      ...(row.derivative_bytes ? { derivativeBytes: row.derivative_bytes } : {})
+    }));
+  }
+
   async listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]> {
     const result = await this.pool.query<{record: CommunityImageRecord; source_bytes: Buffer; derivative_bytes: Buffer | null; contributor_credit: string}>(
       `SELECT i.record,i.source_bytes,i.derivative_bytes,s.record->>'contributorCredit' contributor_credit

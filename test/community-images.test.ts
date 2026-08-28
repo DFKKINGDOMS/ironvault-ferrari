@@ -103,4 +103,55 @@ describe('community image archive', () => {
       ]
     })).rejects.toMatchObject({ code: 'COMMUNITY_DUPLICATE_IMAGE' });
   });
+
+  it('uses the internal ChatGPT handoff, then requires human derivative approval before archive', async () => {
+    const store = new MemoryStore();
+    const archive = new FakeArchive();
+    const service = new CommunityImageService(
+      store,
+      new AcceptModerator(),
+      new FakeEditor(await png(200)),
+      archive,
+      50,
+      false,
+      { editMode: 'chatgpt-manual', handoffSecret: 'test-community-handoff-secret-long-enough' }
+    );
+    const created = await service.createSubmission({
+      contributorCredit: 'Community Owner', ownershipConfirmed: true, licenseConfirmed: true,
+      contentRulesConfirmed: true, attestationFingerprint: 'manual-test',
+      files: [{ filename: 'front-view.png', mediaType: 'image/png', partNumber: '5455055', bytes: await png(140) }]
+    });
+    const imageId = (await store.listCommunityImages(created.submission.id))[0]!.id;
+
+    await expect(service.approveSubmission(created.submission.id, 'owner-reviewer')).rejects.toMatchObject({
+      code: 'COMMUNITY_MANUAL_REVIEW_CONFIRMATION_REQUIRED'
+    });
+    await service.approveSubmission(created.submission.id, 'owner-reviewer', 'part only', {
+      manualSafetyConfirmed: true,
+      partNumberMatchConfirmed: true
+    });
+    expect((await store.getCommunityImage(imageId))?.status).toBe('AWAITING_CHATGPT_EDIT');
+
+    const handoff = await service.issueChatGptHandoff(imageId);
+    expect(handoff.protectedPrompt).toContain('Never crop an item edge');
+    expect(handoff.partNumber).toBe('5455055');
+    const returned = await service.acceptChatGptDerivative(handoff.token, await sharp({
+      create: { width: 1_024, height: 1_024, channels: 3, background: '#ffffff' }
+    }).png().toBuffer());
+    expect(returned).toMatchObject({ status: 'PENDING_DERIVATIVE_REVIEW', editMethod: 'CHATGPT_INTERNAL' });
+    expect(returned.archiveFilename).toBeUndefined();
+    expect(archive.files).toHaveLength(0);
+    await expect(service.acceptChatGptDerivative(handoff.token, await png(180))).rejects.toMatchObject({
+      code: 'COMMUNITY_CHATGPT_HANDOFF_INVALID'
+    });
+
+    const approved = await service.approveChatGptDerivative(imageId, 'owner-reviewer', 'source and result match', {
+      sourceComparedConfirmed: true,
+      contentRulesConfirmed: true
+    });
+    expect(approved).toMatchObject({ status: 'PUBLISHED', archiveFilename: '5455055.png', qa: { passed: true } });
+    expect(archive.files.map((file) => file.path)).toEqual(['data/reference-assets/5455055.png']);
+    const archivedMetadata = await sharp(archive.files[0]!.bytes).metadata();
+    expect(archivedMetadata).toMatchObject({ width: 1_600, height: 1_600, format: 'png' });
+  });
 });

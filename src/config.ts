@@ -45,6 +45,7 @@ const schema = z
     IMAGE_STUDIO_MAX_IMAGES: z.coerce.number().int().min(1).max(24).default(24),
     IMAGE_STUDIO_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3),
     COMMUNITY_IMAGES_ENABLED: booleanString,
+    COMMUNITY_EDIT_MODE: z.enum(['chatgpt-manual', 'provider']).default('chatgpt-manual'),
     COMMUNITY_IMAGE_MAX_IMAGES: z.coerce.number().int().min(1).max(50).default(50),
     COMMUNITY_UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(100).default(3),
     COMMUNITY_UPLOAD_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(3_600_000),

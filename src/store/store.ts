@@ -53,6 +53,7 @@ export interface Store {
   saveCommunityImage(record: StoredCommunityImage): Promise<void>;
   getCommunityImage(id: string): Promise<StoredCommunityImage | undefined>;
   listCommunityImages(submissionId: string): Promise<StoredCommunityImage[]>;
+  listCommunityImagesByPartNumber(partNumber: string): Promise<StoredCommunityImage[]>;
   listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]>;
   getPublishedCommunityAsset(filename: string): Promise<StoredCommunityImage | undefined>;
 }

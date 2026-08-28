@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import sharp from 'sharp';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 import { DomainError } from '../domain/errors.js';
@@ -6,12 +6,14 @@ import { referenceAssetFilename } from '../ebay/reference-assets.js';
 import type { EbayReferenceCacheRecord, EbayReferenceImage } from '../ebay/reference-types.js';
 import type { ImageEditEngine } from '../image-studio/types.js';
 import type { Store } from '../store/store.js';
+import { buildConnectedImagePrompt } from '../mcp/prompt.js';
 import type {
   CommunityArchivePublisher,
   CommunityImageRecord,
   CommunityModerationEngine,
   CommunitySourceUpload,
-  CommunitySubmissionRecord
+  CommunitySubmissionRecord,
+  StoredCommunityImage
 } from './types.js';
 
 const SUPPORTED_MEDIA = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -62,6 +64,22 @@ export interface CreateCommunitySubmissionInput {
   files: CommunitySourceUpload[];
 }
 
+export interface CommunityImageServiceOptions {
+  editMode?: 'chatgpt-manual' | 'provider';
+  handoffSecret?: string;
+}
+
+export interface ChatGptHandoff {
+  token: string;
+  jobCode: string;
+  imageId: string;
+  partNumber: string;
+  sourceFilename: string;
+  sourceSha256: string;
+  protectedPrompt: string;
+  expiresAt: string;
+}
+
 export class CommunityImageService {
   private readonly inFlight = new Set<string>();
 
@@ -71,10 +89,14 @@ export class CommunityImageService {
     private readonly editor: ImageEditEngine,
     private readonly archive: CommunityArchivePublisher,
     readonly maxImages = 50,
-    private readonly autoStart = true
+    private readonly autoStart = true,
+    private readonly options: CommunityImageServiceOptions = {}
   ) {}
 
   get activated(): boolean { return this.moderator.available && this.editor.available; }
+  get automatedReviewActive(): boolean { return this.moderator.available; }
+  get editMode(): 'chatgpt-manual' | 'provider' { return this.options.editMode ?? 'provider'; }
+  get chatGptManualActive(): boolean { return this.editMode === 'chatgpt-manual' && Boolean(this.options.handoffSecret); }
   get archiveActivated(): boolean { return this.archive.available; }
 
   async createSubmission(input: CreateCommunitySubmissionInput): Promise<{ submission: CommunitySubmissionRecord; statusToken: string }> {
@@ -123,7 +145,7 @@ export class CommunityImageService {
       id,
       contributorCredit,
       statusTokenHash: sha256(statusToken),
-      status: 'SCREENING',
+      status: this.editMode === 'chatgpt-manual' ? 'PENDING_HUMAN_REVIEW' : 'SCREENING',
       imageCount: prepared.length,
       acceptedCount: 0,
       rejectedCount: 0,
@@ -142,7 +164,9 @@ export class CommunityImageService {
         sourceFilename: file.filename.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 180),
         sourceMediaType: file.mediaType, sourceSha256: file.sourceSha256,
         sourceByteLength: file.bytes.length, visualHash: file.visualHash,
-        status: this.moderator.available ? 'QUARANTINED' : 'AWAITING_AUTOMATED_REVIEW',
+        status: this.editMode === 'chatgpt-manual'
+          ? 'PENDING_HUMAN_REVIEW'
+          : this.moderator.available ? 'QUARANTINED' : 'AWAITING_AUTOMATED_REVIEW',
         sourceBytes: file.bytes, createdAt, updatedAt: createdAt
       });
     }
@@ -190,20 +214,181 @@ export class CommunityImageService {
     })));
   }
 
-  async approveSubmission(id: string, reviewer: string, note = ''): Promise<CommunitySubmissionRecord> {
+  async approveSubmission(
+    id: string,
+    reviewer: string,
+    note = '',
+    confirmations: { manualSafetyConfirmed?: boolean; partNumberMatchConfirmed?: boolean } = {}
+  ): Promise<CommunitySubmissionRecord> {
     const images = await this.store.listCommunityImages(id);
     const reviewable = images.filter((image) => image.status === 'PENDING_HUMAN_REVIEW');
     if (!reviewable.length) throw new DomainError('no screened images are awaiting human approval', 'COMMUNITY_NOT_REVIEWABLE', 409);
+    const requiresManualScreen = reviewable.some((image) => image.moderation?.decision !== 'ACCEPT_PART_ONLY');
+    if (requiresManualScreen && (!confirmations.manualSafetyConfirmed || !confirmations.partNumberMatchConfirmed)) {
+      throw new DomainError(
+        'manual review must confirm the prohibited-content rules and exact part-number match',
+        'COMMUNITY_MANUAL_REVIEW_CONFIRMATION_REQUIRED',
+        409
+      );
+    }
     const reviewedAt = new Date().toISOString();
     for (const image of reviewable) {
-      image.status = 'APPROVED_FOR_EDIT';
+      image.status = this.editMode === 'chatgpt-manual' ? 'AWAITING_CHATGPT_EDIT' : 'APPROVED_FOR_EDIT';
+      image.editMethod = this.editMode === 'chatgpt-manual' ? 'CHATGPT_INTERNAL' : 'CONFIGURED_PROVIDER';
       image.humanReview = { decision: 'APPROVE', reviewer: reviewer.slice(0, 120), note: note.slice(0, 500), reviewedAt };
+      image.error = undefined;
       image.updatedAt = reviewedAt;
       await this.store.saveCommunityImage(image);
     }
     await this.refreshSubmission(id);
-    if (this.autoStart) queueMicrotask(() => void this.processApproved(id));
+    if (this.autoStart && this.editMode === 'provider') queueMicrotask(() => void this.processApproved(id));
     return this.requireSubmission(id);
+  }
+
+  async issueChatGptHandoff(imageId: string): Promise<ChatGptHandoff> {
+    const image = await this.store.getCommunityImage(imageId);
+    if (!image) throw new DomainError('community image not found', 'COMMUNITY_IMAGE_NOT_FOUND', 404);
+    if (!this.chatGptManualActive || !this.options.handoffSecret) {
+      throw new DomainError('ChatGPT handoff is not configured', 'COMMUNITY_CHATGPT_HANDOFF_UNAVAILABLE', 503);
+    }
+    if (image.status !== 'AWAITING_CHATGPT_EDIT') {
+      throw new DomainError('image is not awaiting a ChatGPT edit', 'COMMUNITY_CHATGPT_HANDOFF_NOT_READY', 409);
+    }
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+    const payload = Buffer.from(JSON.stringify({ imageId, sourceSha256: image.sourceSha256, expiresAt })).toString('base64url');
+    const signature = createHmac('sha256', this.options.handoffSecret).update(`community-chatgpt:${payload}`).digest('base64url');
+    const jobCode = `PQ-W-${sha256(image.id).slice(0, 8).toUpperCase()}`;
+    return {
+      token: `${payload}.${signature}`,
+      jobCode,
+      imageId,
+      partNumber: image.partNumber,
+      sourceFilename: image.sourceFilename,
+      sourceSha256: image.sourceSha256,
+      protectedPrompt: buildConnectedImagePrompt(jobCode, [image.sourceFilename]),
+      expiresAt
+    };
+  }
+
+  async resolveChatGptHandoff(token: string): Promise<{ handoff: ChatGptHandoff; image: StoredCommunityImage }> {
+    if (!this.options.handoffSecret) throw new DomainError('ChatGPT handoff is not configured', 'COMMUNITY_CHATGPT_HANDOFF_UNAVAILABLE', 503);
+    const [payload, signature] = token.split('.');
+    if (!payload || !signature) throw new DomainError('ChatGPT handoff code is invalid', 'COMMUNITY_CHATGPT_HANDOFF_INVALID', 401);
+    const expected = createHmac('sha256', this.options.handoffSecret).update(`community-chatgpt:${payload}`).digest('base64url');
+    const suppliedBytes = Buffer.from(signature);
+    const expectedBytes = Buffer.from(expected);
+    if (suppliedBytes.length !== expectedBytes.length || !timingSafeEqual(suppliedBytes, expectedBytes)) {
+      throw new DomainError('ChatGPT handoff code is invalid', 'COMMUNITY_CHATGPT_HANDOFF_INVALID', 401);
+    }
+    let claims: { imageId?: string; sourceSha256?: string; expiresAt?: string };
+    try { claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as typeof claims; }
+    catch { throw new DomainError('ChatGPT handoff code is invalid', 'COMMUNITY_CHATGPT_HANDOFF_INVALID', 401); }
+    if (!claims.imageId || !claims.sourceSha256 || !claims.expiresAt || Date.parse(claims.expiresAt) <= Date.now()) {
+      throw new DomainError('ChatGPT handoff code expired or is invalid', 'COMMUNITY_CHATGPT_HANDOFF_EXPIRED', 401);
+    }
+    const image = await this.store.getCommunityImage(claims.imageId);
+    if (!image || image.sourceSha256 !== claims.sourceSha256 || image.status !== 'AWAITING_CHATGPT_EDIT') {
+      throw new DomainError('ChatGPT handoff is no longer valid', 'COMMUNITY_CHATGPT_HANDOFF_INVALID', 409);
+    }
+    const handoff = await this.issueChatGptHandoff(image.id);
+    return { handoff: { ...handoff, token, expiresAt: claims.expiresAt }, image };
+  }
+
+  async acceptChatGptDerivative(token: string, candidate: Uint8Array): Promise<CommunityImageRecord> {
+    const { image } = await this.resolveChatGptHandoff(token);
+    if (!candidate.length || candidate.length > 20 * 1024 * 1024) {
+      throw new DomainError('returned ChatGPT image must be 20 MB or less', 'COMMUNITY_CHATGPT_RESULT_SIZE_INVALID', 413);
+    }
+    let derivative: Buffer;
+    try {
+      const metadata = await sharp(candidate, { limitInputPixels: MAX_PIXELS }).metadata();
+      if (!metadata.width || !metadata.height || metadata.width < 800 || metadata.height < 800) {
+        throw new Error('result resolution is below 800 pixels');
+      }
+      derivative = await sharp(candidate, { limitInputPixels: MAX_PIXELS }).rotate().png({ compressionLevel: 9 }).toBuffer();
+    } catch (error) {
+      throw new DomainError(
+        error instanceof Error ? `returned ChatGPT image is invalid: ${error.message}` : 'returned ChatGPT image is invalid',
+        'COMMUNITY_CHATGPT_RESULT_INVALID',
+        400
+      );
+    }
+    image.derivativeBytes = derivative;
+    image.derivativeMediaType = 'image/png';
+    image.derivativeSha256 = sha256(derivative);
+    image.derivativeByteLength = derivative.length;
+    image.editMethod = 'CHATGPT_INTERNAL';
+    image.qa = { passed: false, reason: 'Awaiting mandatory human source-versus-result comparison.', model: 'chatgpt-internal' };
+    image.status = 'PENDING_DERIVATIVE_REVIEW';
+    image.error = undefined;
+    image.updatedAt = new Date().toISOString();
+    await this.store.saveCommunityImage(image);
+    await this.refreshSubmission(image.submissionId);
+    const { sourceBytes: _source, derivativeBytes: _derivative, ...safe } = image;
+    return safe;
+  }
+
+  async approveChatGptDerivative(
+    imageId: string,
+    reviewer: string,
+    note: string,
+    confirmations: { sourceComparedConfirmed: boolean; contentRulesConfirmed: boolean }
+  ): Promise<CommunityImageRecord> {
+    const image = await this.store.getCommunityImage(imageId);
+    if (!image) throw new DomainError('community image not found', 'COMMUNITY_IMAGE_NOT_FOUND', 404);
+    if (image.status !== 'PENDING_DERIVATIVE_REVIEW' || !image.derivativeBytes) {
+      throw new DomainError('image is not awaiting derivative review', 'COMMUNITY_DERIVATIVE_NOT_REVIEWABLE', 409);
+    }
+    if (!confirmations.sourceComparedConfirmed || !confirmations.contentRulesConfirmed) {
+      throw new DomainError('source comparison and content rules must both be confirmed', 'COMMUNITY_DERIVATIVE_CONFIRMATION_REQUIRED', 409);
+    }
+    const resized = await sharp(image.derivativeBytes)
+      .resize({ width: 1_600, height: 1_600, fit: 'contain', background: '#ffffff', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .png({ compressionLevel: 9 })
+      .toBuffer({ resolveWithObject: true });
+    const normalized = await sharp({ create: { width: 1_600, height: 1_600, channels: 3, background: '#ffffff' } })
+      .composite([{
+        input: resized.data,
+        left: Math.floor((1_600 - resized.info.width) / 2),
+        top: Math.floor((1_600 - resized.info.height) / 2)
+      }])
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    image.derivativeBytes = normalized;
+    image.derivativeSha256 = sha256(normalized);
+    image.derivativeByteLength = normalized.length;
+    const related = await this.store.listCommunityImagesByPartNumber(image.partNumber);
+    const reserved = new Set(related.map((row) => row.archiveFilename).filter((value): value is string => Boolean(value)));
+    let index = 0;
+    let filename = referenceAssetFilename(image.partNumber, index);
+    while (reserved.has(filename)) filename = referenceAssetFilename(image.partNumber, ++index);
+    image.archiveFilename = filename;
+    image.archivePath = `data/reference-assets/${filename}`;
+    image.qa = {
+      passed: true,
+      reason: `${note.slice(0, 400) || 'Human reviewer confirmed exact source preservation and prohibited-content rules.'}`,
+      model: `chatgpt-internal+human:${reviewer.slice(0, 80)}`
+    };
+    image.status = 'READY_FOR_ARCHIVE';
+    image.updatedAt = new Date().toISOString();
+    await this.store.saveCommunityImage(image);
+    await this.publishReady(image.submissionId);
+    const saved = await this.store.getCommunityImage(image.id);
+    const { sourceBytes: _source, derivativeBytes: _derivative, ...safe } = saved!;
+    return safe;
+  }
+
+  async readChatGptDerivative(imageId: string): Promise<{ bytes: Uint8Array; mediaType: 'image/png' }> {
+    const image = await this.store.getCommunityImage(imageId);
+    if (!image?.derivativeBytes) throw new DomainError('community derivative not found', 'COMMUNITY_DERIVATIVE_NOT_FOUND', 404);
+    return { bytes: image.derivativeBytes, mediaType: 'image/png' };
+  }
+
+  async retryArchive(submissionId: string): Promise<CommunitySubmissionRecord> {
+    await this.requireSubmission(submissionId);
+    await this.publishReady(submissionId);
+    return this.requireSubmission(submissionId);
   }
 
   async rejectImage(id: string, reviewer: string, note: string): Promise<CommunityImageRecord> {
@@ -256,26 +441,41 @@ export class CommunityImageService {
         image.updatedAt = new Date().toISOString();
         await this.store.saveCommunityImage(image);
       }
-      const ready = (await this.store.listCommunityImages(id)).filter((image) => image.status === 'READY_FOR_ARCHIVE' && image.derivativeBytes && image.archivePath);
-      if (ready.length && this.archive.available) {
-        const published = await this.archive.publish({
-          submissionId: id, contributorCredit: submission.contributorCredit,
-          files: ready.map((image) => ({ path: image.archivePath!, bytes: image.derivativeBytes! }))
-        });
-        const publishedAt = new Date().toISOString();
-        for (const image of ready) { image.status = 'PUBLISHED'; image.publishedAt = publishedAt; image.updatedAt = publishedAt; await this.store.saveCommunityImage(image); }
-        submission.archiveCommitSha = published.commitSha;
-        submission.updatedAt = publishedAt;
-        await this.store.saveCommunitySubmission(submission);
-        for (const partNumber of [...new Set(ready.map((image) => image.partNumber))]) await this.refreshReferenceArchive(partNumber, submission.contributorCredit);
-      }
-      await this.refreshSubmission(id);
+      await this.publishReady(id, submission);
     } finally { this.inFlight.delete(`process:${id}`); }
   }
 
   async readPublishedAsset(filename: string): Promise<{ bytes: Uint8Array; mediaType: 'image/png' } | undefined> {
     const image = await this.store.getPublishedCommunityAsset(filename);
     return image?.derivativeBytes ? { bytes: image.derivativeBytes, mediaType: 'image/png' } : undefined;
+  }
+
+  private async publishReady(id: string, suppliedSubmission?: CommunitySubmissionRecord): Promise<void> {
+    const submission = suppliedSubmission ?? await this.requireSubmission(id);
+    const ready = (await this.store.listCommunityImages(id)).filter(
+      (image) => image.status === 'READY_FOR_ARCHIVE' && image.derivativeBytes && image.archivePath
+    );
+    if (ready.length && this.archive.available) {
+      const published = await this.archive.publish({
+        submissionId: id,
+        contributorCredit: submission.contributorCredit,
+        files: ready.map((image) => ({ path: image.archivePath!, bytes: image.derivativeBytes! }))
+      });
+      const publishedAt = new Date().toISOString();
+      for (const image of ready) {
+        image.status = 'PUBLISHED';
+        image.publishedAt = publishedAt;
+        image.updatedAt = publishedAt;
+        await this.store.saveCommunityImage(image);
+      }
+      submission.archiveCommitSha = published.commitSha;
+      submission.updatedAt = publishedAt;
+      await this.store.saveCommunitySubmission(submission);
+      for (const partNumber of [...new Set(ready.map((image) => image.partNumber))]) {
+        await this.refreshReferenceArchive(partNumber, submission.contributorCredit);
+      }
+    }
+    await this.refreshSubmission(id);
   }
 
   private async refreshReferenceArchive(partNumber: string, fallbackCredit: string): Promise<void> {
@@ -305,11 +505,16 @@ export class CommunityImageService {
   private async refreshSubmission(id: string): Promise<CommunitySubmissionRecord> {
     const submission = await this.requireSubmission(id);
     const images = await this.store.listCommunityImages(id);
-    submission.acceptedCount = images.filter((image) => ['PENDING_HUMAN_REVIEW','APPROVED_FOR_EDIT','EDITING','READY_FOR_ARCHIVE','PUBLISHED'].includes(image.status)).length;
+    submission.acceptedCount = images.filter((image) => [
+      'PENDING_HUMAN_REVIEW','APPROVED_FOR_EDIT','AWAITING_CHATGPT_EDIT','EDITING',
+      'PENDING_DERIVATIVE_REVIEW','READY_FOR_ARCHIVE','PUBLISHED'
+    ].includes(image.status)).length;
     submission.rejectedCount = images.filter((image) => image.status === 'REJECTED').length;
     if (images.every((image) => image.status === 'REJECTED')) submission.status = 'REJECTED';
     else if (images.every((image) => ['PUBLISHED','REJECTED'].includes(image.status))) submission.status = images.some((image) => image.status === 'REJECTED') ? 'PARTIALLY_PUBLISHED' : 'PUBLISHED';
-    else if (images.some((image) => ['APPROVED_FOR_EDIT','EDITING'].includes(image.status))) submission.status = 'PROCESSING';
+    else if (images.some((image) => [
+      'APPROVED_FOR_EDIT','AWAITING_CHATGPT_EDIT','EDITING','PENDING_DERIVATIVE_REVIEW'
+    ].includes(image.status))) submission.status = 'PROCESSING';
     else if (images.some((image) => image.status === 'READY_FOR_ARCHIVE')) submission.status = 'READY_FOR_ARCHIVE';
     else if (images.some((image) => image.status === 'PENDING_HUMAN_REVIEW')) submission.status = 'PENDING_HUMAN_REVIEW';
     else if (images.some((image) => image.status === 'FAILED')) submission.status = 'FAILED';

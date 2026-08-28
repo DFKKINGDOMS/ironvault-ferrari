@@ -13,7 +13,9 @@ export type CommunityImageStatus =
   | 'AWAITING_AUTOMATED_REVIEW'
   | 'PENDING_HUMAN_REVIEW'
   | 'APPROVED_FOR_EDIT'
+  | 'AWAITING_CHATGPT_EDIT'
   | 'EDITING'
+  | 'PENDING_DERIVATIVE_REVIEW'
   | 'READY_FOR_ARCHIVE'
   | 'PUBLISHED'
   | 'REJECTED'
@@ -80,6 +82,7 @@ export interface CommunityImageRecord {
   archiveFilename?: string;
   archivePath?: string;
   qa?: { passed: boolean; reason: string; model: string };
+  editMethod?: 'CHATGPT_INTERNAL' | 'CONFIGURED_PROVIDER';
   createdAt: string;
   updatedAt: string;
   publishedAt?: string;

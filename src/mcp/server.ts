@@ -20,6 +20,7 @@ import {
 } from '../catalog/image-proxy.js';
 import { buildPartQuillOemWidgetHtml, PARTQUILL_OEM_WIDGET_URI } from './oem-widget.js';
 import { buildConnectedImagePrompt } from './prompt.js';
+import type { CommunityImageService } from '../community/service.js';
 
 const openAiFileSchema = z.object({
   download_url: z.string().url(),
@@ -50,6 +51,8 @@ type OemPartResearchFunction = (
 type CatalogImageLoader = (publicUrl: string) => Promise<CatalogImageAttachment | undefined>;
 type VinPartVerificationFunction = (partNumber: string, vin: string) => Promise<VinPartVerification>;
 type CorrectOemPartFunction = (partNumber: string, vin: string) => Promise<CorrectOemPartResult>;
+type CommunityBridge = Pick<CommunityImageService, 'resolveChatGptHandoff' | 'acceptChatGptDerivative'>;
+type ChatGptFileDownloader = (file: OpenAiFile) => Promise<Uint8Array>;
 
 export interface PartQuillMcpDependencies {
   researchOemPart?: OemPartResearchFunction;
@@ -57,6 +60,41 @@ export interface PartQuillMcpDependencies {
   verifyOemPartVin?: VinPartVerificationFunction;
   findCorrectOemPart?: CorrectOemPartFunction;
   oemResearchAllowed?: boolean;
+  communityImages?: CommunityBridge;
+  downloadChatGptFile?: ChatGptFileDownloader;
+}
+
+function permittedChatGptDownloadHost(hostname: string): boolean {
+  return hostname === 'oaiusercontent.com'
+    || hostname.endsWith('.oaiusercontent.com')
+    || /^(?:oaisdmntpr|oaisdsorpr)[a-z0-9-]*\.blob\.core\.windows\.net$/i.test(hostname);
+}
+
+async function downloadChatGptFile(file: OpenAiFile): Promise<Uint8Array> {
+  const url = new URL(file.download_url);
+  if (url.protocol !== 'https:' || !permittedChatGptDownloadHost(url.hostname)) {
+    throw new Error('ChatGPT returned a file URL outside the approved OpenAI download hosts');
+  }
+  const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(20_000) });
+  if (!response.ok || !response.body) throw new Error(`ChatGPT result download failed with ${response.status}`);
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim();
+  if (contentType && !['image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'].includes(contentType)) {
+    throw new Error('ChatGPT result download did not return a supported image');
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > 20 * 1024 * 1024) {
+      await reader.cancel();
+      throw new Error('ChatGPT result download exceeded 20 MB');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), size);
 }
 
 function money(value: number | undefined): string {
@@ -218,7 +256,7 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
     }
   };
   const server = new McpServer(
-    { name: 'partquill-image-studio', version: '0.16.0' },
+    { name: 'partquill-image-studio', version: '0.16.3' },
     {
       instructions:
         'PartQuill researches exact Toyota, Lexus and Scion part numbers and prepares seller-authorized automotive images for evidence-safe eBay drafts. Use research_oem_part when the user supplies a part number or asks its identity, price, worth, images, crossover or fitment. Use verify_oem_part_vin when the user supplies both a part number and a VIN. When and only when that verifier returns RED, find_correct_oem_part may reuse the same buyer VIN to locate one exact VIN-filtered replacement in the same part family. This is buyer purchase assistance: it must never replace the seller item, change the seller listing, or write to eBay. A replacement is GREEN only when one unique VIN-filtered candidate is exact-matched; multiple, incomplete or conflicting candidates remain AMBER. Always lead with the returned vehicle-fitment verdict: GREEN means Fits this vehicle, AMBER means Fitment not verified or May fit, and RED means Does not fit this vehicle. Without a VIN, fitment is always AMBER and potential application groups must never be called safe or confirmed. Never dump raw catalog option codes or hidden research rows. Never say a product photo or diagram is attached above or displayed unless the PartQuill visual result card is visibly rendered; raw transcript image attachments are disabled. Never expose, repeat or infer any lookup-source identity, dealer name, website, URL, phone number, address or personnel. All price sources must remain anonymous. OEM-source quotes and MSRP are reference pricing, not eBay market value; never manufacture a recommended list price or quick-sale price without sold-market evidence, actual seller condition, shipping, fees and cost. Catalog condition does not prove the seller item condition. Never invent teeth count, dimensions, package contents, quantity or other specifications absent from the structured result. Never echo a full VIN; return only its last four characters and never store it. Catalog fitment is reference evidence and broad or conflicting fitment remains blocked. Never infer identity or fitment from an edited image. Never publish to eBay from these tools. Preserve every original and require explicit rights confirmation.'
@@ -829,6 +867,101 @@ export function buildPartQuillMcpServer(dependencies: PartQuillMcpDependencies =
             text: `${images.length} finished image${images.length === 1 ? '' : 's'} returned to ${jobCode}. They remain review-only derivatives; no eBay write occurred.`
           }
         ]
+      };
+    }
+  );
+
+  registerAppTool(
+    server,
+    'prepare_community_image_edit',
+    {
+      title: 'Prepare quarantined community image edit',
+      description:
+        'Use only with a PartQuill owner-issued handoff code and the matching reviewed source image. Returns the exact Ferrari preservation prompt for one rights-attested community part photograph.',
+      inputSchema: {
+        handoff_token: z.string().min(40),
+        images: z.array(openAiFileSchema).length(1)
+      },
+      outputSchema: {
+        job_code: z.string(),
+        image_id: z.string().uuid(),
+        part_number: z.string(),
+        source_filename: z.string(),
+        source_sha256: z.string(),
+        protected_prompt: z.string(),
+        return_status: z.literal('AWAITING_CHATGPT_EDIT')
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
+      _meta: {
+        'openai/fileParams': ['images'],
+        'openai/toolInvocation/invoking': 'Binding quarantined source to protected edit…',
+        'openai/toolInvocation/invoked': 'Protected community edit ready'
+      }
+    },
+    async ({ handoff_token: token }) => {
+      if (!dependencies.communityImages) throw new Error('Community ChatGPT handoff is unavailable');
+      const { handoff } = await dependencies.communityImages.resolveChatGptHandoff(token);
+      const structuredContent = {
+        job_code: handoff.jobCode,
+        image_id: handoff.imageId,
+        part_number: handoff.partNumber,
+        source_filename: handoff.sourceFilename,
+        source_sha256: handoff.sourceSha256,
+        protected_prompt: handoff.protectedPrompt,
+        return_status: 'AWAITING_CHATGPT_EDIT' as const
+      };
+      return {
+        structuredContent,
+        content: [{
+          type: 'text',
+          text: `${handoff.protectedPrompt}\n\nThe approved source is already attached. Do not ask for another upload. When finished, call return_community_image_edit with this same handoff code and exactly one finished file.`
+        }]
+      };
+    }
+  );
+
+  registerAppTool(
+    server,
+    'return_community_image_edit',
+    {
+      title: 'Return community edit for final review',
+      description:
+        'Return exactly one finished ChatGPT derivative for a protected community job. PartQuill stores it privately for mandatory human source comparison; this tool never publishes it directly.',
+      inputSchema: {
+        handoff_token: z.string().min(40),
+        images: z.array(openAiFileSchema).length(1)
+      },
+      outputSchema: {
+        image_id: z.string().uuid(),
+        part_number: z.string(),
+        status: z.literal('PENDING_DERIVATIVE_REVIEW'),
+        archive_performed: z.literal(false),
+        eBay_write_performed: z.literal(false)
+      },
+      annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: false },
+      _meta: {
+        'openai/fileParams': ['images'],
+        'openai/toolInvocation/invoking': 'Returning finished derivative securely…',
+        'openai/toolInvocation/invoked': 'Derivative awaiting owner comparison'
+      }
+    },
+    async ({ handoff_token: token, images }) => {
+      if (!dependencies.communityImages) throw new Error('Community ChatGPT handoff is unavailable');
+      const bytes = await (dependencies.downloadChatGptFile ?? downloadChatGptFile)(images[0]!);
+      const saved = await dependencies.communityImages.acceptChatGptDerivative(token, bytes);
+      const structuredContent = {
+        image_id: saved.id,
+        part_number: saved.partNumber,
+        status: 'PENDING_DERIVATIVE_REVIEW' as const,
+        archive_performed: false as const,
+        eBay_write_performed: false as const
+      };
+      return {
+        structuredContent,
+        content: [{
+          type: 'text',
+          text: `The finished ${saved.partNumber} image is stored privately and awaiting mandatory source-versus-result approval. It was not archived publicly and nothing was written to eBay.`
+        }]
       };
     }
   );

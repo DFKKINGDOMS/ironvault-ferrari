@@ -28,6 +28,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     IMAGE_STUDIO_MAX_IMAGES: 24,
     IMAGE_STUDIO_CONCURRENCY: 3,
     COMMUNITY_IMAGES_ENABLED: false,
+    COMMUNITY_EDIT_MODE: 'chatgpt-manual',
     COMMUNITY_IMAGE_MAX_IMAGES: 50,
     COMMUNITY_UPLOAD_RATE_LIMIT_MAX: 3,
     COMMUNITY_UPLOAD_RATE_LIMIT_WINDOW_MS: 3_600_000,

@@ -65,6 +65,12 @@ export class MemoryStore implements Store {
     return [...this.communityImages.values()].filter((record) => record.submissionId === submissionId).sort((a,b) => a.order-b.order).map(clone);
   }
 
+  async listCommunityImagesByPartNumber(partNumber: string): Promise<StoredCommunityImage[]> {
+    return [...this.communityImages.values()]
+      .filter((record) => record.partNumber === partNumber)
+      .map((record) => structuredClone(record));
+  }
+
   async listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]> {
     const key = canonicalOemPartNumber(partNumber);
     return [...this.communityImages.values()]

@@ -8,10 +8,12 @@ type SubmissionState = {
 
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-export function CommunityImages({ maxImages, enabled, automatedReviewActive, gitArchiveConnected }: {
+export function CommunityImages({ maxImages, enabled, automatedReviewActive, editMode, chatGptManualActive, gitArchiveConnected }: {
   maxImages: number;
   enabled: boolean;
   automatedReviewActive: boolean;
+  editMode: 'chatgpt-manual' | 'provider';
+  chatGptManualActive: boolean;
   gitArchiveConnected: boolean;
 }) {
   const [files, setFiles] = useState<ContributionFile[]>([]);
@@ -99,14 +101,14 @@ export function CommunityImages({ maxImages, enabled, automatedReviewActive, git
 
   return <section className="view community-view">
     <div className="community-hero">
-      <div><span>PARTQUILL COMMUNITY IMAGE WIKI</span><h1>Help preserve a part<br/>before its photos disappear.</h1><p>Contribute owner-authorized part photographs. PartQuill screens them, checks each exact part number, performs the Ferrari-style white-background edit, and preserves approved references permanently by SKU.</p></div>
+      <div><span>PARTQUILL COMMUNITY IMAGE WIKI</span><h1>Help preserve a part<br/>before its photos disappear.</h1><p>Contribute owner-authorized part photographs. PartQuill reviews them, checks each exact part number, performs the protected ChatGPT Ferrari-style white-background edit, and preserves approved references permanently by SKU.</p></div>
       <aside><strong>FREE</strong><span>Community archive</span><small>Up to {maxImages} images per contribution</small></aside>
     </div>
 
     <div className="community-trust-strip">
       <div><b>01</b><span><strong>Exact part number</strong><small>Required for every image</small></span></div>
       <div><b>02</b><span><strong>Rights attestation</strong><small>Owner or written permission</small></span></div>
-      <div><b>03</b><span><strong>Two-stage review</strong><small>Automated screen + human check</small></span></div>
+      <div><b>03</b><span><strong>Protected edit + review</strong><small>ChatGPT edit, then human comparison</small></span></div>
       <div><b>04</b><span><strong>Permanent SKU archive</strong><small>SKU, SKU_1, SKU_2…</small></span></div>
     </div>
 
@@ -144,7 +146,13 @@ export function CommunityImages({ maxImages, enabled, automatedReviewActive, git
         </div>
         {error && <div className="community-error" role="alert">{error}</div>}
         <button className="community-submit" disabled={!ready} onClick={() => void submit()}>{busy ? "Securing contribution…" : `Submit ${files.length || ""} image${files.length === 1 ? "" : "s"} for review`}</button>
-        <p className="community-system-state"><i className={automatedReviewActive ? "on" : "off"}/>{automatedReviewActive ? "Automated image screening active" : "Automated screening awaiting activation"}<br/><i className={gitArchiveConnected ? "on" : "off"}/>{gitArchiveConnected ? "Permanent Git archive connected" : "Approved images will wait for permanent archive connection"}</p>
+        <p className="community-system-state">
+          <i className={(automatedReviewActive || chatGptManualActive) ? "on" : "off"}/>
+          {editMode === 'chatgpt-manual'
+            ? chatGptManualActive ? "Internal ChatGPT protected-edit workflow active" : "Internal ChatGPT handoff awaiting activation"
+            : automatedReviewActive ? "Automated image screening active" : "Automated screening awaiting activation"}
+          <br/><i className={gitArchiveConnected ? "on" : "off"}/>{gitArchiveConnected ? "Permanent Git archive connected" : "Approved images will wait for permanent archive connection"}
+        </p>
       </aside>
     </div>}
   </section>;

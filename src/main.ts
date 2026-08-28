@@ -93,7 +93,9 @@ const communityImages = config.COMMUNITY_IMAGES_ENABLED
             config.COMMUNITY_GITHUB_TOKEN
           )
         : new DisabledCommunityArchive(),
-      config.COMMUNITY_IMAGE_MAX_IMAGES
+      config.COMMUNITY_IMAGE_MAX_IMAGES,
+      true,
+      { editMode: config.COMMUNITY_EDIT_MODE, handoffSecret: config.OAUTH_STATE_SECRET }
     )
   : undefined;
 const ebayReferenceProvider = config.EBAY_REFERENCE_DISCOVERY_MODE === 'live'

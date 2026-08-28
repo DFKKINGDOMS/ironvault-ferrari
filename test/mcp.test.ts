@@ -2,6 +2,23 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildPartQuillMcpServer } from '../src/mcp/server.js';
+import type { StoredCommunityImage } from '../src/community/types.js';
+
+const communityImageFixture: StoredCommunityImage = {
+  id: '11111111-1111-4111-8111-111111111111',
+  submissionId: '22222222-2222-4222-8222-222222222222',
+  order: 0,
+  partNumber: '5455055',
+  sourceFilename: '5455055-source.png',
+  sourceMediaType: 'image/png',
+  sourceSha256: 'a'.repeat(64),
+  sourceByteLength: 100,
+  visualHash: 'b'.repeat(16),
+  status: 'AWAITING_CHATGPT_EDIT',
+  sourceBytes: Buffer.from('source'),
+  createdAt: '2026-08-28T12:00:00.000Z',
+  updatedAt: '2026-08-28T12:00:00.000Z'
+};
 
 const lexusResearchFixture = {
   identity: {
@@ -122,7 +139,29 @@ describe('PartQuill connected ChatGPT contract', () => {
       loadCatalogImage: async (url) => ({
         data: Buffer.from(url.includes('aaaa') ? 'product-image' : 'diagram-image').toString('base64'),
         mimeType: url.includes('aaaa') ? 'image/jpeg' : 'image/png'
-      })
+      }),
+      communityImages: {
+        resolveChatGptHandoff: async (token) => ({
+          handoff: {
+            token,
+            jobCode: 'PQ-W-1234ABCD',
+            imageId: communityImageFixture.id,
+            partNumber: communityImageFixture.partNumber,
+            sourceFilename: communityImageFixture.sourceFilename,
+            sourceSha256: communityImageFixture.sourceSha256,
+            protectedPrompt: 'Protected Ferrari preservation prompt: Never crop an item edge.',
+            expiresAt: '2026-08-28T15:00:00.000Z'
+          },
+          image: communityImageFixture
+        }),
+        acceptChatGptDerivative: async () => ({
+          ...communityImageFixture,
+          sourceBytes: undefined,
+          status: 'PENDING_DERIVATIVE_REVIEW',
+          editMethod: 'CHATGPT_INTERNAL'
+        })
+      },
+      downloadChatGptFile: async () => Buffer.from('returned-image')
     });
     client = new Client({ name: 'partquill-test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -144,17 +183,23 @@ describe('PartQuill connected ChatGPT contract', () => {
       'find_correct_oem_part',
       'open_image_studio',
       'prepare_protected_image_job',
-      'return_edited_images'
+      'return_edited_images',
+      'prepare_community_image_edit',
+      'return_community_image_edit'
     ]);
 
     const research = tools.tools.find((tool) => tool.name === 'research_oem_part');
     const verify = tools.tools.find((tool) => tool.name === 'verify_oem_part_vin');
     const prepare = tools.tools.find((tool) => tool.name === 'prepare_protected_image_job');
     const returned = tools.tools.find((tool) => tool.name === 'return_edited_images');
+    const prepareCommunity = tools.tools.find((tool) => tool.name === 'prepare_community_image_edit');
+    const returnCommunity = tools.tools.find((tool) => tool.name === 'return_community_image_edit');
     expect(research?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v4.html' });
     expect(verify?._meta?.ui).toMatchObject({ resourceUri: 'ui://partquill/oem-part-finder-v4.html' });
     expect(prepare?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(returned?._meta?.['openai/fileParams']).toEqual(['images']);
+    expect(prepareCommunity?._meta?.['openai/fileParams']).toEqual(['images']);
+    expect(returnCommunity?._meta?.['openai/fileParams']).toEqual(['images']);
     expect(prepare?._meta?.ui).toBeUndefined();
     expect(prepare?._meta?.['openai/outputTemplate']).toBeUndefined();
   });
@@ -356,6 +401,47 @@ describe('PartQuill connected ChatGPT contract', () => {
       job_code: 'PQ-C-1A2B3C4D',
       returned_count: 1,
       status: 'READY_FOR_REVIEW',
+      eBay_write_performed: false
+    });
+  });
+
+  it('binds a community handoff and returns the result only to private derivative review', async () => {
+    const token = 'community-handoff-token-that-is-long-enough-for-testing';
+    const prepared = await client.callTool({
+      name: 'prepare_community_image_edit',
+      arguments: {
+        handoff_token: token,
+        images: [{
+          download_url: 'https://files.oaiusercontent.com/source.png',
+          file_id: 'file_source',
+          mime_type: 'image/png',
+          file_name: '5455055-source.png'
+        }]
+      }
+    });
+    expect(prepared.structuredContent).toMatchObject({
+      job_code: 'PQ-W-1234ABCD',
+      part_number: '5455055',
+      return_status: 'AWAITING_CHATGPT_EDIT'
+    });
+
+    const returned = await client.callTool({
+      name: 'return_community_image_edit',
+      arguments: {
+        handoff_token: token,
+        images: [{
+          download_url: 'https://files.oaiusercontent.com/result.png',
+          file_id: 'file_result',
+          mime_type: 'image/png',
+          file_name: '5455055.png'
+        }]
+      }
+    });
+    expect(returned.structuredContent).toMatchObject({
+      image_id: communityImageFixture.id,
+      part_number: '5455055',
+      status: 'PENDING_DERIVATIVE_REVIEW',
+      archive_performed: false,
       eBay_write_performed: false
     });
   });

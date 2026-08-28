@@ -216,7 +216,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.16.2' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.16.3' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -251,7 +251,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       communityImages: {
         enabled: Boolean(communityImages),
         maxImages: config.COMMUNITY_IMAGE_MAX_IMAGES,
-        automatedReviewActive: communityImages?.activated ?? false,
+        automatedReviewActive: communityImages?.automatedReviewActive ?? false,
+        editMode: communityImages?.editMode ?? config.COMMUNITY_EDIT_MODE,
+        chatGptManualActive: communityImages?.chatGptManualActive ?? false,
         gitArchiveConnected: communityImages?.archiveActivated ?? false
       }
     }));
@@ -431,14 +433,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         communityImages: {
           enabled: Boolean(communityImages),
           aiProvider: config.PARTQUILL_AI_PROVIDER,
+          editMode: communityImages?.editMode ?? config.COMMUNITY_EDIT_MODE,
+          chatGptManualActive: communityImages?.chatGptManualActive ?? false,
           maxImages: config.COMMUNITY_IMAGE_MAX_IMAGES,
-          automatedReviewActive: communityImages?.activated ?? false,
+          automatedReviewActive: communityImages?.automatedReviewActive ?? false,
           gitArchiveConnected: communityImages?.archiveActivated ?? false,
           requiresHumanReview: true,
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.16.2',
+          version: '0.16.3',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },
@@ -469,7 +473,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.post('/mcp', { bodyLimit: config.MCP_MAX_BODY_BYTES }, async (request, reply) => {
     const permit = mcpGuard.acquire(request.ip);
     const server = buildPartQuillMcpServer({
-      oemResearchAllowed: config.OEM_RESEARCH_MODE === 'private-pilot' && config.OEM_DATA_RIGHTS_CONFIRMED
+      oemResearchAllowed: config.OEM_RESEARCH_MODE === 'private-pilot' && config.OEM_DATA_RIGHTS_CONFIRMED,
+      communityImages
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.hijack();
@@ -675,8 +680,55 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.post('/internal/community-images/submissions/:submissionId/approve', async (request) => {
     if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
     const { submissionId } = z.object({ submissionId: z.string().uuid() }).parse(request.params);
-    const body = z.object({ reviewer: z.string().min(1).max(120), note: z.string().max(500).default('') }).parse(request.body ?? {});
-    return { submission: await communityImages.approveSubmission(submissionId, body.reviewer, body.note) };
+    const body = z.object({
+      reviewer: z.string().min(1).max(120),
+      note: z.string().max(500).default(''),
+      manualSafetyConfirmed: z.boolean().default(false),
+      partNumberMatchConfirmed: z.boolean().default(false)
+    }).parse(request.body ?? {});
+    return {
+      submission: await communityImages.approveSubmission(submissionId, body.reviewer, body.note, {
+        manualSafetyConfirmed: body.manualSafetyConfirmed,
+        partNumberMatchConfirmed: body.partNumberMatchConfirmed
+      })
+    };
+  });
+
+  app.post('/internal/community-images/images/:imageId/chatgpt-handoff', async (request, reply) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { imageId } = z.object({ imageId: z.string().uuid() }).parse(request.params);
+    const handoff = await communityImages.issueChatGptHandoff(imageId);
+    return reply.header('cache-control', 'private,no-store').send({ handoff });
+  });
+
+  app.get('/internal/community-images/images/:imageId/derivative', async (request, reply) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { imageId } = z.object({ imageId: z.string().uuid() }).parse(request.params);
+    const derivative = await communityImages.readChatGptDerivative(imageId);
+    return reply.header('cache-control', 'private,no-store').type(derivative.mediaType).send(Buffer.from(derivative.bytes));
+  });
+
+  app.post('/internal/community-images/images/:imageId/approve-derivative', async (request) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { imageId } = z.object({ imageId: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      reviewer: z.string().min(1).max(120),
+      note: z.string().max(500).default(''),
+      sourceComparedConfirmed: z.literal(true),
+      contentRulesConfirmed: z.literal(true)
+    }).parse(request.body);
+    return {
+      image: await communityImages.approveChatGptDerivative(imageId, body.reviewer, body.note, {
+        sourceComparedConfirmed: body.sourceComparedConfirmed,
+        contentRulesConfirmed: body.contentRulesConfirmed
+      })
+    };
+  });
+
+  app.post('/internal/community-images/submissions/:submissionId/retry-archive', async (request) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { submissionId } = z.object({ submissionId: z.string().uuid() }).parse(request.params);
+    return { submission: await communityImages.retryArchive(submissionId) };
   });
 
   app.post('/internal/community-images/images/:imageId/reject', async (request) => {
