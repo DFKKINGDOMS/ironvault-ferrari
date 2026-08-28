@@ -157,7 +157,9 @@ type EditorTab =
 type Tone = "green" | "amber" | "red" | "slate" | "orange";
 type IconName = "inventory" | "plus" | "search" | "edit" | "shield" | "check" | "live" | "alert" | "receipt" | "settings" | "camera" | "box" | "truck" | "money" | "link" | "arrow" | "more";
 
-type StagedPhoto = { name: string; url: string };
+const MAX_SELLER_PHOTOS = 24;
+
+type StagedPhoto = { id: string; name: string; url: string };
 
 const navGroups: Array<{ label: string; items: Array<{ id: View; label: string; icon: IconName; count?: number }> }> = [
   {
@@ -431,17 +433,28 @@ export default function Home() {
   const openDraft = (tab: EditorTab = "listing") => { setEditorTab(tab); navigate("drafts"); };
   const showNotice = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(""), 4200); };
   const stageInstantPhotos = (files: FileList | null) => {
-    const selected = Array.from(files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, 8);
+    const remaining = Math.max(0, MAX_SELLER_PHOTOS - instantPhotos.length);
+    const imageFiles = Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+    const selected = imageFiles.slice(0, remaining);
+    if (!remaining) {
+      showNotice(`The eBay image set is full at ${MAX_SELLER_PHOTOS} photos. Remove one before adding another.`);
+      return;
+    }
     if (!selected.length) return;
     void Promise.all(selected.map((file) => new Promise<StagedPhoto>((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve({ name: file.name, url: String(reader.result) });
+      reader.onload = () => resolve({ id: crypto.randomUUID(), name: file.name, url: String(reader.result) });
       reader.onerror = () => reject(reader.error ?? new Error("Photo preview failed"));
       reader.readAsDataURL(file);
     }))).then((photos) => {
-      setInstantPhotos(photos);
-      showNotice(`${photos.length} photo${photos.length === 1 ? "" : "s"} staged in this browser. Nothing was uploaded or sent to eBay.`);
+      setInstantPhotos((current) => [...current, ...photos].slice(0, MAX_SELLER_PHOTOS));
+      const limited = imageFiles.length - photos.length;
+      showNotice(`${photos.length} photo${photos.length === 1 ? "" : "s"} added${limited > 0 ? `; ${limited} exceeded the ${MAX_SELLER_PHOTOS}-photo limit` : ""}. Nothing was sent to eBay.`);
     }).catch(() => showNotice("One or more photo previews could not be opened."));
+  };
+  const removeInstantPhoto = (photoId: string) => {
+    setInstantPhotos((current) => current.filter((photo) => photo.id !== photoId));
+    showNotice("Photo removed from this draft.");
   };
   const rebuildWithFoundPartNumber = () => {
     const found = foundPartNumber.trim();
@@ -666,10 +679,10 @@ export default function Home() {
                   <div className="instant-media">
                     {instantCatalogMatch && primaryCatalogReference ? <button className="catalog-image-candidate catalog-scan-thumb" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span>PARTQUILL CATALOG SCAN · FIRST PARTY</span><img src={primaryCatalogReference.viewUrl} alt={`Catalog evidence page ${primaryCatalogReference.pageId}`}/><strong>{primaryCatalogReference.callout ?? `Catalog page ${primaryCatalogReference.pageId}`}</strong><small>Open the full scan with its colored callout highlight.</small></button> : <div className={`catalog-image-candidate ${instantPhotoFirst ? "photo-first" : ""} ${instantSafety ? "safety" : ""}`}><span>{instantSafety ? "RESTRICTED ITEM · EVIDENCE INTAKE" : instantPhotoFirst ? "PHOTO-FIRST ITEM INTAKE" : "MEDIA REVIEW · PLACEHOLDER ONLY"}</span><Icon name={instantSafety ? "shield" : instantPhotoFirst ? "camera" : "box"}/><strong>{instantItemLabel}</strong><small>{instantPreview?.media.sourceDetail ?? "A seller-owned item photo is required."}</small></div>}
                     <div className="instant-thumbs">{(instantPreview?.media.requiredViews ?? [ { id: "hero", label: "Hero", detail: "Whole item", required: true }, { id: "label", label: "Label", detail: "Readable markings", required: false } ]).slice(0, 4).map((view) => <button key={view.id} onClick={() => showNotice(`${view.label}: ${view.detail}`)}><Icon name={view.id.includes("label") || view.id.includes("oem") ? "search" : "camera"}/><span>{view.label}</span></button>)}</div>
-                    {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo) => <figure key={`${photo.name}-${photo.url.length}`}><img src={photo.url} alt="Seller-selected local preview"/><figcaption>{photo.name}</figcaption></figure>)}</div>}
+                    {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo, index) => <figure key={photo.id}><span className="photo-order">{index + 1}</span><button className="remove-photo" type="button" aria-label={`Remove ${photo.name}`} onClick={() => removeInstantPhoto(photo.id)}>×</button><img src={photo.url} alt={`Seller-selected item photo ${index + 1}`}/><figcaption><span>{photo.name}</span><small>Photo {index + 1} of {instantPhotos.length}</small></figcaption></figure>)}</div>}
                     <div className="media-source"><Icon name="alert"/><span><strong>{instantPreview?.media.sourceLabel ?? "Seller-owned item photo required"}</strong><small>No grey placeholder can enter the eBay payload.</small></span></div>
                     {(instantPreview?.media.catalogReferences.length ?? 0) > 0 && <button className="catalog-evidence-jump" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Icon name="search"/><span><strong>Open highlighted catalog evidence</strong><small>{instantPreview?.media.catalogReferences.length} first-party row and diagram references</small></span><Icon name="arrow"/></button>}
-                    <label className="media-add-button"><Icon name="camera"/> {instantSafety ? "Add label + item photos" : instantPhotoFirst ? "Add item photos to continue" : "Add seller-owned item photo"}<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => stageInstantPhotos(event.target.files)}/></label>
+                    <div className="media-upload-toolbar"><label className="media-add-button" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); stageInstantPhotos(event.dataTransfer.files); }}><Icon name="camera"/><span><strong>{instantPhotos.length ? "Add more photos" : "Bulk add item photos"}</strong><small>Select or drop multiple images · up to {MAX_SELLER_PHOTOS}</small></span><b>{MAX_SELLER_PHOTOS - instantPhotos.length} open</b><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { stageInstantPhotos(event.target.files); event.currentTarget.value = ""; }}/></label>{instantPhotos.length > 0 && <button className="clear-photos" type="button" onClick={() => { setInstantPhotos([]); showNotice("All staged photos were removed from this draft."); }}>Remove all</button>}</div>
                     <p className="local-photo-note"><Icon name="shield"/> Private pilot: selected images stay in this browser preview. Photo analysis and durable upload are not connected yet.</p>
                   </div>
 
@@ -711,8 +724,8 @@ export default function Home() {
                   <div className="fitment-states"><span><i className="green"/>Green: proven fit</span><span><i className="amber"/>Amber: may fit / not verified</span><span><i className="red"/>Red: does not fit</span><button onClick={() => openDraft("fitment")}>Open compatibility inspector <Icon name="arrow"/></button></div>
                   <div className="vin-sandbox"><Icon name="shield"/><div><strong>{instantPreview?.recovery.label}</strong><p>Buyer-only recovery after a red mismatch. The seller listing is never silently changed.</p></div><input aria-label="Buyer VIN for correct-part recovery" placeholder="17-character VIN"/><button onClick={() => showNotice(instantPreview?.recovery.privacyNote ?? "A VIN lookup was not run.")}>Find correct part</button></div>
                 </div> : <div className={`photo-evidence-card ${instantSafety ? "safety" : ""}`}>
-                  <div className="photo-evidence-head"><div><Icon name={instantSafety ? "shield" : "camera"}/><span><strong>{instantSafety ? "Restricted-item evidence gate" : "No part number? Use the item itself."}</strong><small>{instantSafety ? "A typed vehicle name cannot clear an airbag listing." : "Three useful photos are enough to start; a part number remains optional."}</small></span></div><Badge tone={instantSafety ? "red" : "amber"}>{instantPhotos.length}/{instantPreview?.media.minimumPhotos ?? 3} photos staged</Badge></div>
-                  <div className="photo-requirement-grid">{instantPreview?.media.requiredViews.map((requirement, index) => <article className={instantPhotos[index] ? "staged" : ""} key={requirement.id}><span>{instantPhotos[index] ? <Icon name="check"/> : String(index + 1).padStart(2, "0")}</span><div><strong>{requirement.label}</strong><small>{requirement.detail}</small></div><Badge tone={instantPhotos[index] ? "green" : instantSafety ? "red" : "amber"}>{instantPhotos[index] ? "Staged" : "Required"}</Badge></article>)}</div>
+                  <div className="photo-evidence-head"><div><Icon name={instantSafety ? "shield" : "camera"}/><span><strong>{instantSafety ? "Restricted-item evidence gate" : "No part number? Use the item itself."}</strong><small>{instantSafety ? "A typed vehicle name cannot clear an airbag listing." : "Three useful photos are enough to start; a part number remains optional."}</small></span></div><Badge tone={instantSafety ? "red" : "amber"}>{instantPhotos.length}/{MAX_SELLER_PHOTOS} added · {instantPreview?.media.minimumPhotos ?? 3} required</Badge></div>
+                  <div className="photo-requirement-grid">{instantPreview?.media.requiredViews.map((requirement, index) => <article className={instantPhotos[index] ? "staged" : ""} key={requirement.id}><span className="requirement-index">{instantPhotos[index] ? <Icon name="check"/> : String(index + 1).padStart(2, "0")}</span><div><strong>{requirement.label}</strong><small>{requirement.detail}</small></div><span className={`requirement-state ${instantPhotos[index] ? "staged" : instantSafety ? "required safety" : "required"}`}>{instantPhotos[index] ? "Staged" : "Required"}</span></article>)}</div>
                   <div className="found-part-number"><div><span>{instantSafety ? "Readable OEM part number" : "Found a number while taking photos?"}</span><strong>{instantSafety ? "Required as evidence; it does not clear the policy hold." : "Optional — switch to catalog-assisted lookup."}</strong></div><input value={foundPartNumber} onChange={(event) => setFoundPartNumber(event.target.value)} placeholder="Enter label / casting number"/><button onClick={rebuildWithFoundPartNumber}>{instantSafety ? "Attach number" : "Rebuild with number"}<Icon name="arrow"/></button></div>
                   {instantSafety ? <div className="policy-gate"><div><Icon name="alert"/><span><strong>{instantPreview?.policy.label}</strong><small>PartQuill keeps Submit disabled until every current requirement is evidenced.</small></span></div><ul>{instantPreview?.policy.requirements.map((requirement) => <li key={requirement}><Icon name="shield"/>{requirement}</li>)}</ul>{instantPreview?.policy.sourceUrl && <a href={instantPreview.policy.sourceUrl} target="_blank" rel="noreferrer">Review the current eBay vehicle-parts policy <Icon name="arrow"/></a>}</div> : <div className="photo-route-truth"><Icon name="shield"/><p><strong>What happens next:</strong> photos may suggest identity, category and visible condition. They cannot prove hidden damage, vehicle fitment, origin, weight or dimensions. In this pilot, files remain a local preview and are not analyzed yet.</p></div>}
                 </div>}

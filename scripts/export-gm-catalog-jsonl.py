@@ -12,9 +12,46 @@ import argparse
 import gzip
 import hashlib
 import json
+import re
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
+
+
+AUTOMOTIVE_IDENTITY_WORDS = {
+    "arm", "bearing", "belt", "bolt", "booster", "bracket", "bushing", "cable", "cleaner",
+    "clutch", "cover", "cylinder", "drum", "element", "filter", "fitting", "gasket", "gear",
+    "hose", "housing", "hub", "kit", "knuckle", "lamp", "line", "linkage", "master", "motor",
+    "mount", "nut", "pad", "panel", "pipe", "piston", "plate", "pump", "relay", "repair",
+    "retainer", "rod", "rotor", "screw", "seal", "shaft", "shoe", "solenoid", "spring",
+    "steering", "support", "switch", "tube", "valve", "washer", "wheel",
+}
+SUPPLIER_WORDS = {"bendix", "delco", "moraine", "rochester"}
+
+
+def canonical_part_number(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+
+def credible_catalog_label(value: str | None, part_number: str) -> str | None:
+    if not value:
+        return None
+    text = re.sub(r"\s+", " ", value).strip()
+    if len(text) < 3 or len(text) > 140 or "|" in text or re.search(r"\.{4,}", text):
+        return None
+    requested_key = canonical_part_number(part_number)
+    part_like = re.findall(r"\b[A-Z0-9-]*\d[A-Z0-9-]{4,}\b", text, flags=re.IGNORECASE)
+    if any(canonical_part_number(token) != requested_key for token in part_like):
+        return None
+    words = re.findall(r"[a-z]+", text.lower())
+    if any(word in AUTOMOTIVE_IDENTITY_WORDS for word in words):
+        return text
+    significant = [word for word in words if len(word) >= 4 and word not in SUPPLIER_WORDS]
+    return text if len(significant) >= 2 else None
+
+
+def first_credible_label(values: list[str | None], part_number: str) -> str | None:
+    return next((label for value in values if (label := credible_catalog_label(value, part_number))), None)
 
 
 def json_value(value: str | None):
@@ -204,17 +241,36 @@ def main() -> None:
         for row in db.execute(
             "SELECT * FROM corrected_rollups ORDER BY corrected_part_number"
         ):
-            part_number = row["corrected_part_number"]
-            applications = applications_by_part.get(part_number, [])
+            source_part_number = row["corrected_part_number"]
+            part_number = canonical_part_number(source_part_number)
+            applications = applications_by_part.get(source_part_number, [])
             divisions = sorted({a["division"] for a in applications if a["division"]})
             descriptions = [a["description"] for a in applications if a["description"]]
             families = [a["componentFamily"] for a in applications if a["componentFamily"]]
+            structured_labels = [
+                label
+                for application in applications
+                for label in (
+                    application["componentFamily"],
+                    application["groupHeading"],
+                    application["description"],
+                    application["partName"],
+                )
+            ]
+            product_type = first_credible_label(
+                families + structured_labels + [row["representative_description"]],
+                part_number,
+            )
+            description = first_credible_label(
+                descriptions + structured_labels + [row["representative_description"], product_type],
+                part_number,
+            )
             record = {
                 "partNumber": part_number,
                 "manufacturer": "General Motors",
                 "divisions": divisions,
-                "productType": families[0] if families else (descriptions[0] if descriptions else row["representative_description"]),
-                "description": descriptions[0] if descriptions else row["representative_description"],
+                "productType": product_type,
+                "description": description,
                 "catalogGroup": applications[0]["catalogGroup"] if applications else row["representative_catalog_group"],
                 "verificationState": row["verification_state"],
                 "rollup": {

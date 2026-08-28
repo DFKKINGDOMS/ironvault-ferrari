@@ -25,6 +25,7 @@ import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
 import { resolveCatalogImage } from '../catalog/image-proxy.js';
 import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema, parseListingCommand } from '../seller/command-preview.js';
+import { normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
 import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 import { applyEbayCategorySuggestion, buildCatalogListingIntelligence } from '../catalog/listing-intelligence.js';
@@ -188,7 +189,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.13.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.14.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -213,9 +214,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     try {
       const { command } = listingCommandRequestSchema.parse(request.body);
       const intent = parseListingCommand(command);
-      const gmCatalog = intent.partNumber
+      const rawGmCatalog = intent.partNumber
         ? await store.lookupGmCatalogPart?.(intent.partNumber)
         : undefined;
+      const gmCatalog = normalizeGmCatalogPart(rawGmCatalog, intent.partNumber);
       let intelligence = gmCatalog ? buildCatalogListingIntelligence(gmCatalog) : undefined;
       if (gmCatalog && intelligence && ebayTaxonomy) {
         try {
@@ -284,7 +286,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.13.0',
+          version: '0.14.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

@@ -63,6 +63,18 @@ const rules: IntelligenceRule[] = [
     confidence: 0.9
   },
   {
+    id: 'power-brake-repair-kit',
+    profileLabel: 'Small brake repair-kit box',
+    pattern: /\b(?:(?:power\s*brake|brake)[^;,.]{0,40}(?:repair|overhaul)\s*kit|(?:repair|overhaul)\s*kit[^;,.]{0,40}(?:power\s*brake|brake))\b/i,
+    categoryName: 'Brake Master Cylinders & Parts',
+    categoryPath: `${motorsRoot} › Brakes & Brake Parts › Brake Master Cylinders & Parts`,
+    categoryKeywords: 'automotive power brake master cylinder repair overhaul kit',
+    packageType: 'BOX',
+    itemWeight: { min: 0.25, max: 3, suggested: 1 },
+    packageIn: { length: 9, width: 7, height: 4 },
+    confidence: 0.88
+  },
+  {
     id: 'brake-booster',
     profileLabel: 'Large mechanical component',
     pattern: /\b(?:power\s*brake|brake\s*booster|vacuum\s*booster|hydrovac)\b/i,

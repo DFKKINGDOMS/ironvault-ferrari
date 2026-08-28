@@ -3107,6 +3107,57 @@ input:focus-visible {
   cursor: pointer;
 }
 
+.media-upload-toolbar {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.media-upload-toolbar .media-add-button {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.media-add-button > span {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.media-add-button > span strong {
+  font-size: 8px;
+}
+
+.media-add-button > span small {
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 560;
+}
+
+.media-add-button > b {
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  color: var(--orange-dark);
+  background: var(--orange-pale);
+  border: 1px solid #dfa381;
+  font-size: 7px;
+}
+
+.clear-photos {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  color: var(--red);
+  background: var(--red-pale);
+  border: 1px solid #d7aaa5;
+  font-size: 7px;
+  font-weight: 800;
+}
+
 .media-add-button .icon {
   width: 14px;
 }
@@ -3141,14 +3192,48 @@ input:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   margin-top: 7px;
+  max-height: 390px;
+  overflow-y: auto;
 }
 
 .staged-photo-grid figure {
+  position: relative;
   min-width: 0;
   margin: 0;
   padding: 3px;
   background: #fff;
   border: 1px solid #c8c1b5;
+}
+
+.staged-photo-grid .photo-order,
+.staged-photo-grid .remove-photo {
+  position: absolute;
+  top: 6px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(31, 29, 25, .88);
+  border: 1px solid rgba(255, 255, 255, .78);
+  line-height: 1;
+}
+
+.staged-photo-grid .photo-order {
+  left: 6px;
+  width: 18px;
+  height: 18px;
+  font-size: 7px;
+  font-weight: 850;
+}
+
+.staged-photo-grid .remove-photo {
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0 0 2px;
+  background: rgba(142, 42, 35, .94);
+  font-size: 16px;
+  cursor: pointer;
 }
 
 .staged-photo-grid img {
@@ -3159,12 +3244,23 @@ input:focus-visible {
 }
 
 .staged-photo-grid figcaption {
-  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   padding: 4px 2px 1px;
   color: var(--muted);
   font-size: 6px;
+}
+
+.staged-photo-grid figcaption span {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.staged-photo-grid figcaption small {
+  color: var(--faint);
+  font-size: 6px;
 }
 
 .instant-listing-copy {
@@ -3501,7 +3597,7 @@ input:focus-visible {
   border: 1px solid var(--line);
 }
 
-.photo-requirement-grid article > span {
+.photo-requirement-grid .requirement-index {
   width: 25px;
   height: 25px;
   display: grid;
@@ -3513,7 +3609,7 @@ input:focus-visible {
   font-weight: 850;
 }
 
-.photo-evidence-card.safety .photo-requirement-grid article > span {
+.photo-evidence-card.safety .photo-requirement-grid .requirement-index {
   color: var(--red);
   background: var(--red-pale);
   border-color: #d9a49f;
@@ -3524,13 +3620,13 @@ input:focus-visible {
   border-color: #a9c7b2;
 }
 
-.photo-requirement-grid article.staged > span {
+.photo-requirement-grid article.staged > .requirement-index {
   color: #fff;
   background: var(--green);
   border-color: var(--green);
 }
 
-.photo-requirement-grid article > span .icon {
+.photo-requirement-grid .requirement-index .icon {
   width: 13px;
 }
 
@@ -3547,6 +3643,33 @@ input:focus-visible {
 .photo-requirement-grid article small {
   color: var(--muted);
   font-size: 7px;
+}
+
+.photo-requirement-grid .requirement-state {
+  min-width: 62px;
+  justify-self: end;
+  padding: 5px 7px;
+  border: 1px solid #d6bb7e;
+  border-radius: 4px;
+  color: var(--amber);
+  background: var(--amber-pale);
+  font-size: 7px;
+  font-weight: 850;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.photo-requirement-grid .requirement-state.safety {
+  color: var(--red);
+  background: var(--red-pale);
+  border-color: #d7aaa5;
+}
+
+.photo-requirement-grid .requirement-state.staged {
+  color: var(--green);
+  background: var(--green-pale);
+  border-color: #9fc4ad;
 }
 
 .found-part-number {

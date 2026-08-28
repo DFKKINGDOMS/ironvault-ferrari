@@ -54,6 +54,37 @@ const gm581167: GmCatalogPart = {
     })))
   }]
 };
+const gm5455054: GmCatalogPart = {
+  ...gm5459066,
+  partNumber: '5455054',
+  divisions: [],
+  productType: 'Po 567095 | 5455055',
+  description: 'Po 567095 | 5455055',
+  catalogGroup: '4.898',
+  applications: [],
+  diagrams: [],
+  rollup: {
+    ...gm5459066.rollup,
+    firstPageId: 2163,
+    lastPageId: 2163,
+    representativePageId: 2163,
+    representativeImageRef: 'GM2163-FULL'
+  }
+};
+const gm5455055: GmCatalogPart = {
+  ...gm5455054,
+  partNumber: '5455055',
+  productType: 'Ail Moraine',
+  description: 'Ail Moraine',
+  catalogGroup: '4.658',
+  rollup: {
+    ...gm5455054.rollup,
+    firstPageId: 2164,
+    lastPageId: 2164,
+    representativePageId: 2164,
+    representativeImageRef: 'GM2164-FULL'
+  }
+};
 
 describe('one-command seller preview', () => {
   it('extracts the primary sample command without making an external request', () => {
@@ -176,6 +207,60 @@ describe('one-command seller preview', () => {
         confirmationRequired: true
       }
     });
+  });
+
+  it('replaces neighboring OCR text with the exact 5455054 catalog curation', () => {
+    const preview = buildSellerCommandPreview('List part 5455054 for $49.99', gm5455054);
+    expect(preview.identity).toMatchObject({
+      state: 'CATALOG_STATED',
+      brand: 'Oldsmobile',
+      manufacturerPartNumber: '5455054',
+      productType: 'Moraine Power Brake Repair Kit'
+    });
+    expect(preview.listing).toMatchObject({
+      sku: '5455054',
+      title: 'Oldsmobile 5455054 Moraine Power Brake Repair Kit 1955–1957'
+    });
+    expect(JSON.stringify(preview)).not.toContain('Po 567095');
+    expect(preview.fitment.applications).toEqual([
+      expect.objectContaining({ vehicle: '1955–1957 Oldsmobile Moraine power-brake equipped vehicles' })
+    ]);
+    expect(preview.media.catalogReferences).toContainEqual(expect.objectContaining({ pageId: 2153, primary: true }));
+    expect(preview.intelligence).toMatchObject({
+      category: { categoryName: 'Brake Master Cylinders & Parts', categoryId: null },
+      shipping: {
+        profileId: 'power-brake-repair-kit',
+        suggestedPackageIn: { length: 9, width: 7, height: 4 },
+        confirmationRequired: true
+      }
+    });
+  });
+
+  it('maps 5455055 to its own proper OEM identity and held catalog application', () => {
+    const preview = buildSellerCommandPreview('List part 5455055 for $49.99', gm5455055);
+    expect(preview.identity).toMatchObject({
+      state: 'CATALOG_STATED',
+      brand: 'Oldsmobile',
+      manufacturerPartNumber: '5455055',
+      productType: 'Moraine Power Brake Overhaul Kit'
+    });
+    expect(preview.listing).toMatchObject({
+      sku: '5455055',
+      title: 'Oldsmobile 5455055 Moraine Power Brake Overhaul Kit 1955–1956'
+    });
+    expect(preview.fitment.applications).toEqual([
+      expect.objectContaining({ vehicle: '1955–1956 Oldsmobile Moraine power-brake equipped vehicles' })
+    ]);
+    expect(preview.media.catalogReferences).toContainEqual(expect.objectContaining({ pageId: 6761, primary: true }));
+  });
+
+  it('rejects every catalog-derived field when the returned OEM key differs', () => {
+    const preview = buildSellerCommandPreview('List part 5455055 for $49.99', gm5455054);
+    expect(preview.identity).toMatchObject({ state: 'NOT_VERIFIED', manufacturerPartNumber: '5455055' });
+    expect(preview.listing.sku).toBe('5455055');
+    expect(preview.listing.title).toBe('Part 5455055 — catalog identity required');
+    expect(preview.issues).toContainEqual(expect.objectContaining({ code: 'CATALOG_PART_NUMBER_MISMATCH' }));
+    expect(JSON.stringify(preview)).not.toContain('5455054 Moraine');
   });
 
   it('routes an item without a part number to photo-first intake', () => {

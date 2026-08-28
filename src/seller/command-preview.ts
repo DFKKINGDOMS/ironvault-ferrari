@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
+import { canonicalOemPartNumber, formatOemPartNumber, normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
 import { buildCatalogListingIntelligence, type CatalogListingIntelligence } from '../catalog/listing-intelligence.js';
 import type { AppConfig } from '../config.js';
 
@@ -136,12 +137,12 @@ function findPartNumber(command: string): string | null {
   const explicit = command.match(
     /\b(?:part|mpn|oem(?:\s+part)?(?:\s+number)?)\s*(?:number|no\.?)?\s*[:#-]?\s*([a-z0-9][a-z0-9-]{3,})\b/i
   )?.[1];
-  if (explicit && /\d/.test(explicit)) return explicit.toUpperCase();
+  if (explicit && /\d/.test(explicit)) return formatOemPartNumber(explicit);
 
   const candidate = command
     .match(/\b[a-z0-9][a-z0-9-]{4,}\b/gi)
     ?.find((token) => /\d/.test(token) && !/^\d{1,4}$/.test(token));
-  return candidate?.toUpperCase() ?? null;
+  return candidate ? formatOemPartNumber(candidate) : null;
 }
 
 const restraintPattern = /\b(?:air\s*bag|airbag|srs|inflator|pretensioner|supplemental\s+restraint)\b/i;
@@ -356,7 +357,7 @@ function catalogFitmentApplications(catalog: GmCatalogPart): SellerCommandPrevie
 }
 
 function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media']['catalogReferences'] {
-  const rowReferences = catalog.applications.map((application) => ({
+  const rowReferences = catalog.applications.map((application, index) => ({
     kind: 'catalog-row' as const,
     pageId: application.sourcePageId,
     label: `${application.catalogTitle ?? 'GM catalog'} · Group ${application.catalogGroup ?? 'not decoded'}`,
@@ -366,7 +367,7 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
     callout: null,
     confidence: application.confidence,
     exactPartDepiction: true,
-    primary: false,
+    primary: catalog.diagrams.length === 0 && index === 0,
     evidenceBox: application.evidenceBox,
     displayRotationDegrees: null,
     relationshipState: 'catalog_stated_row'
@@ -386,7 +387,36 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
     displayRotationDegrees: diagram.displayRotationDegrees,
     relationshipState: diagram.relationshipState
   }));
-  return [...diagramReferences, ...rowReferences];
+  const references: SellerCommandPreview['media']['catalogReferences'] = [
+    ...diagramReferences,
+    ...rowReferences
+  ];
+  if (!rowReferences.length && catalog.rollup.representativePageId) {
+    const pageId = catalog.rollup.representativePageId;
+    references.push({
+      kind: 'catalog-row' as const,
+      pageId,
+      label: `GM catalog exact part-number occurrence · Group ${catalog.catalogGroup ?? 'not decoded'}`,
+      viewUrl: `/v1/gm-catalog/pages/${pageId}/image`,
+      imageRef: catalog.rollup.representativeImageRef,
+      imageBlobKey: catalog.rollup.representativeImageRef
+        ? `gm-scans/pages/${String(pageId).padStart(6, '0')}/full_page.png`
+        : null,
+      callout: catalog.partNumber,
+      confidence: catalog.rollup.bestLayoutConfidence,
+      exactPartDepiction: true,
+      primary: diagramReferences.length === 0,
+      evidenceBox: null,
+      displayRotationDegrees: null,
+      relationshipState: 'exact_part_number_occurrence'
+    });
+  }
+  const unique = new Map<string, (typeof references)[number]>();
+  for (const reference of references) {
+    const key = `${reference.kind}|${reference.pageId}|${reference.callout ?? ''}`;
+    if (!unique.has(key)) unique.set(key, reference);
+  }
+  return [...unique.values()];
 }
 
 export function buildSellerCommandPreview(
@@ -398,7 +428,14 @@ export function buildSellerCommandPreview(
   const isSafetyReview = intent.route === 'SAFETY_REVIEW';
   const isPhotoFirst = intent.route === 'PHOTO_FIRST';
   const isIllustrativeFixture = intent.partNumber === '58487514' && !isSafetyReview;
-  const catalogMatch = !isSafetyReview && !isPhotoFirst && !isIllustrativeFixture ? gmCatalog : undefined;
+  const catalogMatch = !isSafetyReview && !isPhotoFirst && !isIllustrativeFixture
+    ? normalizeGmCatalogPart(gmCatalog, intent.partNumber)
+    : undefined;
+  const catalogNumberMismatch = Boolean(
+    gmCatalog
+    && intent.partNumber
+    && canonicalOemPartNumber(gmCatalog.partNumber) !== canonicalOemPartNumber(intent.partNumber)
+  );
   const intelligence = catalogMatch
     ? suppliedIntelligence ?? buildCatalogListingIntelligence(catalogMatch)
     : null;
@@ -423,10 +460,12 @@ export function buildSellerCommandPreview(
       ? {
           state: 'CATALOG_STATED' as const,
           brand: catalogMatch.divisions.length === 1 ? catalogMatch.divisions[0] ?? catalogMatch.manufacturer : catalogMatch.manufacturer,
-          manufacturerPartNumber: catalogMatch.partNumber,
+          manufacturerPartNumber: intent.partNumber,
           productType: catalogMatch.productType ? properCaseCatalogText(catalogMatch.productType) : null,
           sourceLabel: `GM catalog scan · page ${catalogMatch.rollup.representativePageId ?? catalogMatch.rollup.firstPageId}`,
-          sourceDetail: `${properCaseCatalogText(catalogMatch.description ?? 'Catalog identity')} is stated in GM group ${catalogMatch.catalogGroup ?? 'not decoded'}. Evidence is preserved separately from seller condition and marketplace compatibility.`
+          sourceDetail: catalogMatch.description
+            ? `${properCaseCatalogText(catalogMatch.description)} is stated in GM group ${catalogMatch.catalogGroup ?? 'not decoded'}. Evidence is preserved separately from seller condition and marketplace compatibility.`
+            : `Exact part number ${intent.partNumber} occurs in GM group ${catalogMatch.catalogGroup ?? 'not decoded'}. Its OCR description is held because it is not reliable enough for a seller title.`
         }
       : isSafetyReview
       ? {
@@ -458,7 +497,7 @@ export function buildSellerCommandPreview(
     isIllustrativeFixture
       ? `ACDelco ${intent.partNumber} Cabin Air Filter OE Replacement ${intent.condition}`
       : catalogMatch
-        ? `${identity.brand ?? catalogMatch.manufacturer} ${catalogMatch.partNumber} ${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'GM Part')}${catalogYears(catalogMatch) ? ` ${catalogYears(catalogMatch)}` : ''}`
+        ? `${identity.brand ?? catalogMatch.manufacturer} ${identity.manufacturerPartNumber} ${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'GM Catalog Part')}${catalogYears(catalogMatch) ? ` ${catalogYears(catalogMatch)}` : ''}`
       : isSafetyReview
         ? `${intent.itemDescription ?? 'Possible airbag or restraint item'} — Safety review required`
         : isPhotoFirst
@@ -477,6 +516,13 @@ export function buildSellerCommandPreview(
     : [];
   const issues: SellerCommandPreview['issues'] = [];
   if (!intent.price) issues.push({ code: 'PRICE_REQUIRED', message: 'Add the seller-owned Buy It Now price.', blocking: true });
+  if (catalogNumberMismatch) {
+    issues.push({
+      code: 'CATALOG_PART_NUMBER_MISMATCH',
+      message: 'The catalog lookup returned a different normalized OEM number, so every catalog-derived field was rejected.',
+      blocking: true
+    });
+  }
   if (isSafetyReview) {
     issues.push({
       code: 'RESTRICTED_RESTRAINT_REVIEW_REQUIRED',
@@ -537,7 +583,7 @@ export function buildSellerCommandPreview(
     : catalogMatch
       ? {
           Brand: identity.brand ?? catalogMatch.manufacturer,
-          'Manufacturer Part Number': catalogMatch.partNumber,
+          'Manufacturer Part Number': identity.manufacturerPartNumber ?? formatOemPartNumber(catalogMatch.partNumber),
           ...(identity.productType ? { Type: identity.productType } : {}),
           ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {})
         }
@@ -558,7 +604,7 @@ export function buildSellerCommandPreview(
       // inventory key. A previous prototype prefix caused cross-draft leakage.
       sku: identity.manufacturerPartNumber ?? intent.partNumber,
       description: catalogMatch
-        ? `${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'General Motors part')}, part ${catalogMatch.partNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
+        ? `${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'General Motors catalog part')}, part ${identity.manufacturerPartNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
         : buildDescription(intent, identity.productType),
       category: isIllustrativeFixture
         ? 'Air & Fuel Delivery › Filters'
@@ -694,7 +740,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.13.0',
+    version: '0.14.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
