@@ -35,6 +35,22 @@ describe('production configuration fail-closed behavior', () => {
     expect(config.ALLOW_EBAY_WRITES).toBe(false);
   });
 
+  it('requires production Browse API credentials for live reference discovery', () => {
+    expect(() => loadConfig({ EBAY_REFERENCE_DISCOVERY_MODE: 'live' })).toThrow('production Browse API');
+    expect(() => loadConfig({
+      EBAY_ENV: 'production',
+      EBAY_REFERENCE_DISCOVERY_MODE: 'live'
+    })).toThrow('eBay application credentials');
+    const config = loadConfig({
+      EBAY_ENV: 'production',
+      EBAY_CLIENT_ID: 'production-client-id',
+      EBAY_CLIENT_SECRET: 'production-client-secret',
+      EBAY_REFERENCE_DISCOVERY_MODE: 'live'
+    });
+    expect(config.EBAY_REFERENCE_CACHE_HOURS).toBeLessThanOrEqual(6);
+    expect(config.EBAY_REFERENCE_MAX_IMAGES).toBe(3);
+  });
+
   it('refuses live Image Studio without a server-side OpenAI credential', () => {
     expect(() =>
       loadConfig({

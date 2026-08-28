@@ -12,6 +12,8 @@ import { PartQuillService } from './services/partquill-service.js';
 import { MemoryStore } from './store/memory-store.js';
 import { runMigrations } from './store/migrate.js';
 import { PostgresStore } from './store/postgres-store.js';
+import { EbayBrowseReferenceClient } from './ebay/reference-discovery.js';
+import { EbayReferenceService } from './ebay/reference-service.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -40,7 +42,25 @@ const imageStudio = new ImageStudioService(
   config.IMAGE_STUDIO_CONCURRENCY
 );
 await imageStudio.initialize();
-const app = await buildApp({ config, store, service, imageStudio, ...(tokenVault ? { tokenVault } : {}) });
+const ebayReferenceProvider = config.EBAY_REFERENCE_DISCOVERY_MODE === 'live'
+  ? new EbayBrowseReferenceClient(config)
+  : undefined;
+const ebayReference = new EbayReferenceService(store, ebayReferenceProvider, config);
+await ebayReference.purgeExpired();
+const ebayReferenceCleanup = setInterval(() => {
+  void ebayReference.purgeExpired().catch((error: unknown) => {
+    console.error('eBay reference cache cleanup failed', error);
+  });
+}, 15 * 60_000);
+ebayReferenceCleanup.unref();
+const app = await buildApp({
+  config,
+  store,
+  service,
+  imageStudio,
+  ebayReference,
+  ...(tokenVault ? { tokenVault } : {})
+});
 
 await app.listen({ host: config.HOST, port: config.PORT });
 
@@ -54,6 +74,7 @@ if (store instanceof PostgresStore) {
 }
 
 const close = async (): Promise<void> => {
+  clearInterval(ebayReferenceCleanup);
   await app.close();
   if (store instanceof PostgresStore) await store.close();
 };

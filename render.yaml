@@ -35,6 +35,14 @@ services:
         sync: false
       - key: EBAY_RU_NAME
         sync: false
+      - key: EBAY_REFERENCE_DISCOVERY_MODE
+        value: disabled
+      - key: EBAY_REFERENCE_CACHE_HOURS
+        value: "5.5"
+      - key: EBAY_REFERENCE_NEGATIVE_CACHE_HOURS
+        value: "24"
+      - key: EBAY_REFERENCE_MAX_IMAGES
+        value: "3"
       - key: PUBLIC_BASE_URL
         value: https://partquill.com
       - key: CORS_ORIGINS

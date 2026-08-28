@@ -11,6 +11,7 @@ import type {
 import type { Store } from './store.js';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
+import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -28,7 +29,33 @@ export class MemoryStore implements Store {
   private readonly oauthNonces = new Map<string, { sellerId: string; expiresAt: string; consumedAt?: string }>();
   private readonly acknowledgements = new Map<string, SellerAcknowledgement>();
   private readonly gmCatalog = new Map<string, GmCatalogPart>();
+  private readonly ebayReferenceCache = new Map<string, EbayReferenceCacheRecord>();
   private gmCatalogComplete = false;
+
+  async getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined> {
+    const record = this.ebayReferenceCache.get(canonicalOemPartNumber(partNumber));
+    return record ? clone(record) : undefined;
+  }
+
+  async saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void> {
+    this.ebayReferenceCache.set(canonicalOemPartNumber(record.partNumber), clone(record));
+  }
+
+  async deleteEbayReferenceCache(partNumber: string): Promise<void> {
+    this.ebayReferenceCache.delete(canonicalOemPartNumber(partNumber));
+  }
+
+  async purgeExpiredEbayReferenceCache(at: string): Promise<number> {
+    const cutoff = Date.parse(at);
+    let deleted = 0;
+    for (const [partNumber, record] of this.ebayReferenceCache) {
+      if (record.status === 'MATCHED_LIVE_REFERENCE' && record.expiresAt && Date.parse(record.expiresAt) <= cutoff) {
+        this.ebayReferenceCache.delete(partNumber);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
 
   async importGmCatalogRecords(records: GmCatalogPart[], complete = false): Promise<void> {
     for (const record of records) {

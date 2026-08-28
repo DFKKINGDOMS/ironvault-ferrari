@@ -30,10 +30,17 @@ import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 import { applyEbayCategorySuggestion, buildCatalogListingIntelligence } from '../catalog/listing-intelligence.js';
 import { EbayTaxonomyClient } from '../ebay/taxonomy-client.js';
+import type { EbayReferenceService } from '../ebay/reference-service.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
 const gmPageParams = z.object({ pageId: z.coerce.number().int().min(1).max(9_999_999) });
+const ebayReferenceParams = z.object({
+  partNumber: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._ -]*$/)
+});
+const ebayReferenceImageParams = ebayReferenceParams.extend({
+  index: z.coerce.number().int().min(0).max(2)
+});
 const evidenceSchema = z.object({
   field: z.string().min(1),
   value: z.unknown(),
@@ -89,6 +96,7 @@ export interface AppDependencies {
   service: PartQuillService;
   tokenVault?: TokenVault;
   imageStudio?: ImageStudioService;
+  ebayReference?: EbayReferenceService;
 }
 
 function publicStudioJob(job: StudioJobRecord) {
@@ -103,7 +111,7 @@ function publicStudioJob(job: StudioJobRecord) {
 }
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, ebayReference } = dependencies;
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
   const sellerIndexPath = join(webRoot, 'index.html');
@@ -153,6 +161,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       || request.url.startsWith('/connected')
     )) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-reference/')) return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
@@ -189,7 +198,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.14.2' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -231,6 +240,78 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         .header('cache-control', 'no-store')
         .header('x-content-type-options', 'nosniff')
         .send({ preview: buildSellerCommandPreview(command, gmCatalog, intelligence) });
+    } finally {
+      permit.release();
+    }
+  });
+  app.get('/v1/seller-ui/ebay-reference/:partNumber', async (request, reply) => {
+    const permit = sellerPreviewGuard.acquire(request.ip);
+    try {
+      const { partNumber } = ebayReferenceParams.parse(request.params);
+      const rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
+      const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
+      const result = ebayReference
+        ? await ebayReference.lookup(partNumber, catalog)
+        : { status: 'DISCOVERY_DISABLED' as const, reference: null, searchSuppressed: true };
+      const publicResult = result.reference
+        ? {
+            ...result,
+            reference: {
+              ...result.reference,
+              images: result.reference.images.map((image, index) => ({
+                alt: image.alt,
+                viewUrl: result.status === 'RIGHTS_CLEARED_ARCHIVE' && image.url.startsWith('/')
+                  ? image.url
+                  : `/v1/seller-ui/ebay-reference/${encodeURIComponent(result.reference!.partNumber)}/image/${index}`
+              }))
+            }
+          }
+        : result;
+      return reply
+        .header('cache-control', 'no-store')
+        .header('x-content-type-options', 'nosniff')
+        .send(publicResult);
+    } finally {
+      permit.release();
+    }
+  });
+  app.get('/v1/seller-ui/ebay-reference/:partNumber/image/:index', async (request, reply) => {
+    const permit = sellerPreviewGuard.acquire(request.ip);
+    try {
+      const { partNumber, index } = ebayReferenceImageParams.parse(request.params);
+      if (!ebayReference) return reply.code(404).send({ error: { code: 'REFERENCE_NOT_AVAILABLE', message: 'reference image is not available' } });
+      const rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
+      const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
+      const result = await ebayReference.lookup(partNumber, catalog);
+      if (result.status !== 'MATCHED_LIVE_REFERENCE' || !result.reference) {
+        return reply.code(404).send({ error: { code: 'REFERENCE_NOT_AVAILABLE', message: 'reference image is not available' } });
+      }
+      const source = result.reference.images[index]?.url;
+      if (!source) return reply.code(404).send({ error: { code: 'REFERENCE_NOT_AVAILABLE', message: 'reference image is not available' } });
+      const sourceUrl = new URL(source);
+      if (sourceUrl.protocol !== 'https:' || sourceUrl.hostname !== 'i.ebayimg.com') {
+        return reply.code(502).send({ error: { code: 'INVALID_REFERENCE_SOURCE', message: 'reference source was rejected' } });
+      }
+      const upstream = await fetch(sourceUrl, {
+        headers: { accept: 'image/avif,image/webp,image/png,image/jpeg', 'user-agent': 'PartQuill/0.15 (+https://partquill.com)' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(12_000)
+      });
+      if (!upstream.ok) return reply.code(502).send({ error: { code: 'REFERENCE_UPSTREAM_ERROR', message: 'reference image is unavailable' } });
+      const mediaType = upstream.headers.get('content-type')?.split(';')[0]?.trim();
+      if (!mediaType || !['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(mediaType)) {
+        return reply.code(502).send({ error: { code: 'INVALID_REFERENCE_IMAGE', message: 'reference image type was rejected' } });
+      }
+      const bytes = Buffer.from(await upstream.arrayBuffer());
+      if (!bytes.length || bytes.length > 10 * 1024 * 1024) {
+        return reply.code(502).send({ error: { code: 'INVALID_REFERENCE_IMAGE', message: 'reference image size was rejected' } });
+      }
+      return reply
+        .header('cache-control', 'no-store, max-age=0')
+        .header('pragma', 'no-cache')
+        .header('x-content-type-options', 'nosniff')
+        .type(mediaType)
+        .send(bytes);
     } finally {
       permit.release();
     }
@@ -278,6 +359,12 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return {
         ready: true,
         ebay: { environment: config.EBAY_ENV, mode: config.EBAY_MODE, writesEnabled: config.ALLOW_EBAY_WRITES },
+        ebayReferenceDiscovery: {
+          mode: config.EBAY_REFERENCE_DISCOVERY_MODE,
+          maxImages: config.EBAY_REFERENCE_MAX_IMAGES,
+          cacheHours: config.EBAY_REFERENCE_CACHE_HOURS,
+          permanentArchiveRequiresRights: true
+        },
         persistence: config.DATABASE_URL ? 'postgres' : config.PILOT_EPHEMERAL_MODE ? 'ephemeral-memory-pilot' : 'memory',
         imageStudio: {
           mode: config.IMAGE_STUDIO_MODE,
@@ -286,7 +373,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.14.2',
+          version: '0.15.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

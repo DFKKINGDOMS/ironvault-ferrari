@@ -9,6 +9,7 @@ import type {
   StoredImage
 } from '../domain/types.js';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
+import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 
 export interface Store {
   ping?(): Promise<void>;
@@ -41,4 +42,8 @@ export interface Store {
   lookupGmCatalogPart?(partNumber: string): Promise<GmCatalogPart | undefined>;
   getGmCatalogStatus?(): Promise<GmCatalogStatus>;
   importGmCatalogRecords?(records: GmCatalogPart[], complete?: boolean): Promise<void>;
+  getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined>;
+  saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void>;
+  deleteEbayReferenceCache(partNumber: string): Promise<void>;
+  purgeExpiredEbayReferenceCache(at: string): Promise<number>;
 }

@@ -16,6 +16,7 @@ import type {
   StoredImage
 } from '../domain/types.js';
 import type { Store } from './store.js';
+import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 
 const { Pool } = pg;
 
@@ -451,5 +452,52 @@ export class PostgresStore implements Store {
       [sellerId, type]
     );
     return result.rows[0]?.record;
+  }
+
+  async getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined> {
+    const result = await this.pool.query<JsonRow<EbayReferenceCacheRecord>>(
+      'SELECT record FROM partquill.ebay_reference_cache WHERE part_number = $1',
+      [canonicalOemPartNumber(partNumber)]
+    );
+    return result.rows[0]?.record;
+  }
+
+  async saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO partquill.ebay_reference_cache(
+         part_number, status, record, checked_at, expires_at, retry_after, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (part_number) DO UPDATE SET
+         status = EXCLUDED.status,
+         record = EXCLUDED.record,
+         checked_at = EXCLUDED.checked_at,
+         expires_at = EXCLUDED.expires_at,
+         retry_after = EXCLUDED.retry_after,
+         updated_at = now()`,
+      [
+        canonicalOemPartNumber(record.partNumber),
+        record.status,
+        record,
+        record.checkedAt,
+        record.expiresAt,
+        record.retryAfter
+      ]
+    );
+  }
+
+  async deleteEbayReferenceCache(partNumber: string): Promise<void> {
+    await this.pool.query(
+      'DELETE FROM partquill.ebay_reference_cache WHERE part_number = $1',
+      [canonicalOemPartNumber(partNumber)]
+    );
+  }
+
+  async purgeExpiredEbayReferenceCache(at: string): Promise<number> {
+    const result = await this.pool.query(
+      `DELETE FROM partquill.ebay_reference_cache
+       WHERE status = 'MATCHED_LIVE_REFERENCE' AND expires_at IS NOT NULL AND expires_at <= $1`,
+      [at]
+    );
+    return result.rowCount ?? 0;
   }
 }

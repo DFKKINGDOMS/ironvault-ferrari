@@ -17,6 +17,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Seller-photo requirement, explicit physical-part and condition confirmations, green/amber/red fitment legend, VIN recovery entry point, and a visible “Find the correct part” buyer-assistance path.
 - Safe “Send to eBay” handoff that opens only `https://www.ebay.com/`; no account sign-in, listing payload or eBay write is performed.
 - Existing connected Image Studio preserved at `/image-studio`.
+- Exact OEM-keyed eBay Motors visual-reference discovery through the production Browse API. Results are capped at three images, isolated from seller-owned media, cached for no more than six hours, removed before stale refresh, and never enter a listing payload. Permanent archive status is available only after separate ownership or written-permission evidence.
 - Authenticated Fastify API with strict Zod request validation.
 - Canonical payload hashing and versioned held drafts.
 - Append-only evidence, approval and audit records.
@@ -89,6 +90,7 @@ The seller workspace endpoints are also public and read-only:
 
 - `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
 - `POST /v1/seller-ui/command-preview` — builds a catalog-held, photo-first, restricted-safety, or illustrative preview; it performs no catalog or eBay request.
+- `GET /v1/seller-ui/ebay-reference/:partNumber` — checks only an exact, locally verified catalog key; unrelated categories, partial numbers, conflicting MPNs and conflicting automaker brands fail closed.
 
 The connected ChatGPT proof endpoint is also public:
 

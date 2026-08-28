@@ -740,7 +740,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.14.2',
+    version: '0.15.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
@@ -748,6 +748,12 @@ export function buildSellerUiBootstrap(config: AppConfig) {
       mode: config.EBAY_MODE,
       writesEnabled: config.ALLOW_EBAY_WRITES,
       handoffUrl: 'https://www.ebay.com/'
+    },
+    ebayReferenceDiscovery: {
+      mode: config.EBAY_REFERENCE_DISCOVERY_MODE,
+      maxImages: config.EBAY_REFERENCE_MAX_IMAGES,
+      cacheHours: config.EBAY_REFERENCE_CACHE_HOURS,
+      permanentArchiveRequiresRights: true
     },
     persistence: config.DATABASE_URL ? 'postgres' : config.PILOT_EPHEMERAL_MODE ? 'ephemeral-memory-pilot' : 'memory',
     imageStudio: {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type SellerBootstrap = {
   version: string;
@@ -9,6 +9,32 @@ type SellerBootstrap = {
   ebay: { environment: string; mode: string; writesEnabled: boolean; handoffUrl: string };
   persistence: string;
   imageStudio: { mode: string; path: string };
+  ebayReferenceDiscovery: { mode: "disabled" | "live"; maxImages: number; cacheHours: number; permanentArchiveRequiresRights: true };
+};
+
+type EbayReferenceRecord = {
+  partNumber: string;
+  status: "MATCHED_LIVE_REFERENCE" | "NO_EXACT_MATCH" | "RIGHTS_CLEARED_ARCHIVE";
+  source: "EBAY_BROWSE_API" | "PARTQUILL_RIGHTS_CLEARED";
+  rightsState: "EBAY_PUBLIC_REFERENCE_ONLY" | "RIGHTS_CLEARED";
+  sourceItemId: string | null;
+  sourceUrl: string | null;
+  title: string | null;
+  categoryId: string | null;
+  categoryPath: string | null;
+  images: Array<{ viewUrl: string; alt: string }>;
+  matchEvidence: string[];
+  checkedAt: string;
+  expiresAt: string | null;
+  retryAfter: string | null;
+  archiveAllowed: boolean;
+  listingPayloadEligible: false;
+};
+
+type EbayReferenceLookup = {
+  status: "MATCHED_LIVE_REFERENCE" | "NO_EXACT_MATCH" | "RIGHTS_CLEARED_ARCHIVE" | "DISCOVERY_DISABLED" | "TEMPORARILY_UNAVAILABLE" | "NOT_CATALOG_VERIFIED";
+  reference: EbayReferenceRecord | null;
+  searchSuppressed: boolean;
 };
 
 type EvidenceBox = {
@@ -302,6 +328,27 @@ function CatalogEvidenceViewer({ references }: { references: CatalogReference[] 
   </section>;
 }
 
+function EbayReferenceGallery({ lookup, loading, partNumber }: { lookup: EbayReferenceLookup | null; loading: boolean; partNumber: string | null }) {
+  if (!partNumber) return null;
+  const reference = lookup?.reference;
+  const requestedKey = partNumber.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const matched = reference?.partNumber === requestedKey
+    && (lookup?.status === "MATCHED_LIVE_REFERENCE" || lookup?.status === "RIGHTS_CLEARED_ARCHIVE");
+  const durable = lookup?.status === "RIGHTS_CLEARED_ARCHIVE";
+  return <section className={`ebay-reference-gallery ${matched ? "matched" : "empty"}`} aria-live="polite">
+    <header>
+      <div><span>{durable ? "PARTQUILL RIGHTS-CLEARED REFERENCE" : "LIVE EBAY REFERENCE · SEPARATE SOURCE"}</span><h3>{matched ? `Visual reference for OEM ${partNumber}` : `Visual reference search for OEM ${partNumber}`}</h3><p>{durable ? "The source passed a separate ownership or written-permission review." : "eBay content is visually isolated from catalog evidence and seller-owned listing photos."}</p></div>
+      <Badge tone={durable ? "green" : matched ? "orange" : "slate"}>{durable ? "Rights cleared" : matched ? "Reference only" : loading ? "Checking" : "No live image"}</Badge>
+    </header>
+    {matched ? <>
+      <div className="ebay-reference-warning"><Icon name="shield"/><span><strong>{durable ? "Approved reference archive" : "Another seller’s listing — not your item photo"}</strong><small>{durable ? "The archived media remains outside the seller-item photo set unless separately selected and permitted." : "Temporary live reference only. These images are not downloaded, background-removed, archived or placed in the listing payload."}</small></span></div>
+      <div className="ebay-reference-grid">{reference.images.map((item, index) => <figure key={item.viewUrl}><img src={item.viewUrl} alt={item.alt} loading="lazy"/><figcaption>Reference view {index + 1} · {durable ? "rights cleared" : "live eBay"}</figcaption></figure>)}</div>
+      <div className="ebay-reference-detail"><div><strong>{reference.title}</strong><span>{reference.categoryPath ?? "eBay Motors Parts & Accessories"}</span><small>{reference.matchEvidence.join(" · ")}</small></div>{reference.sourceUrl && <a href={reference.sourceUrl} target="_blank" rel="noreferrer">View current source on eBay <Icon name="arrow"/></a>}</div>
+      {!durable && <footer><span>Checked {new Date(reference.checkedAt).toLocaleString()} · expires no later than {reference.expiresAt ? new Date(reference.expiresAt).toLocaleString() : "six hours"}</span><strong>Seller-owned photo is still required</strong></footer>}
+    </> : <div className="ebay-reference-empty"><Icon name={loading ? "live" : "camera"}/><div><strong>{loading ? "Checking eBay Motors for an exact catalog-consistent match…" : lookup?.status === "NO_EXACT_MATCH" ? "No exact eBay Motors match passed validation" : lookup?.status === "TEMPORARILY_UNAVAILABLE" ? "eBay reference search is temporarily unavailable" : lookup?.status === "DISCOVERY_DISABLED" ? "Live eBay reference discovery is not configured" : "No separate marketplace reference is available"}</strong><p>PartQuill keeps the GM catalog scan and highlighted callout as durable evidence. It will not substitute a loose keyword match or reuse unrelated photos.</p></div></div>}
+  </section>;
+}
+
 function CatalogIntelligenceCard({ intelligence }: { intelligence: ListingIntelligence | null }) {
   if (!intelligence) return null;
   const categoryVerified = intelligence.category.state === "EBAY_TAXONOMY_VERIFIED";
@@ -330,9 +377,11 @@ type ActiveDraftEditorProps = {
   setQuantity: (value: string) => void;
   navigate: (view: View) => void;
   showNotice: (message: string) => void;
+  ebayReference: EbayReferenceLookup | null;
+  ebayReferenceLoading: boolean;
 };
 
-function ActiveDraftEditor({ preview, editorTab, setEditorTab, title, setTitle, price, setPrice, quantity, setQuantity, navigate, showNotice }: ActiveDraftEditorProps) {
+function ActiveDraftEditor({ preview, editorTab, setEditorTab, title, setTitle, price, setPrice, quantity, setQuantity, navigate, showNotice, ebayReference, ebayReferenceLoading }: ActiveDraftEditorProps) {
   if (!preview) {
     return <section className="view editor-view"><div className="empty-state"><h2>No active draft</h2><p>Build or select a part first. PartQuill will not reuse fields from a previous item.</p><button className="primary" onClick={() => navigate("instant")}>List a part</button></div></section>;
   }
@@ -378,7 +427,7 @@ function ActiveDraftEditor({ preview, editorTab, setEditorTab, title, setTitle, 
 
       {editorTab === "fitment" && <div className="form-section"><SectionHeading eyebrow="Compatibility inspector" title={`${preview.fitment.totalApplications} catalog-derived application${preview.fitment.totalApplications === 1 ? "" : "s"}`} body={preview.fitment.sourceDetail}/><div className="compatibility-table"><div className="table-head"><span>Application</span><span>Catalog qualifier</span><span>Status</span><span/></div>{preview.fitment.applications.map((row, index) => <div key={`${row.vehicle}-${index}`}><strong>{row.vehicle}</strong><span>{row.qualifier}</span><Badge tone="amber">{row.state === "CATALOG_STATED" ? "Catalog stated" : "Catalog derived"}</Badge><button onClick={() => showNotice("This row remains attributed and held for compatibility review.")}>Inspect</button></div>)}</div></div>}
 
-      {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Catalog image evidence" title="Scans, diagrams and colored callouts" body="Catalog pages are first-party PartQuill evidence. Seller-owned item photos remain a separate required image set."/>{references.length ? <CatalogEvidenceViewer references={references}/> : <div className="empty-state"><h3>No linked catalog diagram was found</h3><p>The catalog row is retained, but PartQuill will not invent a schematic relationship.</p></div>}<div className="intelligence-warning"><Icon name="camera"/><span><strong>Seller image still required.</strong> A catalog scan supports identity and research; it is not a photograph of the seller’s physical item.</span></div></div>}
+      {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Catalog image evidence" title="Scans, diagrams and colored callouts" body="Catalog pages are first-party PartQuill evidence. Seller-owned item photos remain a separate required image set."/>{references.length ? <CatalogEvidenceViewer references={references}/> : <div className="empty-state"><h3>No linked catalog diagram was found</h3><p>The catalog row is retained, but PartQuill will not invent a schematic relationship.</p></div>}<EbayReferenceGallery lookup={ebayReference} loading={ebayReferenceLoading} partNumber={preview.intent.partNumber}/><div className="intelligence-warning"><Icon name="camera"/><span><strong>Seller image still required.</strong> A catalog scan or live marketplace reference supports research; neither is a photograph of the seller’s physical item.</span></div></div>}
 
       {editorTab === "shipping" && <div className="form-section"><SectionHeading eyebrow="Calculated shipping intelligence" title={shipping?.state === "ESTIMATED_REQUIRES_CONFIRMATION" ? shipping.profileLabel ?? "Approved product-family preset" : "Packed measurements required"} body="PartQuill can propose an industry-standard starting package. The packed item must still be weighed and measured before publication."/>{shipping && packageDimensions && estimatedWeight ? <><div className="shipping-estimate-grid"><article><span>Suggested package</span><strong>{packageDimensions.length} × {packageDimensions.width} × {packageDimensions.height} in</strong><small>{shipping.packageType} · approved product-family preset</small></article><article><span>Estimated item weight</span><strong>{estimatedWeight.min}–{estimatedWeight.max} lb</strong><small>{estimatedWeight.suggested} lb working value</small></article><article><span>DIM weight</span><strong>{shipping.dimensionalWeightLb} lb</strong><small>Domestic divisor {shipping.dimDivisor}</small></article><article><span>Estimated billable</span><strong>{shipping.estimatedBillableWeightLb} lb</strong><small>Greater of DIM or working actual weight</small></article></div><div className="intelligence-warning"><Icon name="alert"/><span><strong>Estimate, not a measured fact.</strong> Confirm scale weight and all three outside package dimensions after packing; large or irregular items must override this preset.</span></div></> : <div className="empty-state"><h3>No defensible package preset</h3><p>Enter packed length, width, height and scale weight. PartQuill will not fabricate shipping values.</p></div>}</div>}
 
@@ -422,6 +471,9 @@ export default function Home() {
   const [bootstrap, setBootstrap] = useState<SellerBootstrap | null>(null);
   const [instantPhotos, setInstantPhotos] = useState<StagedPhoto[]>([]);
   const [foundPartNumber, setFoundPartNumber] = useState("");
+  const [ebayReference, setEbayReference] = useState<EbayReferenceLookup | null>(null);
+  const [ebayReferenceLoading, setEbayReferenceLoading] = useState(false);
+  const ebayReferenceRequest = useRef(0);
 
   const filteredRows = useMemo(() => inventoryRows.filter((row) => {
     const statusMatch = inventoryFilter === "All" || (inventoryFilter === "Needs action" ? ["Held", "Blocked"].includes(row.status) : row.status === inventoryFilter);
@@ -467,6 +519,8 @@ export default function Home() {
     void buildInstantDraft(nextCommand);
   };
   const buildInstantDraft = async (command = instantCommand) => {
+    const referenceRequestId = ebayReferenceRequest.current + 1;
+    ebayReferenceRequest.current = referenceRequestId;
     setInstantLoading(true);
     setInstantBuilt(false);
     try {
@@ -478,6 +532,7 @@ export default function Home() {
       if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
       const payload = await response.json() as { preview: SellerPreview };
       const preview = payload.preview;
+      setEbayReference(null);
       setInstantPreview(preview);
       setInstantPrice(preview.intent.price ?? "");
       setInstantCondition(preview.intent.condition);
@@ -493,6 +548,28 @@ export default function Home() {
       setPrice(preview.intent.price ?? "0.00");
       setQuantity(String(preview.intent.quantity));
       setInstantBuilt(true);
+      if (preview.identity.state === "CATALOG_STATED" && preview.intent.partNumber) {
+        const referencePart = preview.intent.partNumber;
+        setEbayReferenceLoading(true);
+        void fetch(`/v1/seller-ui/ebay-reference/${encodeURIComponent(referencePart)}`)
+          .then(async (referenceResponse) => {
+            if (!referenceResponse.ok) throw new Error("reference lookup unavailable");
+            const result = await referenceResponse.json() as EbayReferenceLookup;
+            if (ebayReferenceRequest.current === referenceRequestId && (!result.reference || result.reference.partNumber === referencePart.replace(/[^A-Za-z0-9]/g, "").toUpperCase())) {
+              setEbayReference(result);
+            }
+          })
+          .catch(() => {
+            if (ebayReferenceRequest.current === referenceRequestId) {
+              setEbayReference({ status: "TEMPORARILY_UNAVAILABLE", reference: null, searchSuppressed: false });
+            }
+          })
+          .finally(() => {
+            if (ebayReferenceRequest.current === referenceRequestId) setEbayReferenceLoading(false);
+          });
+      } else {
+        setEbayReferenceLoading(false);
+      }
       showNotice(preview.status === "ILLUSTRATIVE_SAMPLE"
         ? "Backend preview built. The filled catalog state is clearly marked illustrative and no external request was made."
         : preview.status === "PHOTO_REQUIRED"
@@ -716,6 +793,7 @@ export default function Home() {
                 </div>
 
                 <CatalogEvidenceViewer references={instantPreview?.media.catalogReferences ?? []}/>
+                {instantCatalogMatch && <EbayReferenceGallery lookup={ebayReference} loading={ebayReferenceLoading} partNumber={instantPreview?.intent.partNumber ?? null}/>}
                 <CatalogIntelligenceCard intelligence={instantPreview?.intelligence ?? null}/>
 
                 {instantCatalogRoute ? <div className="instant-fitment-card">
@@ -774,7 +852,7 @@ export default function Home() {
           <div className="research-result"><div className="research-identity"><div className="part-glyph"><Icon name="box"/></div><div><Badge tone="green">Exact part number</Badge><h2>13568-29025 — Belt, Timing</h2><p>Superseded by <strong>13568-YZZ10</strong> · Diagram callout 13568</p></div><button className="primary" onClick={() => openDraft("identity")}>Attach identity to draft</button></div><div className="fitment-verdict amber"><span>!</span><div><strong>Fitment not verified for a specific vehicle</strong><p>Potential catalog applications exist, but this seller draft will not publish compatibility without permitted evidence.</p></div><button onClick={() => openDraft("fitment")}>Inspect applications</button></div><div className="traffic-guide"><div className="green"><b>GREEN</b><span>eBay-returned compatibility for a direct product match</span></div><div className="amber"><b>AMBER</b><span>Seller-confirmed, broad or incomplete evidence</span></div><div className="red"><b>NONE</b><span>No public fitment claim; buyer verification boilerplate used</span></div></div><div className="research-facts"><article><span>Anonymous reference range</span><strong>$49.97–$54.59</strong><small>Not an eBay market value or listing recommendation</small></article><article><span>Seller listing price</span><strong>$79.95</strong><small>Seller-entered; separate from research</small></article><article><span>Source checks</span><strong>2 of 3 exact</strong><small>One reference path unavailable</small></article><article><span>Listing condition</span><strong>Not inherited</strong><small>Seller must confirm the actual item</small></article></div></div>
         </section>}
 
-        {view === "drafts" && <ActiveDraftEditor preview={instantPreview} editorTab={editorTab} setEditorTab={setEditorTab} title={title} setTitle={(value) => { setTitle(value); setPublicApproved(false); }} price={price} setPrice={(value) => { setPrice(value); setPublicApproved(false); }} quantity={quantity} setQuantity={(value) => { setQuantity(value); setPublicApproved(false); }} navigate={navigate} showNotice={showNotice}/>}
+        {view === "drafts" && <ActiveDraftEditor preview={instantPreview} editorTab={editorTab} setEditorTab={setEditorTab} title={title} setTitle={(value) => { setTitle(value); setPublicApproved(false); }} price={price} setPrice={(value) => { setPrice(value); setPublicApproved(false); }} quantity={quantity} setQuantity={(value) => { setQuantity(value); setPublicApproved(false); }} navigate={navigate} showNotice={showNotice} ebayReference={ebayReference} ebayReferenceLoading={ebayReferenceLoading}/>}
 
 
         {view === "review" && <section className="view">

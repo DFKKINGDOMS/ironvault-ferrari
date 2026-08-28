@@ -24,6 +24,10 @@ const schema = z
     EBAY_CLIENT_ID: z.string().optional(),
     EBAY_CLIENT_SECRET: z.string().optional(),
     EBAY_RU_NAME: z.string().optional(),
+    EBAY_REFERENCE_DISCOVERY_MODE: z.enum(['disabled', 'live']).default('disabled'),
+    EBAY_REFERENCE_CACHE_HOURS: z.coerce.number().min(0.25).max(6).default(5.5),
+    EBAY_REFERENCE_NEGATIVE_CACHE_HOURS: z.coerce.number().min(1).max(168).default(24),
+    EBAY_REFERENCE_MAX_IMAGES: z.coerce.number().int().min(1).max(3).default(3),
     PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
     CORS_ORIGINS: z.string().default('http://localhost:5173'),
     OPENAI_API_KEY: z.string().optional(),
@@ -73,6 +77,22 @@ const schema = z
         path: ['ALLOW_EBAY_WRITES'],
         message: 'production eBay writes are intentionally disabled in this pilot build'
       });
+    }
+    if (env.EBAY_REFERENCE_DISCOVERY_MODE === 'live') {
+      if (env.EBAY_ENV !== 'production') {
+        context.addIssue({
+          code: 'custom',
+          path: ['EBAY_REFERENCE_DISCOVERY_MODE'],
+          message: 'live eBay reference discovery requires the production Browse API'
+        });
+      }
+      if (!env.EBAY_CLIENT_ID || !env.EBAY_CLIENT_SECRET) {
+        context.addIssue({
+          code: 'custom',
+          path: ['EBAY_REFERENCE_DISCOVERY_MODE'],
+          message: 'live eBay reference discovery requires eBay application credentials'
+        });
+      }
     }
     if (env.IMAGE_STUDIO_MODE === 'live') {
       if (!env.OPENAI_API_KEY) {
