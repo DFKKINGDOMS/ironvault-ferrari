@@ -1,0 +1,11 @@
+{
+  "release": "2026HTSRev17",
+  "description": "2026 HTS Revision 17",
+  "retrievedAt": "2026-08-28T21:07:45Z",
+  "sourcePage": "https://hts.usitc.gov/download",
+  "sourceExport": "https://hts.usitc.gov/reststop/exportList?from=0101&to=9999&format=CSV&styles=false",
+  "filename": "hts-2026-rev17.csv",
+  "bytes": 3954394,
+  "sha256": "69c92d1d6ff3b833198d95b2d5ea88a9a3ce5fbc705f014c8594d3f4247f98bb",
+  "classificationPolicy": "Description rules return reviewable candidates only. Seller or customs review is required before international publication."
+}

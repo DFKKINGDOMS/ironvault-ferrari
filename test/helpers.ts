@@ -58,7 +58,12 @@ export function validPayload(overrides: Partial<ListingPayload> = {}): ListingPa
     mpn: '51040',
     price: { currency: 'USD', value: '12.99' },
     quantity: 1,
-    aspects: { Brand: ['WIX'], 'Manufacturer Part Number': ['51040'] },
+    aspects: {
+      Brand: ['WIX'],
+      'Manufacturer Part Number': ['51040'],
+      'OE/OEM Part Number': ['51040'],
+      'California Prop 65 Warning': ['No']
+    },
     compatibility: [],
     internationalEligible: false,
     imageIds: [],

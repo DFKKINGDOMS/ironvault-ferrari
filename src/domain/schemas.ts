@@ -13,6 +13,7 @@ export const listingPayloadSchema = z.object({
   gtin: z.string().regex(/^\d{8,14}$/).optional(),
   epid: z.string().min(1).optional(),
   price: z.object({ currency: z.literal('USD'), value: money }),
+  saleMode: z.enum(['FIXED_PRICE', 'GIVEAWAY']).default('FIXED_PRICE'),
   quantity: z.number().int().min(0).max(999_999),
   aspects: z.record(z.string(), z.array(z.string().min(1)).min(1)),
   compatibility: z.array(z.record(z.string(), z.string())),

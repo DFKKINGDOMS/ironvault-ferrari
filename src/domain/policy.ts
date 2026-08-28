@@ -2,6 +2,12 @@ import type { EvidenceRecord, ExceptionRecord, ListingPayload, StoredImage } fro
 
 const SAFETY_CRITICAL_TERMS = ['airbag', 'inflator', 'squib', 'seat belt pretensioner'];
 const CORE_PART_TERMS = ['alternator', 'starter', 'caliper', 'compressor'];
+const REQUIRED_EBAY_ASPECTS = [
+  'Brand',
+  'Manufacturer Part Number',
+  'OE/OEM Part Number',
+  'California Prop 65 Warning'
+] as const;
 
 export function evaluateDraft(
   payload: ListingPayload,
@@ -29,6 +35,39 @@ export function evaluateDraft(
       field: 'brand/mpn',
       message: 'Brand and manufacturer part number are not both resolved.',
       nextAction: 'Confirm the readable brand and MPN from the item or package.'
+    });
+  }
+
+  const missingAspects = REQUIRED_EBAY_ASPECTS.filter((name) =>
+    !(payload.aspects[name]?.some((value) => value.trim().length > 0))
+  );
+  if (missingAspects.length > 0) {
+    exceptions.push({
+      code: 'REQUIRED_EBAY_ASPECTS_MISSING',
+      severity: 'HOLD',
+      field: 'aspects',
+      message: `Required eBay item specifics are incomplete: ${missingAspects.join(', ')}.`,
+      nextAction: 'Complete all four pinned item specifics before private preflight.'
+    });
+  }
+
+  const numericPrice = Number(payload.price.value);
+  if (numericPrice <= 0 && payload.saleMode !== 'GIVEAWAY') {
+    exceptions.push({
+      code: 'POSITIVE_PRICE_REQUIRED',
+      severity: 'HOLD',
+      field: 'price',
+      message: 'A zero price is valid only for an explicitly marked free/giveaway draft.',
+      nextAction: 'Enter a positive fixed price or change the draft sale mode to giveaway.'
+    });
+  }
+  if (payload.saleMode === 'GIVEAWAY') {
+    exceptions.push({
+      code: 'GIVEAWAY_CHANNEL_HOLD',
+      severity: 'HOLD',
+      field: 'price',
+      message: 'A free/giveaway draft cannot be published as an eBay fixed-price offer.',
+      nextAction: 'Keep the draft off eBay or enter a positive eBay Buy It Now price.'
     });
   }
 

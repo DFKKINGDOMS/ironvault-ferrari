@@ -8,6 +8,16 @@ It is intentionally not a universal visual parts identifier. The default runtime
 
 - Command-first React seller workspace at `/`, with the approved Understand → Resolve → Map → Protect → Assemble → Review flow.
 - Public, rate-limited `POST /v1/seller-ui/command-preview` parser for part number or seller description, price, quantity, condition, shipping and no-fitment instructions.
+- The GM brake/booster repair-kit rule maps to the current official eBay Motors `Brake Boosters` leaf (`174021`) instead of generic `9886`; a stored generic fallback cannot outrank the exact product-family rule.
+- GMPartsWiki-backed item identity uses `General Motors` as the catalog brand, defaults the editable relationship to genuine, and selects one compatible vehicle make deterministically from application evidence for a qualified `Fits` title phrase.
+- Four publication-gated item specifics are pinned and cannot be renamed or removed: Brand, Manufacturer Part Number, OE/OEM Part Number, and California Prop 65 Warning.
+- Seller images can be added from the main listing form, image workbench, or sticky review bar and reordered by drag-and-drop or accessible arrow controls. The first image is always the main eBay image; the maximum remains 24.
+- Quantity `0` is a valid out-of-stock draft. Price `0.00` is valid only for an explicitly marked giveaway, and giveaway drafts remain ineligible for an eBay fixed-price offer.
+- VIN recovery is hidden when any supported application year predates 1989; no unsupported short/nonstandard VIN lookup is offered.
+- Calculated domestic shipping is the default, with USPS, UPS and FedEx choices, an optional free-shipping mode, P1–P17 measured package gates, and clearly labeled ZIP-to-ZIP planning estimates. Fixed shipping remains disabled for a later release.
+- The seller-side Shopify discounted-label design is visibly gated: eBay buyer payment never leaves eBay, a paid eBay order must be imported first, an eligible label purchase must be separately confirmed, and carrier/tracking is then returned through eBay Fulfillment.
+- The full official USITC `2026HTSRev17` CSV snapshot, checksum metadata, guarded sync script, and weekday sync workflow live under `data/tariff/`. Description rules return customs candidates only; origin and seller/customs review are mandatory before international publication.
+- The editor includes an eBay-style draft preview driven by the current ordered images, title, price, stock, shipping, returns, item specifics, fitment and description. It is labeled as a preview because live eBay rendering can vary.
 - Automatic three-way routing: catalog-assisted when an MPN is present, photo-first when it is absent, and a restricted safety review for airbag/restraint terminology. Sellers do not choose a workflow.
 - No-part-number drafts ask for whole-item, reverse/connector and label/marking photos without inventing identity, category or fitment. The current private pilot stages previews only in the browser; automatic visual identification and durable upload are explicitly not connected.
 - Airbag/restraint drafts remain blocked behind current eBay eligibility, ARA, donor-VIN, undeployed/non-recalled condition, required-statement and hazmat-shipping evidence. A typed year/make/model or seller checkbox cannot clear this gate.
@@ -184,9 +194,10 @@ Any material edit restarts the approval chain.
 ## What remains before a real seller pilot
 
 - Connect an authorized catalog/eBay product adapter so verified identity, taxonomy, item specifics, fitment and licensed media can replace the illustrative fixture.
-- Add the seller photo upload to the command surface and durable private object storage for originals.
+- Replace browser-local seller image staging with durable private object storage for originals.
 - Register eBay developer keys and RuName; complete one Sandbox OAuth connection.
 - Implement Inventory API inventory-item, location, business-policy and offer mapping for the pilot seller.
+- Connect the gated seller-side Shopify label-purchase route and eBay Fulfillment tracking write after both account authorizations are proven.
 - Run current production Taxonomy/Metadata/catalog read probes. Sandbox alone does not prove Motors catalog behavior.
 - Add publicly retrievable image-object storage for eBay image URLs.
 - Replace preview filesystem storage with durable private object storage and signed delivery URLs before a multi-seller launch.

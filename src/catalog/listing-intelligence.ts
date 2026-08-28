@@ -45,6 +45,7 @@ interface IntelligenceRule {
   id: string;
   profileLabel: string;
   pattern: RegExp;
+  officialCategoryId?: string;
   categoryName: string;
   categoryPath: string;
   categoryKeywords: string;
@@ -55,6 +56,7 @@ interface IntelligenceRule {
 }
 
 const motorsRoot = 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories';
+const officialMotorsTreeVersion = 'US_JUNE_2026';
 
 
 export interface IronVaultPackageProfile {
@@ -252,9 +254,10 @@ const rules: IntelligenceRule[] = [
     id: 'power-brake-repair-kit',
     profileLabel: 'Small brake repair-kit box',
     pattern: /\b(?:(?:power\s*brake|brake)[^;,.]{0,40}(?:repair|overhaul)\s*kit|(?:repair|overhaul)\s*kit[^;,.]{0,40}(?:power\s*brake|brake))\b/i,
-    categoryName: 'Brake Master Cylinders & Parts',
-    categoryPath: `${motorsRoot} › Brakes & Brake Parts › Brake Master Cylinders & Parts`,
-    categoryKeywords: 'automotive power brake master cylinder repair overhaul kit',
+    officialCategoryId: '174021',
+    categoryName: 'Brake Boosters',
+    categoryPath: `${motorsRoot} › Brakes & Brake Parts › Brake Boosters`,
+    categoryKeywords: 'automotive power brake vacuum booster cylinder repair overhaul kit',
     packageType: 'BOX',
     itemWeight: { min: 0.25, max: 3, suggested: 1 },
     packageIn: { length: 9, width: 7, height: 4 },
@@ -263,9 +266,10 @@ const rules: IntelligenceRule[] = [
   {
     id: 'brake-booster',
     profileLabel: 'Large mechanical component',
-    pattern: /\b(?:power\s*brake|brake\s*booster|vacuum\s*booster|hydrovac)\b/i,
-    categoryName: 'Brake Boosters & Parts',
-    categoryPath: `${motorsRoot} › Brakes & Brake Parts › Brake Boosters & Parts`,
+    pattern: /\b(?:brake\s*booster|vacuum\s*(?:booster|cylinder)|hydrovac|servo[- ]?brake)\b/i,
+    officialCategoryId: '174021',
+    categoryName: 'Brake Boosters',
+    categoryPath: `${motorsRoot} › Brakes & Brake Parts › Brake Boosters`,
     categoryKeywords: 'automotive brake booster part',
     packageType: 'BOX',
     itemWeight: { min: 5, max: 25, suggested: 14 },
@@ -477,14 +481,35 @@ function emptyShipping(): CatalogListingIntelligence['shipping'] {
 
 export function buildCatalogListingIntelligence(catalog: GmCatalogPart): CatalogListingIntelligence {
   const text = intelligenceText(catalog);
-  const rule = rules.find((candidate) => candidate.pattern.test(text));
+  const matchingRules = rules.filter((candidate) => candidate.pattern.test(text));
+  const rule = matchingRules.find((candidate) => candidate.officialCategoryId) ?? matchingRules[0];
   const query = categoryQuery(catalog, rule?.categoryKeywords ?? 'automotive replacement part');
   const ruleBasis = rule
     ? [`Matched PartQuill product-family rule ${rule.id}.`, `Catalog wording used: ${text.slice(0, 240)}`]
     : ['No sufficiently specific PartQuill product-family rule matched the catalog wording.'];
   const embeddedCategory = embeddedOfficialCategory(catalog, query, ruleBasis);
+  const exactRuleCategory: CatalogListingIntelligence['category'] | null = rule?.officialCategoryId
+    ? {
+        state: 'EBAY_TAXONOMY_VERIFIED',
+        source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+        categoryId: rule.officialCategoryId,
+        categoryName: rule.categoryName,
+        categoryPath: rule.categoryPath,
+        query,
+        confidence: Math.max(0.95, rule.confidence),
+        basis: [
+          `Official eBay US Motors leaf ${rule.officialCategoryId} from category tree 100 (${officialMotorsTreeVersion}).`,
+          `Matched PartQuill product-family rule ${rule.id} to the exact active leaf.`,
+          ...ruleBasis
+        ]
+      }
+    : null;
 
-  const category: CatalogListingIntelligence['category'] = embeddedCategory ?? (rule
+  // A previously stored generic fallback must never outrank a current exact
+  // product-family leaf. A stored exact assignment still remains authoritative.
+  const category: CatalogListingIntelligence['category'] = embeddedCategory?.state === 'EBAY_TAXONOMY_VERIFIED'
+    ? embeddedCategory
+    : exactRuleCategory ?? embeddedCategory ?? (rule
     ? {
         state: 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION',
         source: 'PARTQUILL_CLASSIFIER',

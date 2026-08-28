@@ -71,7 +71,7 @@ export class EbayVeroProfileService {
         method: 'GET',
         headers: {
           accept: 'text/html,application/xhtml+xml',
-          'user-agent': 'PartQuill-Policy-Reference/0.17 (+read-only)'
+          'user-agent': 'PartQuill-Policy-Reference/0.18 (+read-only)'
         },
         redirect: 'follow'
       });

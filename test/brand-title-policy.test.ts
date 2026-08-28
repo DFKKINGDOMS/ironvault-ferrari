@@ -18,6 +18,20 @@ describe('eBay brand title policy', () => {
     expect(result.sellerConfirmationRequired).toBe(false);
   });
 
+  it('keeps a genuine GM item brand separate from the compatible vehicle make', () => {
+    const result = applyEbayBrandTitlePolicy({
+      itemBrand: 'General Motors',
+      compatibleBrand: 'Oldsmobile',
+      relationship: 'GENUINE_BRANDED_ITEM',
+      manufacturerPartNumber: '5455055',
+      productName: 'Moraine Vacuum Cylinder Repair Kit',
+      applicationYears: '1955–1956'
+    });
+    expect(result.title).toBe('GM 5455055 Moraine Vacuum Cylinder Repair Kit Fits Oldsmobile 1955–1956');
+    expect(result.rule).toBe('GENUINE_BRAND_ALLOWED');
+    expect(result.state).toBe('COMPLIANT');
+  });
+
   it('prefixes a compatible vehicle brand for aftermarket or unconfirmed items', () => {
     const result = applyEbayBrandTitlePolicy({
       itemBrand: null,

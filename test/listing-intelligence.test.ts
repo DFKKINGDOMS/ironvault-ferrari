@@ -82,4 +82,29 @@ describe('catalog listing intelligence', () => {
     });
   });
 
+  it('replaces generic 9886 with the official Brake Boosters leaf for a brake repair kit', () => {
+    const result = buildCatalogListingIntelligence({
+      ...gm5459066,
+      productType: 'Moraine vacuum cylinder repair kit',
+      description: 'Power brake vacuum booster repair kit',
+      ebayCategory: {
+        marketplaceId: 'EBAY_US',
+        categoryId: '9886',
+        categoryName: 'Other Car & Truck Parts & Accessories',
+        categoryPath: 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories › Other',
+        source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+        classificationMode: 'OTHER_FALLBACK_REVIEWED',
+        categoryTreeId: '100',
+        categoryTreeVersion: 'US_JUNE_2026',
+        verifiedAt: '2026-08-28T00:00:00.000Z'
+      }
+    });
+    expect(result.category).toMatchObject({
+      state: 'EBAY_TAXONOMY_VERIFIED',
+      source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+      categoryId: '174021',
+      categoryName: 'Brake Boosters'
+    });
+  });
+
 });

@@ -118,8 +118,12 @@ export function applyEbayBrandTitlePolicy(input: BrandTitlePolicyInput): BrandTi
   const veroParticipant = ebayVeroParticipantForBrand(compatibleBrand ?? itemBrand);
 
   if (input.relationship === 'GENUINE_BRANDED_ITEM' && itemBrand) {
+    const compatibilityPhrase = compatibleBrand && brandKey(compatibleBrand) !== brandKey(itemBrand)
+      ? `Fits ${compatibleBrand}`
+      : null;
+    const titleBrand = brandKey(itemBrand) === 'generalmotors' ? 'GM' : itemBrand;
     return {
-      title: guardTitle([itemBrand, mpn, productName, years].filter(Boolean).join(' ')),
+      title: guardTitle([titleBrand, mpn, productName, compatibilityPhrase, years].filter(Boolean).join(' ')),
       state: 'COMPLIANT',
       rule: 'GENUINE_BRAND_ALLOWED',
       itemBrand,
@@ -129,7 +133,9 @@ export function applyEbayBrandTitlePolicy(input: BrandTitlePolicyInput): BrandTi
       sourceUrl: EBAY_INTELLECTUAL_PROPERTY_POLICY_URL,
       profileIndexUrl: EBAY_VERO_PROFILE_INDEX_URL,
       sellerConfirmationRequired: false,
-      explanation: 'Seller confirmed the physical item is genuinely branded, so the truthful item brand may appear without Fits/For.'
+      explanation: compatibilityPhrase
+        ? 'The genuine item brand is stated directly and the different compatible vehicle brand is introduced by Fits.'
+        : 'The physical item is set as genuinely branded, so the truthful item brand may appear without Fits/For.'
     };
   }
 

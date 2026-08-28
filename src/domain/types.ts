@@ -51,6 +51,7 @@ export interface ListingPayload {
   gtin?: string;
   epid?: string;
   price: { currency: 'USD'; value: string };
+  saleMode?: 'FIXED_PRICE' | 'GIVEAWAY';
   quantity: number;
   aspects: Record<string, string[]>;
   compatibility: Array<Record<string, string>>;

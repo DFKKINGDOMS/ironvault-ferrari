@@ -1,6 +1,6 @@
 {
   "name": "partquill-api",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "private": true,
   "description": "Evidence-gated eBay Motors listing pilot API for PartQuill",
   "type": "module",
@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "migrate": "tsx src/store/migrate.ts",
     "migrate:compiled": "node dist/src/store/migrate.js",
+    "sync:hts": "node scripts/sync-usitc-hts.mjs",
     "start": "node dist/src/main.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

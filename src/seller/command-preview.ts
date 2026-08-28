@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 import { assessGmCatalogMapping, canonicalOemPartNumber, formatOemPartNumber, normalizeGmCatalogPart, type GmCatalogMappingAssessment } from '../catalog/gm-catalog-quality.js';
 import { buildCatalogListingIntelligence, type CatalogListingIntelligence } from '../catalog/listing-intelligence.js';
+import { buildTariffIntelligence, type TariffIntelligence } from '../catalog/tariff-intelligence.js';
 import type { AppConfig } from '../config.js';
 import { applyEbayBrandTitlePolicy, EBAY_INTELLECTUAL_PROPERTY_POLICY_URL, EBAY_VERO_PROFILE_INDEX_URL, type BrandTitlePolicyResult } from '../ebay/brand-title-policy.js';
 
@@ -32,6 +33,7 @@ export interface ListingCommandIntent {
   route: ListingCommandRoute;
   safetyClass: 'STANDARD' | 'RESTRAINT_SYSTEM';
   price: string | null;
+  saleMode: 'FIXED_PRICE' | 'GIVEAWAY';
   quantity: number;
   condition: 'New' | 'Used' | 'Remanufactured' | 'Not specified';
   conditionSource: 'COMMAND' | 'SELLER_DEFAULT_REQUIRES_CONFIRMATION' | 'REQUIRES_SELLER_SELECTION';
@@ -97,6 +99,7 @@ export interface SellerCommandPreview {
     }>;
   };
   intelligence: CatalogListingIntelligence | null;
+  tariff: TariffIntelligence | null;
   mapping: GmCatalogMappingAssessment;
   brandPolicy: BrandTitlePolicyResult | null;
   confirmations: Array<{ id: string; label: string; detail: string }>;
@@ -124,8 +127,9 @@ export interface SellerCommandPreview {
 
 function normalizePrice(value: string | undefined): string | null {
   if (!value) return null;
+  if (!/^-?\d+(?:\.\d{1,2})?$/.test(value.trim())) return null;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1_000_000) return null;
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1_000_000) return null;
   return parsed.toFixed(2);
 }
 
@@ -133,7 +137,7 @@ function quantityFrom(value: string | undefined): number {
   if (!value) return 1;
   const normalized = value.toLowerCase();
   const parsed = quantityWords[normalized] ?? Number(normalized);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : 1;
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 999 ? parsed : 1;
 }
 
 function findPartNumber(command: string): string | null {
@@ -189,8 +193,8 @@ function findItemDescription(command: string, partNumber: string | null): string
   let value = command
     .replace(/\b(?:and\s+)?i\s+(?:want|would\s+like)\s+to\s+(?:list|sell|draft)\s+(?:it|this)(?:\s+now)?\b/gi, ' ')
     .replace(/\b(?:list|sell|draft)\s+(?:it|this)\b/gi, ' ')
-    .replace(/\$\s*\d+(?:\.\d{1,2})?/g, ' ')
-    .replace(/\b(?:for|at|price(?:d)?(?:\s+at)?)\s+\d+(?:\.\d{1,2})?\b/gi, ' ')
+    .replace(/\$\s*-?\d+(?:\.\d+)?/g, ' ')
+    .replace(/\b(?:for|at|price(?:d)?(?:\s+at)?)\s+-?\d+(?:\.\d+)?\b/gi, ' ')
     .replace(/\b(?:local\s+pickup\s+only|free\s+(?:domestic\s+)?shipping|calculated\s+shipping|no\s+fitment|without\s+fitment)\b/gi, ' ')
     .replace(/\b(?:on\s+)?ebay\b/gi, ' ')
     .replace(/\b(?:now|please)\b/gi, ' ')
@@ -220,8 +224,11 @@ function findItemDescription(command: string, partNumber: string | null): string
 
 export function parseListingCommand(command: string): ListingCommandIntent {
   const normalized = command.toLowerCase();
-  const explicitPrice = command.match(/\$\s*(\d+(?:\.\d{1,2})?)/)?.[1]
-    ?? command.match(/\b(?:for|at|price(?:d)?(?:\s+at)?)\s+(\d+(?:\.\d{1,2})?)\b/i)?.[1];
+  const saleMode = /\bgiveaway\b|\bgive\s+(?:(?:this|the|it|item)\s+)?away\b|\bfree\s+item\b/i.test(command)
+    ? 'GIVEAWAY' as const
+    : 'FIXED_PRICE' as const;
+  const explicitPrice = command.match(/\$\s*(-?\d+(?:\.\d+)?)(?![\d.])/)?.[1]
+    ?? command.match(/\b(?:for|at|price(?:d)?(?:\s+at)?)\s+(-?\d+(?:\.\d+)?)(?![\d.])/i)?.[1];
   const quantityValue = command.match(/\b(?:quantity|qty)\s*[:=]?\s*(\d+)\b/i)?.[1]
     ?? command.match(/\b(?:sell|list|draft)\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b/i)?.[1];
   const explicitCondition = /\bused\b/.test(normalized)
@@ -237,7 +244,7 @@ export function parseListingCommand(command: string): ListingCommandIntent {
       ? 'Free domestic shipping' as const
       : normalized.includes('calculated shipping')
         ? 'Calculated shipping' as const
-        : 'Seller default' as const;
+        : 'Calculated shipping' as const;
 
   const partNumber = findPartNumber(command);
   const safetyClass = restraintPattern.test(command) ? 'RESTRAINT_SYSTEM' as const : 'STANDARD' as const;
@@ -252,7 +259,8 @@ export function parseListingCommand(command: string): ListingCommandIntent {
     itemDescription: findItemDescription(command, partNumber),
     route,
     safetyClass,
-    price: normalizePrice(explicitPrice),
+    price: normalizePrice(explicitPrice) ?? (saleMode === 'GIVEAWAY' ? '0.00' : null),
+    saleMode,
     quantity: quantityFrom(quantityValue),
     condition: explicitCondition ?? (route === 'CATALOG_ASSISTED' ? 'New' : 'Not specified'),
     conditionSource: explicitCondition
@@ -292,6 +300,39 @@ function catalogYears(catalog: GmCatalogPart): string | null {
       : String(application.yearStart)];
   });
   return [...new Set(years)].slice(0, 3).join(', ') || null;
+}
+
+/** Choose one compatible vehicle brand deterministically from catalog evidence. */
+export function selectCompatibleVehicleBrand(catalog: GmCatalogPart): string | null {
+  const divisionOrder = new Map(catalog.divisions.map((division, index) => [division, index]));
+  const counts = new Map<string, number>();
+  for (const division of catalog.divisions) counts.set(division, counts.get(division) ?? 0);
+  for (const application of catalog.applications) {
+    if (application.division) counts.set(application.division, (counts.get(application.division) ?? 0) + 2);
+    for (const model of application.models) {
+      if (model.division) counts.set(model.division, (counts.get(model.division) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort(([left, leftCount], [right, rightCount]) =>
+      rightCount - leftCount
+      || (divisionOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (divisionOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
+      || left.localeCompare(right)
+    )[0]?.[0] ?? null;
+}
+
+function catalogIncludesPre1989Vehicle(catalog: GmCatalogPart): boolean {
+  return catalog.applications.some((application) => {
+    if (
+      (application.yearStart != null && application.yearStart < 1989)
+      || (application.yearEnd != null && application.yearEnd < 1989)
+      || application.models.some((model) => model.year != null && model.year < 1989)
+    ) return true;
+    const decodedYears = [application.applicationText, application.modelScope, application.layoutLine]
+      .filter((value): value is string => Boolean(value))
+      .flatMap((value) => [...value.matchAll(/\b(?:18|19|20)\d{2}\b/g)].map((match) => Number(match[0])));
+    return decodedYears.some((year) => year < 1989);
+  });
 }
 
 function decodedApplicationExclusion(application: GmCatalogPart['applications'][number]): string | null {
@@ -444,6 +485,7 @@ export function buildSellerCommandPreview(
   const intelligence = catalogMatch
     ? suppliedIntelligence ?? buildCatalogListingIntelligence(catalogMatch)
     : null;
+  const tariff = catalogMatch ? buildTariffIntelligence(catalogMatch) : null;
   const omittedFitment = intent.fitmentMode === 'DO_NOT_PUBLISH';
   const status: CommandPreviewStatus = isSafetyReview
     ? 'SAFETY_REVIEW_REQUIRED'
@@ -464,7 +506,7 @@ export function buildSellerCommandPreview(
     : catalogMatch
       ? {
           state: 'CATALOG_STATED' as const,
-          brand: catalogMatch.divisions.length === 1 ? catalogMatch.divisions[0] ?? catalogMatch.manufacturer : catalogMatch.manufacturer,
+          brand: catalogMatch.manufacturer || 'General Motors',
           manufacturerPartNumber: intent.partNumber,
           productType: catalogMatch.productType ? properCaseCatalogText(catalogMatch.productType) : null,
           sourceLabel: `GM catalog scan · page ${catalogMatch.rollup.representativePageId ?? catalogMatch.rollup.firstPageId}`,
@@ -498,9 +540,7 @@ export function buildSellerCommandPreview(
         sourceLabel: 'Catalog identity not verified',
         sourceDetail: 'A unique authorized catalog result is required before brand, product type, category or fitment can publish.'
           };
-  const compatibleBrand = catalogMatch
-    ? (catalogMatch.divisions.length === 1 ? catalogMatch.divisions[0] ?? catalogMatch.manufacturer : catalogMatch.manufacturer)
-    : null;
+  const compatibleBrand = catalogMatch ? selectCompatibleVehicleBrand(catalogMatch) : null;
   const brandPolicy = isIllustrativeFixture
     ? applyEbayBrandTitlePolicy({
         itemBrand: 'ACDelco',
@@ -512,9 +552,9 @@ export function buildSellerCommandPreview(
       })
     : catalogMatch
       ? applyEbayBrandTitlePolicy({
-          itemBrand: null,
+          itemBrand: catalogMatch.manufacturer || 'General Motors',
           compatibleBrand,
-          relationship: 'AUTHENTICITY_NOT_CONFIRMED',
+          relationship: 'GENUINE_BRANDED_ITEM',
           manufacturerPartNumber: identity.manufacturerPartNumber ?? catalogMatch.partNumber,
           productName: properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'Automotive Part'),
           applicationYears: catalogYears(catalogMatch)
@@ -540,6 +580,12 @@ export function buildSellerCommandPreview(
     : [];
   const issues: SellerCommandPreview['issues'] = [];
   if (!intent.price) issues.push({ code: 'PRICE_REQUIRED', message: 'Add the seller-owned Buy It Now price.', blocking: true });
+  if (intent.price === '0.00' && intent.saleMode !== 'GIVEAWAY') {
+    issues.push({ code: 'ZERO_PRICE_REQUIRES_GIVEAWAY', message: 'A zero price is valid only when this draft is explicitly marked free/giveaway.', blocking: true });
+  }
+  if (intent.saleMode === 'GIVEAWAY') {
+    issues.push({ code: 'GIVEAWAY_NOT_EBAY_ELIGIBLE', message: 'The free/giveaway draft may be saved, but an eBay fixed-price offer requires a positive price.', blocking: true });
+  }
   if (catalogNumberMismatch) {
     issues.push({
       code: 'CATALOG_PART_NUMBER_MISMATCH',
@@ -618,10 +664,13 @@ export function buildSellerCommandPreview(
   });
 
   const aspects: Record<string, string> = isIllustrativeFixture
-    ? { Brand: 'ACDelco', 'Manufacturer Part Number': intent.partNumber ?? '', Type: 'Cabin Air Filter' }
+    ? { Brand: 'ACDelco', 'Manufacturer Part Number': intent.partNumber ?? '', 'OE/OEM Part Number': intent.partNumber ?? '', 'California Prop 65 Warning': '', Type: 'Cabin Air Filter' }
     : catalogMatch
       ? {
+          Brand: catalogMatch.manufacturer || 'General Motors',
           'Manufacturer Part Number': identity.manufacturerPartNumber ?? formatOemPartNumber(catalogMatch.partNumber),
+          'OE/OEM Part Number': identity.manufacturerPartNumber ?? formatOemPartNumber(catalogMatch.partNumber),
+          'California Prop 65 Warning': '',
           ...(compatibleBrand ? { 'Compatible Vehicle Brand': compatibleBrand } : {}),
           ...(identity.productType ? { Type: identity.productType } : {}),
           ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {})
@@ -716,6 +765,7 @@ export function buildSellerCommandPreview(
       catalogReferences: catalogMatch ? catalogReferences(catalogMatch) : []
     },
     intelligence,
+    tariff,
     mapping,
     brandPolicy,
     confirmations: [
@@ -745,7 +795,7 @@ export function buildSellerCommandPreview(
     issues,
     recovery: {
       label: 'Find the correct part for a vehicle' as const,
-      enabled: intent.route === 'CATALOG_ASSISTED',
+      enabled: Boolean(catalogMatch && !omittedFitment && fitmentApplications.length > 0 && !catalogIncludesPre1989Vehicle(catalogMatch)),
       requires: ['17-character VIN', 'part type'] as ['17-character VIN', 'part type'],
       privacyNote: 'The full VIN is used transiently for the requested lookup and is not retained by the preview service.'
     },
@@ -781,7 +831,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.17.0',
+    version: '0.18.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
@@ -811,7 +861,7 @@ export function buildSellerUiBootstrap(config: AppConfig) {
     defaults: {
       listingFormat: 'Buy It Now · GTC',
       handlingTime: '1 business day',
-      domesticShipping: 'Seller default',
+      domesticShipping: 'Calculated shipping',
       returns: '30 days · buyer-paid',
       international: 'Held until origin is verified'
     },

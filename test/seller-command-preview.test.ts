@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
-import { buildSellerCommandPreview, parseListingCommand } from '../src/seller/command-preview.js';
+import { buildSellerCommandPreview, parseListingCommand, selectCompatibleVehicleBrand } from '../src/seller/command-preview.js';
 
 const gm5459066 = JSON.parse(
   readFileSync(new URL('../data/gm-catalog-smoke-5459066.json', import.meta.url), 'utf8')
@@ -95,7 +95,7 @@ describe('one-command seller preview', () => {
       quantity: 1,
       condition: 'New',
       conditionSource: 'SELLER_DEFAULT_REQUIRES_CONFIRMATION',
-      shipping: 'Seller default',
+      shipping: 'Calculated shipping',
       fitmentMode: 'CATALOG_CONTROLLED'
     });
     expect(preview.status).toBe('ILLUSTRATIVE_SAMPLE');
@@ -128,7 +128,7 @@ describe('one-command seller preview', () => {
     expect(preview.status).toBe('HELD');
     expect(preview.identity).toMatchObject({
       state: 'CATALOG_STATED',
-      brand: 'Oldsmobile',
+      brand: 'General Motors',
       manufacturerPartNumber: '5459066',
       productType: 'Vacuum Power-Brake Air Cleaner/Filter'
     });
@@ -162,7 +162,7 @@ describe('one-command seller preview', () => {
     const preview = buildSellerCommandPreview('List part 602698 for $49.99', gm602698);
     expect(preview.identity).toMatchObject({
       state: 'CATALOG_STATED',
-      brand: 'Chevrolet',
+      brand: 'General Motors',
       manufacturerPartNumber: '602698',
       productType: 'Steering Knuckle With Nut'
     });
@@ -183,7 +183,7 @@ describe('one-command seller preview', () => {
     const preview = buildSellerCommandPreview('List part 581167 for $29.99', gm581167);
     expect(preview.listing).toMatchObject({
       sku: '581167',
-      title: '581167 Switch & Bracket, Lamp Fits Oldsmobile 1961–1962'
+      title: 'GM 581167 Switch & Bracket, Lamp Fits Oldsmobile 1961–1962'
     });
     expect(preview.identity.productType).toBe('Switch & Bracket, Lamp');
     expect(preview.fitment.applications).toHaveLength(8);
@@ -214,13 +214,13 @@ describe('one-command seller preview', () => {
     const preview = buildSellerCommandPreview('List part 5455054 for $49.99', gm5455054);
     expect(preview.identity).toMatchObject({
       state: 'CATALOG_STATED',
-      brand: 'Oldsmobile',
+      brand: 'General Motors',
       manufacturerPartNumber: '5455054',
       productType: 'Moraine Power Brake Repair Kit'
     });
     expect(preview.listing).toMatchObject({
       sku: '5455054',
-      title: '5455054 Moraine Power Brake Repair Kit Fits Oldsmobile 1955–1957'
+      title: 'GM 5455054 Moraine Power Brake Repair Kit Fits Oldsmobile 1955–1957'
     });
     expect(JSON.stringify(preview)).not.toContain('Po 567095');
     expect(preview.fitment.applications).toEqual([
@@ -228,7 +228,7 @@ describe('one-command seller preview', () => {
     ]);
     expect(preview.media.catalogReferences).toContainEqual(expect.objectContaining({ pageId: 2153, primary: true }));
     expect(preview.intelligence).toMatchObject({
-      category: { categoryName: 'Brake Master Cylinders & Parts', categoryId: null },
+      category: { state: 'EBAY_TAXONOMY_VERIFIED', categoryName: 'Brake Boosters', categoryId: '174021' },
       shipping: {
         profileId: 'P6',
         suggestedPackageIn: { length: 10, width: 8, height: 4 },
@@ -241,13 +241,13 @@ describe('one-command seller preview', () => {
     const preview = buildSellerCommandPreview('List part 5455055 for $49.99', gm5455055);
     expect(preview.identity).toMatchObject({
       state: 'CATALOG_STATED',
-      brand: 'Oldsmobile',
+      brand: 'General Motors',
       manufacturerPartNumber: '5455055',
       productType: 'Moraine Vacuum Cylinder Repair Kit'
     });
     expect(preview.listing).toMatchObject({
       sku: '5455055',
-      title: '5455055 Moraine Vacuum Cylinder Repair Kit Fits Oldsmobile 1955–1956'
+      title: 'GM 5455055 Moraine Vacuum Cylinder Repair Kit Fits Oldsmobile 1955–1956'
     });
     expect(preview.fitment.applications).toEqual([
       expect.objectContaining({ vehicle: '1955–1956 Oldsmobile Moraine power-brake equipped vehicles' })
@@ -260,6 +260,25 @@ describe('one-command seller preview', () => {
       imageBlobKey: 'gm-scans/pages/006761/full_page.png',
       evidenceBox: expect.objectContaining({ left: 1737, top: 718, width: 144, height: 33 })
     }));
+    expect(preview.intelligence?.category).toMatchObject({
+      state: 'EBAY_TAXONOMY_VERIFIED',
+      source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+      categoryId: '174021',
+      categoryName: 'Brake Boosters'
+    });
+    expect(preview.tariff).toMatchObject({
+      state: 'CANDIDATE_REQUIRES_SELLER_REVIEW',
+      hsCode: '870830',
+      htsCode: '8708.30.50.90',
+      sellerConfirmationRequired: true
+    });
+    expect(preview.recovery.enabled).toBe(false);
+    expect(preview.listing.aspects).toMatchObject({
+      Brand: 'General Motors',
+      'Manufacturer Part Number': '5455055',
+      'OE/OEM Part Number': '5455055',
+      'California Prop 65 Warning': ''
+    });
   });
 
   it('rejects every catalog-derived field when the returned OEM key differs', () => {
@@ -336,6 +355,55 @@ describe('one-command seller preview', () => {
     });
   });
 
+  it('preserves quantity zero and only accepts price zero as an explicit giveaway', () => {
+    const outOfStock = parseListingCommand('List part 5455055 for $49.99 qty 0');
+    expect(outOfStock).toMatchObject({ quantity: 0, price: '49.99', saleMode: 'FIXED_PRICE' });
+
+    const invalidZero = buildSellerCommandPreview('List part 5455055 for $0 qty 0', gm5455055);
+    expect(invalidZero.issues).toContainEqual(expect.objectContaining({ code: 'ZERO_PRICE_REQUIRES_GIVEAWAY' }));
+
+    const giveaway = buildSellerCommandPreview('Give away part 5455055 qty 0', gm5455055);
+    expect(giveaway.intent).toMatchObject({ quantity: 0, price: '0.00', saleMode: 'GIVEAWAY' });
+    expect(giveaway.issues).toContainEqual(expect.objectContaining({ code: 'GIVEAWAY_NOT_EBAY_ELIGIBLE' }));
+    expect(giveaway.issues.map((issue) => issue.code)).not.toContain('ZERO_PRICE_REQUIRES_GIVEAWAY');
+  });
+
+  it('rejects negative and over-precision prices instead of converting partial values', () => {
+    expect(parseListingCommand('List part 5455055 for $-5')).toMatchObject({ price: null, saleMode: 'FIXED_PRICE' });
+    expect(parseListingCommand('List part 5455055 for $12.345')).toMatchObject({ price: null, saleMode: 'FIXED_PRICE' });
+  });
+
+  it('shows VIN recovery only when every supported year is 1989 or newer', () => {
+    expect(buildSellerCommandPreview('List part 5455055 for $49.99', gm5455055).recovery.enabled).toBe(false);
+    const modern: GmCatalogPart = {
+      ...gm5459066,
+      partNumber: '9990001',
+      applications: gm5459066.applications.map((application) => ({
+        ...application,
+        yearStart: 1990,
+        yearEnd: 1991,
+        applicationText: '1990-1991',
+        layoutLine: application.layoutLine?.replaceAll('1959', '1990') ?? null,
+        models: application.models.map((model) => ({ ...model, year: 1990 }))
+      }))
+    };
+    expect(buildSellerCommandPreview('List part 9990001 for $49.99', modern).recovery.enabled).toBe(true);
+  });
+
+  it('chooses one compatible vehicle make deterministically from the strongest catalog evidence', () => {
+    const application = gm5459066.applications[0]!;
+    const multiDivision: GmCatalogPart = {
+      ...gm5459066,
+      divisions: ['Oldsmobile', 'Buick'],
+      applications: [
+        { ...application, claimId: 1, division: 'Buick', models: application.models.map((model) => ({ ...model, division: 'Buick' })) },
+        { ...application, claimId: 2, division: 'Oldsmobile', models: [application.models[0]!] }
+      ]
+    };
+    expect(selectCompatibleVehicleBrand(multiDivision)).toBe('Buick');
+    expect(selectCompatibleVehicleBrand(multiDivision)).toBe('Buick');
+  });
+
   it('creates a deterministic payload fingerprint', () => {
     const first = buildSellerCommandPreview('List part 58487514 on eBay for $9.99 now');
     const second = buildSellerCommandPreview('List part 58487514 on eBay for $9.99 now');
@@ -369,16 +437,18 @@ describe('one-command seller preview', () => {
     }));
   });
 
-  it('uses Fits before the compatible GM division until physical-item authenticity is confirmed', () => {
+  it('defaults GMPartsWiki identity to genuine General Motors while qualifying the vehicle make', () => {
     const preview = buildSellerCommandPreview('List part 5455055 for $49.99', gm5455055);
     expect(preview.listing.title).toContain('Fits Oldsmobile');
     expect(preview.listing.title.startsWith('Oldsmobile ')).toBe(false);
     expect(preview.brandPolicy).toMatchObject({
-      state: 'SELLER_CONFIRMATION_REQUIRED',
-      rule: 'AUTHENTICITY_HELD',
+      state: 'COMPLIANT',
+      rule: 'GENUINE_BRAND_ALLOWED',
+      itemBrand: 'General Motors',
+      compatibleBrand: 'Oldsmobile',
       veroParticipant: 'General Motors'
     });
-    expect(preview.listing.aspects.Brand).toBeUndefined();
+    expect(preview.listing.aspects.Brand).toBe('General Motors');
     expect(preview.listing.aspects['Compatible Vehicle Brand']).toBe('Oldsmobile');
   });
 

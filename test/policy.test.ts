@@ -24,6 +24,36 @@ describe('eBay-first launch policy', () => {
     expect(item.status).toBe('READY_FOR_PREFLIGHT');
   });
 
+  it('accepts zero inventory as an out-of-stock draft', async () => {
+    const { service } = harness();
+    const item = await createReadyItem(service, { quantity: 0 });
+    expect(item.status).toBe('READY_FOR_PREFLIGHT');
+    expect(item.exceptions.map((row) => row.code)).not.toContain('POSITIVE_QUANTITY_REQUIRED');
+  });
+
+  it('holds a zero fixed price but preserves an explicit giveaway draft', async () => {
+    const fixed = await createReadyItem(harness().service, { price: { currency: 'USD', value: '0.00' } });
+    expect(fixed.exceptions.map((row) => row.code)).toContain('POSITIVE_PRICE_REQUIRED');
+
+    const giveaway = await createReadyItem(harness().service, {
+      price: { currency: 'USD', value: '0.00' },
+      saleMode: 'GIVEAWAY'
+    });
+    expect(giveaway.exceptions.map((row) => row.code)).not.toContain('POSITIVE_PRICE_REQUIRED');
+    expect(giveaway.exceptions.map((row) => row.code)).toContain('GIVEAWAY_CHANNEL_HOLD');
+  });
+
+  it('holds publication when any pinned item specific is empty or missing', async () => {
+    const { service } = harness();
+    const item = await createReadyItem(service, {
+      aspects: { Brand: ['WIX'], 'Manufacturer Part Number': ['51040'] }
+    });
+    expect(item.exceptions).toContainEqual(expect.objectContaining({
+      code: 'REQUIRED_EBAY_ASPECTS_MISSING',
+      field: 'aspects'
+    }));
+  });
+
   it('blocks safety-critical keywords in the pilot', async () => {
     const { service } = harness();
     const item = await createReadyItem(service, {
