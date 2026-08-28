@@ -8,7 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "npm test && npm run build:server && npm run build:web",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "build": "npm run audit:prod && npm test && npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "npm run typecheck:web && vite build",
     "typecheck:web": "tsc -p frontend/tsconfig.json",
