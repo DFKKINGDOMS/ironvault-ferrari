@@ -42,6 +42,12 @@ export class EbayReferenceService {
     if (cached?.status === 'RIGHTS_CLEARED_ARCHIVE' || cached?.status === 'PRIVATE_REFERENCE_ARCHIVE') {
       return { status: cached.status, reference: cached, searchSuppressed: true };
     }
+
+    const curatedCandidate = await this.curatedProvider?.searchExact(partNumber, catalog);
+    if (curatedCandidate) {
+      return this.saveMatchedReference(partNumber, curatedCandidate, at);
+    }
+
     if (
       cached?.status === 'MATCHED_LIVE_REFERENCE'
       && cached.expiresAt
@@ -55,11 +61,6 @@ export class EbayReferenceService {
       return { status: cached.status, reference: cached, searchSuppressed: true };
     }
     if (cached) await this.store.deleteEbayReferenceCache(partNumber);
-
-    const curatedCandidate = await this.curatedProvider?.searchExact(partNumber, catalog);
-    if (curatedCandidate) {
-      return this.saveMatchedReference(partNumber, curatedCandidate, at);
-    }
 
     if (this.config.EBAY_REFERENCE_DISCOVERY_MODE !== 'live' || !this.provider) {
       return { status: 'DISCOVERY_DISABLED', reference: null, searchSuppressed: true };

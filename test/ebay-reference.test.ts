@@ -163,6 +163,19 @@ describe('eBay exact-reference discovery', () => {
 
   it('shows a permanent private 5455055 archive even before global Browse credentials are configured', async () => {
     const store = new MemoryStore();
+    const oldLive = candidate();
+    await store.saveEbayReferenceCache({
+      ...oldLive,
+      partNumber: '5455055',
+      status: 'MATCHED_LIVE_REFERENCE',
+      source: 'EBAY_BROWSE_API',
+      rightsState: 'EBAY_PUBLIC_REFERENCE_ONLY',
+      checkedAt: '2026-08-28T06:30:00Z',
+      expiresAt: '2026-08-28T12:30:00Z',
+      retryAfter: null,
+      archiveAllowed: false,
+      listingPayloadEligible: false
+    });
     const service = new EbayReferenceService(
       store,
       undefined,
