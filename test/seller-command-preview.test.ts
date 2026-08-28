@@ -6,6 +6,9 @@ import { buildSellerCommandPreview, parseListingCommand } from '../src/seller/co
 const gm5459066 = JSON.parse(
   readFileSync(new URL('../data/gm-catalog-smoke-5459066.json', import.meta.url), 'utf8')
 ) as GmCatalogPart;
+const gm602698 = JSON.parse(
+  readFileSync(new URL('../data/gm-catalog-curated-602698.json', import.meta.url), 'utf8')
+) as GmCatalogPart;
 
 describe('one-command seller preview', () => {
   it('extracts the primary sample command without making an external request', () => {
@@ -77,6 +80,27 @@ describe('one-command seller preview', () => {
     expect(preview.issues.map((issue) => issue.code)).toContain('CATALOG_EVIDENCE_REVIEW_REQUIRED');
     expect(preview.issues.map((issue) => issue.code)).toContain('EBAY_CATEGORY_VERIFICATION_REQUIRED');
     expect(preview.issues.map((issue) => issue.code)).not.toContain('CATALOG_LOOKUP_REQUIRED');
+  });
+
+  it('preserves the supplied 602698 catalog row with its full fitment qualifier', () => {
+    const preview = buildSellerCommandPreview('List part 602698 for $49.99', gm602698);
+    expect(preview.identity).toMatchObject({
+      state: 'CATALOG_STATED',
+      brand: 'Chevrolet',
+      manufacturerPartNumber: '602698',
+      productType: 'Steering knuckle with nut'
+    });
+    expect(preview.fitment.applications).toEqual([
+      expect.objectContaining({
+        vehicle: '1937–1941 Chevrolet S, T, V, W, Y series',
+        qualifier: expect.stringContaining('lower bolt holes are 1/2 inch diameter')
+      })
+    ]);
+    expect(preview.intelligence).toMatchObject({
+      category: { categoryName: 'Wheel Hubs, Bearings & Parts' },
+      shipping: { profileId: 'steering-knuckle-hub', confirmationRequired: true }
+    });
+    expect(JSON.stringify(preview)).not.toContain('gmpartswiki.com');
   });
 
   it('routes an item without a part number to photo-first intake', () => {
