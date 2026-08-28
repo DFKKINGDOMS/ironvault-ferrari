@@ -5092,3 +5092,220 @@ input:focus-visible {
     animation-iteration-count: 1 !important;
   }
 }
+
+
+/* v0.17 editable, rights-aware listing workbench */
+.active-draft-editor { --editor-readable: 13px; }
+.active-draft-editor .form-field input,
+.active-draft-editor .form-field select,
+.active-draft-editor .form-field textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line-dark);
+  border-radius: 2px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  outline: 0;
+}
+.active-draft-editor .form-field textarea { min-height: 150px; resize: vertical; }
+.active-draft-editor .form-field input:focus,
+.active-draft-editor .form-field select:focus,
+.active-draft-editor .form-field textarea:focus {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 3px rgba(196, 90, 43, 0.1);
+}
+.active-draft-editor .form-field > small.field-error { color: var(--red); font-weight: 800; }
+
+.brand-policy-card {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid #b9cfc2;
+  border-left: 5px solid var(--green);
+  background: #eff7f2;
+}
+.brand-policy-card.hold {
+  border-color: #dfbf7b;
+  border-left-color: var(--amber);
+  background: var(--amber-pale);
+}
+.brand-policy-card .icon { width: 24px; color: var(--green); }
+.brand-policy-card.hold .icon { color: var(--amber); }
+.brand-policy-card > div { min-width: 0; }
+.brand-policy-card strong { display: block; font-size: 14px; }
+.brand-policy-card p { margin: 4px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.brand-policy-card small { color: var(--faint); font-size: 11px; }
+.brand-policy-card a { color: #285f91; font-size: 11px; font-weight: 800; white-space: nowrap; }
+
+.editable-specifics {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.editable-specifics > div {
+  display: grid;
+  grid-template-columns: minmax(180px, .85fr) minmax(220px, 1.4fr) 80px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+.editable-specifics > div:first-child { border-top: 0; }
+.editable-specifics .table-head {
+  color: var(--muted);
+  background: #efede7;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.editable-specifics input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-dark);
+  font-size: 12px;
+}
+.editable-specifics button,
+.reference-import-actions button,
+.main-image-grid button {
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--orange-dark);
+  background: #fff;
+  border: 1px solid var(--line-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+.editable-specifics button:disabled,
+.reference-import-actions button:disabled,
+.main-image-grid button:disabled { color: var(--faint); background: #efede7; cursor: not-allowed; }
+
+.compatibility-table.editable > div:not(.table-head) { grid-template-columns: minmax(230px, 1.1fr) minmax(240px, 1.2fr) 130px 62px; }
+.compatibility-table.editable input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-dark);
+  font-size: 12px;
+}
+
+.main-image-workbench {
+  margin-bottom: 22px;
+  padding: 16px;
+  border: 2px solid #d59668;
+  background: #f8f5ee;
+}
+.main-image-stage {
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.main-image-stage > img {
+  width: 100%;
+  height: 420px;
+  display: block;
+  object-fit: contain;
+  background: #fff;
+}
+.main-image-stage > span {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+.main-image-stage > span strong { font-size: 13px; }
+.main-image-stage > span small { color: var(--muted); font-size: 11px; }
+.image-upload-button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 10px 14px;
+  color: #fff;
+  background: var(--orange-dark);
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.image-upload-button input { display: none; }
+.image-upload-button .icon { width: 17px; }
+
+.main-image-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.main-image-grid article {
+  min-width: 0;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.main-image-grid article.main { border: 3px solid var(--orange); }
+.main-image-grid img {
+  width: 100%;
+  height: 180px;
+  display: block;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #e3ded5;
+}
+.main-image-grid article > div:nth-child(2) {
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 0;
+}
+.main-image-grid strong { overflow-wrap: anywhere; font-size: 11px; }
+.main-image-grid small { color: var(--muted); font-size: 9px; text-transform: lowercase; }
+.main-image-grid article > div:last-child { display: flex; gap: 6px; }
+
+.reference-import-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #9ebbd0;
+  border-top: 0;
+  background: #eef6fb;
+}
+.reference-import-actions button { min-height: 42px; color: #285f91; }
+
+.active-draft-editor .intelligence-warning { font-size: 12px; line-height: 1.5; }
+.active-draft-editor .approval-check { margin-top: 16px; }
+.active-draft-editor .gate-list > div { align-items: flex-start; }
+
+@media (max-width: 900px) {
+  .main-image-grid,
+  .reference-import-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .main-image-stage,
+  .main-image-stage > img { min-height: 320px; height: 320px; }
+}
+@media (max-width: 640px) {
+  .brand-policy-card { grid-template-columns: 24px 1fr; }
+  .brand-policy-card a { grid-column: 1 / -1; }
+  .editable-specifics > div,
+  .compatibility-table.editable > div:not(.table-head) { grid-template-columns: 1fr; }
+  .editable-specifics .table-head,
+  .compatibility-table.editable .table-head { display: none; }
+  .main-image-grid,
+  .reference-import-actions { grid-template-columns: 1fr; }
+}

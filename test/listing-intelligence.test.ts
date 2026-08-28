@@ -18,9 +18,11 @@ describe('catalog listing intelligence', () => {
     expect(result.shipping).toMatchObject({
       state: 'ESTIMATED_REQUIRES_CONFIRMATION',
       packageType: 'BOX',
-      suggestedPackageIn: { length: 8, width: 8, height: 4 },
+      profileId: 'P6',
+      productFamilyProfileId: 'air-filter-element',
+      suggestedPackageIn: { length: 10, width: 8, height: 4 },
       dimDivisor: 139,
-      dimensionalWeightLb: 2,
+      dimensionalWeightLb: 3,
       confirmationRequired: true
     });
   });
@@ -37,4 +39,47 @@ describe('catalog listing intelligence', () => {
       categoryId: '12345'
     });
   });
+
+  it('uses an embedded official exact leaf but keeps the official fallback visible and held', () => {
+    const exact = buildCatalogListingIntelligence({
+      ...gm5459066,
+      ebayCategory: {
+        marketplaceId: 'EBAY_US',
+        categoryId: '33659',
+        categoryName: 'Air Filters',
+        categoryPath: 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories › Air & Fuel Delivery › Air Filters',
+        source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+        classificationMode: 'RULE_EXACT_LEAF',
+        categoryTreeId: '100',
+        categoryTreeVersion: 'US_JUNE_2026',
+        verifiedAt: '2026-08-28T00:00:00.000Z'
+      }
+    });
+    expect(exact.category).toMatchObject({
+      state: 'EBAY_TAXONOMY_VERIFIED',
+      source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+      categoryId: '33659'
+    });
+
+    const fallback = buildCatalogListingIntelligence({
+      ...gm5459066,
+      ebayCategory: {
+        ...gm5459066.ebayCategory,
+        marketplaceId: 'EBAY_US',
+        categoryId: '9886',
+        categoryName: 'Other Car & Truck Parts & Accessories',
+        categoryPath: 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories › Other',
+        source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+        classificationMode: 'OTHER_FALLBACK_REVIEWED',
+        categoryTreeId: '100',
+        categoryTreeVersion: 'US_JUNE_2026',
+        verifiedAt: '2026-08-28T00:00:00.000Z'
+      }
+    });
+    expect(fallback.category).toMatchObject({
+      state: 'EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW',
+      categoryId: '9886'
+    });
+  });
+
 });

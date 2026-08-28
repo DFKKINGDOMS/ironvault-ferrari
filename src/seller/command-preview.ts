@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
-import { canonicalOemPartNumber, formatOemPartNumber, normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
+import { assessGmCatalogMapping, canonicalOemPartNumber, formatOemPartNumber, normalizeGmCatalogPart, type GmCatalogMappingAssessment } from '../catalog/gm-catalog-quality.js';
 import { buildCatalogListingIntelligence, type CatalogListingIntelligence } from '../catalog/listing-intelligence.js';
 import type { AppConfig } from '../config.js';
+import { applyEbayBrandTitlePolicy, EBAY_INTELLECTUAL_PROPERTY_POLICY_URL, EBAY_VERO_PROFILE_INDEX_URL, type BrandTitlePolicyResult } from '../ebay/brand-title-policy.js';
 
 export const listingCommandRequestSchema = z.object({
   command: z.string().trim().min(3).max(500)
@@ -96,6 +97,8 @@ export interface SellerCommandPreview {
     }>;
   };
   intelligence: CatalogListingIntelligence | null;
+  mapping: GmCatalogMappingAssessment;
+  brandPolicy: BrandTitlePolicyResult | null;
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
   recovery: {
@@ -422,9 +425,11 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
 export function buildSellerCommandPreview(
   command: string,
   gmCatalog?: GmCatalogPart,
-  suppliedIntelligence?: CatalogListingIntelligence
+  suppliedIntelligence?: CatalogListingIntelligence,
+  suppliedMapping?: GmCatalogMappingAssessment
 ): SellerCommandPreview {
   const intent = parseListingCommand(command);
+  const mapping = suppliedMapping ?? assessGmCatalogMapping(gmCatalog, intent.partNumber);
   const isSafetyReview = intent.route === 'SAFETY_REVIEW';
   const isPhotoFirst = intent.route === 'PHOTO_FIRST';
   const isIllustrativeFixture = intent.partNumber === '58487514' && !isSafetyReview;
@@ -493,16 +498,35 @@ export function buildSellerCommandPreview(
         sourceLabel: 'Catalog identity not verified',
         sourceDetail: 'A unique authorized catalog result is required before brand, product type, category or fitment can publish.'
           };
+  const compatibleBrand = catalogMatch
+    ? (catalogMatch.divisions.length === 1 ? catalogMatch.divisions[0] ?? catalogMatch.manufacturer : catalogMatch.manufacturer)
+    : null;
+  const brandPolicy = isIllustrativeFixture
+    ? applyEbayBrandTitlePolicy({
+        itemBrand: 'ACDelco',
+        compatibleBrand: null,
+        relationship: 'GENUINE_BRANDED_ITEM',
+        manufacturerPartNumber: intent.partNumber ?? '',
+        productName: 'Cabin Air Filter OE Replacement',
+        applicationYears: null
+      })
+    : catalogMatch
+      ? applyEbayBrandTitlePolicy({
+          itemBrand: null,
+          compatibleBrand,
+          relationship: 'AUTHENTICITY_NOT_CONFIRMED',
+          manufacturerPartNumber: identity.manufacturerPartNumber ?? catalogMatch.partNumber,
+          productName: properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'Automotive Part'),
+          applicationYears: catalogYears(catalogMatch)
+        })
+      : null;
   const title = titleGuard(
-    isIllustrativeFixture
-      ? `ACDelco ${intent.partNumber} Cabin Air Filter OE Replacement ${intent.condition}`
-      : catalogMatch
-        ? `${identity.brand ?? catalogMatch.manufacturer} ${identity.manufacturerPartNumber} ${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'GM Catalog Part')}${catalogYears(catalogMatch) ? ` ${catalogYears(catalogMatch)}` : ''}`
-      : isSafetyReview
+    brandPolicy?.title
+      || (isSafetyReview
         ? `${intent.itemDescription ?? 'Possible airbag or restraint item'} — Safety review required`
         : isPhotoFirst
           ? `${intent.itemDescription ?? 'Unidentified automotive item'} — Photos required`
-          : `Part ${intent.partNumber} — catalog identity required`
+          : `Part ${intent.partNumber} — catalog identity required`)
   );
   const fitmentApplications: SellerCommandPreview['fitment']['applications'] = omittedFitment
     ? []
@@ -546,21 +570,36 @@ export function buildSellerCommandPreview(
       message: 'GM scan evidence was found. Review the catalog-stated application and derived model expansion before publishing compatibility.',
       blocking: true
     });
+    if (brandPolicy?.sellerConfirmationRequired) {
+      issues.push({
+        code: 'BRAND_AUTHENTICITY_CONFIRMATION_REQUIRED',
+        message: `Confirm whether the physical item is genuinely branded or aftermarket. Until then, ${compatibleBrand ?? 'the compatible brand'} stays behind Fits/For and Brand remains unset.`,
+        blocking: true
+      });
+    }
     if (intelligence?.category.state !== 'EBAY_TAXONOMY_VERIFIED') {
       issues.push({
         code: 'EBAY_CATEGORY_VERIFICATION_REQUIRED',
-        message: intelligence?.category.categoryName
-          ? `${intelligence.category.categoryName} is a PartQuill category candidate and must be verified against the current eBay taxonomy.`
-          : 'The current eBay leaf category must be resolved before publication.',
+        message: intelligence?.category.categoryId
+          ? `Official leaf ${intelligence.category.categoryId} is a fallback and must be replaced or explicitly confirmed before submission.`
+          : intelligence?.category.categoryName
+            ? `${intelligence.category.categoryName} is a PartQuill category candidate and must be verified against the current eBay taxonomy.`
+            : 'The current eBay leaf category must be resolved before publication.',
         blocking: true
       });
     }
   } else if (!isIllustrativeFixture) {
-    issues.push({
-      code: 'CATALOG_LOOKUP_REQUIRED',
-      message: 'No unique authorized catalog identity has been attached to this command preview.',
-      blocking: true
-    });
+    issues.push(mapping.state === 'OCR_CANDIDATE_HELD'
+      ? {
+          code: 'GM_OCR_CANDIDATE_HELD',
+          message: 'The OEM number occurs in OCR candidate data, but no curated or catalog-stated exact row supports seller-facing fields yet.',
+          blocking: true
+        }
+      : {
+          code: 'CATALOG_LOOKUP_REQUIRED',
+          message: 'No unique authorized catalog identity has been attached to this command preview.',
+          blocking: true
+        });
   } else {
     issues.push({
       code: 'ILLUSTRATIVE_DATA_ONLY',
@@ -582,8 +621,8 @@ export function buildSellerCommandPreview(
     ? { Brand: 'ACDelco', 'Manufacturer Part Number': intent.partNumber ?? '', Type: 'Cabin Air Filter' }
     : catalogMatch
       ? {
-          Brand: identity.brand ?? catalogMatch.manufacturer,
           'Manufacturer Part Number': identity.manufacturerPartNumber ?? formatOemPartNumber(catalogMatch.partNumber),
+          ...(compatibleBrand ? { 'Compatible Vehicle Brand': compatibleBrand } : {}),
           ...(identity.productType ? { Type: identity.productType } : {}),
           ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {})
         }
@@ -677,6 +716,8 @@ export function buildSellerCommandPreview(
       catalogReferences: catalogMatch ? catalogReferences(catalogMatch) : []
     },
     intelligence,
+    mapping,
+    brandPolicy,
     confirmations: [
       {
         id: 'part-in-hand',
@@ -740,7 +781,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.16.3',
+    version: '0.17.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
@@ -754,6 +795,13 @@ export function buildSellerUiBootstrap(config: AppConfig) {
       maxImages: config.EBAY_REFERENCE_MAX_IMAGES,
       cacheHours: config.EBAY_REFERENCE_CACHE_HOURS,
       permanentArchiveRequiresRights: true
+    },
+    veroProfileRegistry: {
+      mode: 'read-only-official-profile-index',
+      endpoint: '/v1/seller-ui/vero-profiles',
+      sourceUrl: EBAY_VERO_PROFILE_INDEX_URL,
+      policyUrl: EBAY_INTELLECTUAL_PROPERTY_POLICY_URL,
+      officialIndexIsIncomplete: true
     },
     persistence: config.DATABASE_URL ? 'postgres' : config.PILOT_EPHEMERAL_MODE ? 'ephemeral-memory-pilot' : 'memory',
     imageStudio: {

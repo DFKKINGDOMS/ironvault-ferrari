@@ -11,6 +11,13 @@ type SellerBootstrap = {
   persistence: string;
   imageStudio: { mode: string; path: string };
   ebayReferenceDiscovery: { mode: "disabled" | "live"; maxImages: number; cacheHours: number; permanentArchiveRequiresRights: true };
+  veroProfileRegistry: {
+    mode: "read-only-official-profile-index";
+    endpoint: string;
+    sourceUrl: string;
+    policyUrl: string;
+    officialIndexIsIncomplete: true;
+  };
   communityImages: {
     enabled: boolean;
     maxImages: number;
@@ -19,6 +26,17 @@ type SellerBootstrap = {
     chatGptManualActive: boolean;
     gitArchiveConnected: boolean;
   };
+};
+
+type VeroProfileSnapshot = {
+  status: "CURRENT" | "STALE" | "UNAVAILABLE";
+  sourceUrl: string;
+  policyUrl: string;
+  completeness: "OFFICIAL_PARTICIPANT_PROFILES_ARE_NOT_COMPLETE";
+  fetchedAt: string | null;
+  participantCount: number;
+  participants: string[];
+  warning: string;
 };
 
 type EbayReferenceRecord = {
@@ -37,7 +55,7 @@ type EbayReferenceRecord = {
   expiresAt: string | null;
   retryAfter: string | null;
   archiveAllowed: boolean;
-  listingPayloadEligible: false;
+  listingPayloadEligible: boolean;
 };
 
 type EbayReferenceLookup = {
@@ -74,8 +92,8 @@ type CatalogReference = {
 
 type ListingIntelligence = {
   category: {
-    state: "EBAY_TAXONOMY_VERIFIED" | "RULE_DERIVED_REQUIRES_EBAY_VERIFICATION" | "NOT_CLASSIFIED";
-    source: "EBAY_TAXONOMY_API" | "PARTQUILL_CLASSIFIER" | "NONE";
+    state: "EBAY_TAXONOMY_VERIFIED" | "EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW" | "RULE_DERIVED_REQUIRES_EBAY_VERIFICATION" | "NOT_CLASSIFIED";
+    source: "EBAY_TAXONOMY_API" | "EBAY_OFFICIAL_CATEGORY_FILE" | "PARTQUILL_CLASSIFIER" | "NONE";
     categoryId: string | null;
     categoryName: string | null;
     categoryPath: string | null;
@@ -87,13 +105,20 @@ type ListingIntelligence = {
     state: "ESTIMATED_REQUIRES_CONFIRMATION" | "MEASUREMENT_REQUIRED";
     source: "APPROVED_PRODUCT_FAMILY_PRESET" | "MEASURED_VALUES_REQUIRED";
     profileId: string | null;
+    productFamilyProfileId: string | null;
     profileLabel: string | null;
     packageType: "BOX" | "MAILER" | "TUBE" | "FREIGHT" | null;
+    packageSelectionState: "SMALLEST_SAVED_PACKAGE_ESTIMATE" | "CUSTOM_PACKAGE_REQUIRED" | "FREIGHT_REQUIRED" | "MEASUREMENT_REQUIRED";
+    shippingClass: "PARCEL" | "TRUCK_FREIGHT" | "SPECIAL_TRUCK_FREIGHT" | "MEASUREMENT_REQUIRED";
     estimatedItemWeightLb: { min: number; max: number; suggested: number } | null;
+    estimatedItemPackageIn: { length: number; width: number; height: number } | null;
     suggestedPackageIn: { length: number; width: number; height: number } | null;
+    emptyPackageWeightLb: number | null;
+    estimatedPackedWeightLb: number | null;
     dimensionalWeightLb: number | null;
     estimatedBillableWeightLb: number | null;
     dimDivisor: 139;
+    checkoutGate: boolean;
     confidence: number;
     basis: string[];
     confirmationRequired: true;
@@ -151,6 +176,28 @@ type SellerPreview = {
     catalogReferences: CatalogReference[];
   };
   intelligence: ListingIntelligence | null;
+  mapping: {
+    state: "CURATED_EXACT" | "CATALOG_STATED_EXACT" | "OCR_CANDIDATE_HELD" | "PART_NUMBER_MISMATCH" | "NOT_FOUND";
+    requestedPartNumber: string | null;
+    returnedPartNumber: string | null;
+    exactKeyMatch: boolean;
+    sellerFacingAllowed: boolean;
+    sourcePages: number[];
+    reasons: string[];
+  };
+  brandPolicy: {
+    title: string;
+    state: "COMPLIANT" | "SELLER_CONFIRMATION_REQUIRED";
+    rule: "GENUINE_BRAND_ALLOWED" | "FITS_FOR_PREFIX_REQUIRED" | "AUTHENTICITY_HELD";
+    itemBrand: string | null;
+    compatibleBrand: string | null;
+    veroParticipant: string | null;
+    registryCompleteness: "OFFICIAL_PARTICIPANT_PROFILES_ARE_NOT_COMPLETE";
+    sourceUrl: string;
+    profileIndexUrl: string;
+    sellerConfirmationRequired: boolean;
+    explanation: string;
+  } | null;
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
   recovery: { label: string; enabled: boolean; privacyNote: string };
@@ -195,7 +242,48 @@ type IconName = "inventory" | "plus" | "search" | "edit" | "shield" | "check" | 
 
 const MAX_SELLER_PHOTOS = 24;
 
-type StagedPhoto = { id: string; name: string; url: string };
+type StagedPhoto = {
+  id: string;
+  name: string;
+  url: string;
+  source: "SELLER_UPLOAD" | "PRIVATE_REFERENCE" | "RIGHTS_CLEARED_REFERENCE";
+  publishEligible: boolean;
+  rightsState: "SELLER_PHOTOGRAPH" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED";
+};
+
+type EditableFitmentRow = { vehicle: string; qualifier: string; state: string };
+
+type EditableDraftFields = {
+  categoryId: string;
+  categoryName: string;
+  condition: string;
+  description: string;
+  actualBrand: string;
+  compatibleBrand: string;
+  productType: string;
+  authenticity: "AUTHENTICITY_NOT_CONFIRMED" | "GENUINE_BRANDED_ITEM" | "AFTERMARKET_COMPATIBLE";
+  aspects: Record<string, string>;
+  fitment: EditableFitmentRow[];
+  packageProfileId: string;
+  packageLength: string;
+  packageWidth: string;
+  packageHeight: string;
+  itemWeight: string;
+  packedWeight: string;
+  shippingConfirmed: boolean;
+  handlingTime: string;
+  returns: string;
+  international: string;
+};
+
+const IRONVAULT_PACKAGE_OPTIONS = [
+  ["P1", 6, 4, 1, 0.5], ["P2", 6, 4, 2, 0.5], ["P3", 8, 6, 2, 1],
+  ["P4", 8, 6, 4, 1], ["P5", 12, 9, 4, 1], ["P6", 10, 8, 4, 1],
+  ["P7", 12, 10, 6, 1], ["P8", 14, 12, 6, 1], ["P9", 16, 12, 8, 1],
+  ["P10", 18, 14, 8, 1], ["P11", 20, 16, 10, 2], ["P12", 24, 18, 12, 2],
+  ["P13", 28, 20, 14, 3], ["P14", 32, 24, 18, 3], ["P15", 36, 24, 20, 4],
+  ["P16", 42, 30, 24, 10], ["P17", 48, 40, 28, 20]
+] as const;
 
 const navGroups: Array<{ label: string; items: Array<{ id: View; label: string; icon: IconName; count?: number }> }> = [
   {
@@ -377,6 +465,63 @@ function CatalogIntelligenceCard({ intelligence }: { intelligence: ListingIntell
   </section>;
 }
 
+function draftFieldsFromPreview(preview: SellerPreview): EditableDraftFields {
+  const shipping = preview.intelligence?.shipping;
+  const packageIn = shipping?.suggestedPackageIn;
+  return {
+    categoryId: preview.listing.categoryId ?? "",
+    categoryName: preview.listing.category ?? preview.intelligence?.category.categoryName ?? "",
+    condition: preview.intent.condition,
+    description: preview.listing.description,
+    actualBrand: preview.brandPolicy?.itemBrand ?? "",
+    compatibleBrand: preview.brandPolicy?.compatibleBrand ?? "",
+    productType: preview.identity.productType ?? "",
+    authenticity: preview.brandPolicy?.sellerConfirmationRequired
+      ? "AUTHENTICITY_NOT_CONFIRMED"
+      : "GENUINE_BRANDED_ITEM",
+    aspects: { ...preview.listing.aspects },
+    fitment: preview.fitment.applications.map((row) => ({ ...row })),
+    packageProfileId: shipping?.profileId ?? "",
+    packageLength: packageIn ? String(packageIn.length) : "",
+    packageWidth: packageIn ? String(packageIn.width) : "",
+    packageHeight: packageIn ? String(packageIn.height) : "",
+    itemWeight: shipping?.estimatedItemWeightLb ? String(shipping.estimatedItemWeightLb.suggested) : "",
+    packedWeight: shipping?.estimatedPackedWeightLb != null ? String(shipping.estimatedPackedWeightLb) : "",
+    shippingConfirmed: false,
+    handlingTime: preview.listing.handlingTime,
+    returns: preview.listing.returns,
+    international: preview.listing.international
+  };
+}
+
+function titleLimit(value: string): string {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length <= 80 ? clean : clean.slice(0, 80).replace(/\s+\S*$/, "").trim();
+}
+
+const UI_TITLE_ACRONYMS: Readonly<Record<string, string>> = {
+  acdelco: "ACDelco", abs: "ABS", ac: "AC", awd: "AWD", cv: "CV", ecm: "ECM",
+  ecu: "ECU", egr: "EGR", gm: "GM", hvac: "HVAC", nos: "NOS", oe: "OE",
+  oem: "OEM", pcm: "PCM", srs: "SRS"
+};
+const UI_LOWER_TITLE_WORDS = new Set(["a", "an", "and", "at", "by", "for", "in", "of", "on", "or", "the", "to", "with"]);
+
+function properCaseTitle(value: string): string {
+  const words = value.replace(/\s+/g, " ").trim().split(" ");
+  return titleLimit(words.map((token, tokenIndex) => {
+    if (/\d/.test(token)) return token.replace(/[a-z]+/gi, (letters) => letters.toUpperCase());
+    return token.split(/([/\u2013\u2014-])/).map((segment) => {
+      if (/^[/\u2013\u2014-]$/.test(segment)) return segment;
+      const key = segment.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const preserved = UI_TITLE_ACRONYMS[key];
+      if (preserved) return preserved;
+      const lower = segment.toLowerCase();
+      if (tokenIndex > 0 && UI_LOWER_TITLE_WORDS.has(lower)) return lower;
+      return lower.replace(/[a-z]/, (letter) => letter.toUpperCase());
+    }).join("");
+  }).join(" "));
+}
+
 type ActiveDraftEditorProps = {
   preview: SellerPreview | null;
   editorTab: EditorTab;
@@ -387,67 +532,275 @@ type ActiveDraftEditorProps = {
   setPrice: (value: string) => void;
   quantity: string;
   setQuantity: (value: string) => void;
+  photos: StagedPhoto[];
+  addPhotos: (files: FileList | null) => void;
+  removePhoto: (photoId: string) => void;
+  setMainPhoto: (photoId: string) => void;
+  addReferencePhoto: (image: EbayReferenceRecord["images"][number], index: number, record: EbayReferenceRecord) => void;
+  onMaterialEdit: () => void;
   navigate: (view: View) => void;
   showNotice: (message: string) => void;
   ebayReference: EbayReferenceLookup | null;
   ebayReferenceLoading: boolean;
+  veroProfiles: VeroProfileSnapshot | null;
 };
 
-function ActiveDraftEditor({ preview, editorTab, setEditorTab, title, setTitle, price, setPrice, quantity, setQuantity, navigate, showNotice, ebayReference, ebayReferenceLoading }: ActiveDraftEditorProps) {
-  if (!preview) {
+function ActiveDraftEditor({
+  preview, editorTab, setEditorTab, title, setTitle, price, setPrice, quantity, setQuantity,
+  photos, addPhotos, removePhoto, setMainPhoto, addReferencePhoto, onMaterialEdit,
+  navigate, showNotice, ebayReference, ebayReferenceLoading, veroProfiles
+}: ActiveDraftEditorProps) {
+  const [fields, setFields] = useState<EditableDraftFields | null>(preview ? draftFieldsFromPreview(preview) : null);
+  const [newAspectName, setNewAspectName] = useState("");
+
+  useEffect(() => {
+    if (!preview) {
+      setFields(null);
+      return;
+    }
+    const fresh = draftFieldsFromPreview(preview);
+    const key = "partquill-draft-v2:" + (preview.listing.sku ?? "held") + ":" + preview.fingerprint;
+    try {
+      const saved = window.localStorage.getItem(key);
+      const parsed = saved ? JSON.parse(saved) as { fingerprint?: string; fields?: EditableDraftFields } : null;
+      setFields(parsed?.fingerprint === preview.fingerprint && parsed.fields ? { ...fresh, ...parsed.fields } : fresh);
+    } catch {
+      setFields(fresh);
+    }
+  }, [preview?.fingerprint]);
+
+  if (!preview || !fields) {
     return <section className="view editor-view"><div className="empty-state"><h2>No active draft</h2><p>Build or select a part first. PartQuill will not reuse fields from a previous item.</p><button className="primary" onClick={() => navigate("instant")}>List a part</button></div></section>;
+  }
+
+  function editField<K extends keyof EditableDraftFields>(key: K, value: EditableDraftFields[K]) {
+    setFields((current) => current ? { ...current, [key]: value } : current);
+    onMaterialEdit();
+  }
+
+  function updateFitment(index: number, field: "vehicle" | "qualifier", value: string) {
+    editField("fitment", fields.fitment.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value, state: "SELLER_EDITED" } : row));
+  }
+
+  function updateAspect(name: string, value: string) {
+    editField("aspects", { ...fields.aspects, [name]: value });
+  }
+
+  function removeAspect(name: string) {
+    const next = { ...fields.aspects };
+    delete next[name];
+    editField("aspects", next);
+  }
+
+  function renameAspect(name: string, nextName: string) {
+    const clean = nextName.trim();
+    if (!clean || clean === name) return;
+    const next = { ...fields.aspects };
+    const value = next[name] ?? "";
+    delete next[name];
+    next[clean] = value;
+    editField("aspects", next);
+  }
+
+  function selectPackage(profileId: string) {
+    const profile = IRONVAULT_PACKAGE_OPTIONS.find((row) => row[0] === profileId);
+    if (!profile) {
+      editField("packageProfileId", "");
+      return;
+    }
+    const itemWeight = Number(fields.itemWeight || 0);
+    setFields((current) => current ? {
+      ...current,
+      packageProfileId: profile[0],
+      packageLength: String(profile[1]),
+      packageWidth: String(profile[2]),
+      packageHeight: String(profile[3]),
+      packedWeight: itemWeight > 0 ? String(Number((itemWeight + profile[4]).toFixed(2))) : current.packedWeight,
+      shippingConfirmed: false
+    } : current);
+    onMaterialEdit();
   }
 
   const partNumber = preview.identity.manufacturerPartNumber ?? preview.intent.partNumber ?? "Identity unresolved";
   const sku = preview.listing.sku ?? (preview.intent.partNumber || "OEM part number required");
+
+  function saveDraft() {
+    const key = "partquill-draft-v2:" + sku + ":" + preview.fingerprint;
+    window.localStorage.setItem(key, JSON.stringify({ sku, fingerprint: preview.fingerprint, fields, title, price, quantity, photos: photos.map(({ id, name, source, publishEligible, rightsState }) => ({ id, name, source, publishEligible, rightsState })) }));
+    showNotice("Draft saved under the exact OEM SKU and fingerprint. No other item can inherit these fields.");
+  }
+
   const category = preview.intelligence?.category;
-  const categoryVerified = category?.state === "EBAY_TAXONOMY_VERIFIED";
-  const categoryLabel = preview.listing.category ?? category?.categoryName ?? "Category unresolved";
+  const categoryVerified = category?.state === "EBAY_TAXONOMY_VERIFIED"
+    && fields.categoryId === (category.categoryId ?? "");
+  const categoryFallback = category?.state === "EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW";
   const shipping = preview.intelligence?.shipping;
-  const packageDimensions = shipping?.suggestedPackageIn;
-  const estimatedWeight = shipping?.estimatedItemWeightLb;
   const references = preview.media.catalogReferences;
   const firstReference = references.find((reference) => reference.primary) ?? references[0];
+  const heroPhoto = photos[0];
+  const publishablePhotos = photos.filter((photo) => photo.publishEligible);
+  const compatibleBrand = fields.compatibleBrand.trim();
+  const escapedBrand = compatibleBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const brandMentioned = compatibleBrand ? new RegExp("\\b" + escapedBrand + "\\b", "i").test(title) : false;
+  const compatibleBrandPrefixed = compatibleBrand
+    ? new RegExp("\\b(?:fits|for|compatible with)\\s+" + escapedBrand + "\\b", "i").test(title)
+    : true;
+  const actualBrandKey = fields.actualBrand.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const unqualifiedVeroMatches = (veroProfiles?.participants ?? [])
+    .map((participant) => participant.trim())
+    .filter((participant) => participant.length >= 3 && participant.length <= 70)
+    .filter((participant) => {
+      const participantKey = participant.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (participantKey && participantKey === actualBrandKey) return false;
+      const escaped = participant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const mentioned = new RegExp("\\b" + escaped + "\\b", "i").test(title);
+      const prefixed = new RegExp("\\b(?:fits|for|compatible with)\\s+" + escaped + "\\b", "i").test(title);
+      return mentioned && !prefixed;
+    })
+    .slice(0, 8);
+  const compatibleBrandIsActualBrand = Boolean(compatibleBrand)
+    && compatibleBrand.toLowerCase().replace(/[^a-z0-9]/g, "") === actualBrandKey;
+  const brandRulePass = (!brandMentioned
+    || compatibleBrandPrefixed
+    || (fields.authenticity === "GENUINE_BRANDED_ITEM" && compatibleBrandIsActualBrand))
+    && unqualifiedVeroMatches.length === 0;
+  const packageLength = Number(fields.packageLength || 0);
+  const packageWidth = Number(fields.packageWidth || 0);
+  const packageHeight = Number(fields.packageHeight || 0);
+  const packedWeight = Number(fields.packedWeight || 0);
+  const dimWeight = packageLength > 0 && packageWidth > 0 && packageHeight > 0
+    ? Math.ceil((packageLength * packageWidth * packageHeight) / 139)
+    : 0;
+  const billableWeight = Math.max(Math.ceil(packedWeight), dimWeight);
+  const shippingFieldsValid = packageLength > 0 && packageWidth > 0 && packageHeight > 0 && packedWeight > 0;
+  const authenticityConfirmed = fields.authenticity !== "AUTHENTICITY_NOT_CONFIRMED";
+  const priceValid = Number(price) > 0;
+  const quantityValid = Number.isInteger(Number(quantity)) && Number(quantity) > 0;
+  const preflightReady = preview.mapping.sellerFacingAllowed
+    && brandRulePass
+    && authenticityConfirmed
+    && categoryVerified
+    && publishablePhotos.length > 0
+    && fields.shippingConfirmed
+    && shippingFieldsValid
+    && priceValid
+    && quantityValid
+    && Boolean(title.trim());
   const editorTabs: Array<[EditorTab, string]> = [
     ["listing", "Listing"], ["identity", "Identity"], ["condition", "Condition"], ["fitment", "Fitment"],
     ["images", "Images"], ["shipping", "Shipping"], ["pricing", "Pricing"], ["policies", "Policies"], ["preview", "Buyer preview"]
   ];
 
+  function applyCompliantTitle() {
+    const years = fields.fitment.map((row) => row.vehicle.match(/\b\d{4}(?:[–-]\d{4})?\b/)?.[0]).find(Boolean) ?? "";
+    const cleanProduct = (fields.productType || preview.identity.productType || "Automotive Part")
+      .replace(compatibleBrand ? new RegExp("\\b" + escapedBrand + "\\b", "gi") : /$^/, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const actualBrand = fields.actualBrand.trim();
+    const prefix = fields.authenticity === "GENUINE_BRANDED_ITEM"
+      ? (actualBrand || compatibleBrand)
+      : fields.authenticity === "AFTERMARKET_COMPATIBLE" && actualBrand && actualBrand.toLowerCase() !== compatibleBrand.toLowerCase()
+        ? actualBrand
+        : "";
+    const compatibility = fields.authenticity === "GENUINE_BRANDED_ITEM" || !compatibleBrand ? "" : "Fits " + compatibleBrand;
+    setTitle(properCaseTitle([prefix, sku, cleanProduct, compatibility, years].filter(Boolean).join(" ")));
+    onMaterialEdit();
+    showNotice("The title was rebuilt using the selected genuine-versus-compatible brand relationship.");
+  }
+
   return <section className="view editor-view active-draft-editor" data-draft-fingerprint={preview.fingerprint}>
-    <div className="editor-head"><div><span className="crumb">Draft listings / {sku}</span><h1>{partNumber} · {preview.identity.productType ?? "Automotive Part"}</h1><p>Active fingerprint {preview.fingerprint.slice(0, 12)}… · Nothing transmitted</p></div><div><button className="secondary" onClick={() => showNotice(`Draft ${sku} retained in this browser session.`)}>Save draft</button><button className="primary" onClick={() => navigate("review")}>Review private preflight <Icon name="arrow"/></button></div></div>
+    <div className="editor-head"><div><span className="crumb">Draft listings / {sku}</span><h1>{partNumber} · {fields.productType || "Automotive Part"}</h1><p>Active fingerprint {preview.fingerprint.slice(0, 12)}… · Mapping {preview.mapping.state.replaceAll("_", " ").toLowerCase()}</p></div><div><button className="secondary" onClick={saveDraft}>Save draft</button><button className="primary" disabled={!preflightReady} title={preflightReady ? "Open private preflight" : "Resolve the visible holds first"} onClick={() => navigate("review")}>Review private preflight <Icon name="arrow"/></button></div></div>
 
     <div className="active-source-strip">
-      <article><span>Identity</span><strong>{preview.identity.sourceLabel}</strong><small>{preview.identity.brand ?? "Brand held"} · OEM {partNumber}</small></article>
-      <article><span>Category</span><strong>{categoryVerified ? "Current eBay leaf verified" : "Candidate held for eBay verification"}</strong><small>{categoryLabel}</small></article>
-      <article><span>Images</span><strong>{references.length} catalog evidence page{references.length === 1 ? "" : "s"}</strong><small>{firstReference ? `Page ${firstReference.pageId} ready` : "Seller photos required"}</small></article>
-      <article><span>Shipping</span><strong>{shipping?.state === "ESTIMATED_REQUIRES_CONFIRMATION" ? "Preset ready · confirmation required" : "Measurements required"}</strong><small>{shipping?.profileLabel ?? "No safe preset"}</small></article>
+      <article><span>Mapping</span><strong>{preview.mapping.sellerFacingAllowed ? "Exact evidence allowed" : "Candidate held"}</strong><small>{preview.mapping.state.replaceAll("_", " ")}</small></article>
+      <article><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong><small>{categoryVerified ? "Official exact active leaf" : categoryFallback ? "Official fallback · review" : "Validate before send"}</small></article>
+      <article><span>Main image</span><strong>{heroPhoto ? heroPhoto.name : "Seller image required"}</strong><small>{publishablePhotos.length} publish-eligible · {photos.length} in workbench</small></article>
+      <article><span>Package</span><strong>{fields.packageProfileId || shipping?.shippingClass || "Measure"}</strong><small>{fields.shippingConfirmed ? "Packed measurements confirmed" : "Estimate · editable"}</small></article>
     </div>
 
-    <div className="editor-tabs" role="tablist">{editorTabs.map(([id, label]) => <button key={id} role="tab" aria-selected={editorTab === id} className={editorTab === id ? "active" : ""} onClick={() => setEditorTab(id)}>{label}{id === "fitment" && <i>{preview.fitment.totalApplications}</i>}{id === "images" && references.length > 0 && <i>{references.length}</i>}</button>)}</div>
+    <div className="editor-tabs" role="tablist">{editorTabs.map(([id, label]) => <button key={id} role="tab" aria-selected={editorTab === id} className={editorTab === id ? "active" : ""} onClick={() => setEditorTab(id)}>{label}{id === "fitment" && <i>{fields.fitment.length}</i>}{id === "images" && photos.length > 0 && <i>{photos.length}</i>}</button>)}</div>
 
     <div className="editor-layout"><div className="editor-content">
-      {editorTab === "listing" && <div className="form-section"><SectionHeading eyebrow="Current OEM-keyed draft" title="Buyer-facing listing fields" body="Every value below belongs to the active fingerprint shown above. No prior Toyota, GM, Deere or Ferrari draft can supply a field."/>
-        {firstReference && <button className="active-catalog-preview" onClick={() => setEditorTab("images")}><img src={firstReference.viewUrl} alt={`Catalog evidence page ${firstReference.pageId}`}/><span><b>Catalog scan page {firstReference.pageId}</b><small>{firstReference.kind === "diagram" ? `Callout ${firstReference.callout ?? "highlighted"}` : "Part-number row highlighted"}</small></span><Icon name="arrow"/></button>}
-        <label className="form-field"><span>Title <small>{title.length}/80</small></span><input value={title} maxLength={80} onChange={(event) => setTitle(event.target.value)}/><small>Catalog OCR has been normalized to proper case; OEM numbers and automotive acronyms are preserved.</small></label>
-        <div className="form-grid"><label className="form-field"><span>eBay leaf category</span><button className="select-button">{categoryLabel} <Badge tone={categoryVerified ? "green" : "amber"}>{categoryVerified ? `Verified ${preview.listing.categoryId}` : "Candidate only"}</Badge></button><small>{categoryVerified ? "Returned by the current eBay Taxonomy API." : "Blocked until the current eBay Taxonomy API returns a real leaf ID."}</small></label><label className="form-field"><span>Condition</span><button className="select-button">{preview.intent.condition} <Badge tone="amber">Seller confirmation required</Badge></button><small>The catalog never sets the physical item condition.</small></label><label className="form-field"><span>Quantity</span><input value={quantity} onChange={(event) => setQuantity(event.target.value)}/></label><label className="form-field"><span>Custom SKU</span><input value={sku} readOnly/><small>Locked to the exact normalized OEM / manufacturer part number.</small></label></div>
-        <div className="description-card"><div><span>Buyer-visible description</span><Badge tone="amber">Evidence controlled</Badge></div><h3>{title}</h3><p>{preview.listing.description}</p><h4>Deliberate holds</h4><ul><li>Seller-owned item photos are still required.</li><li>Estimated package data must be confirmed after packing.</li><li>{categoryVerified ? "eBay leaf category is verified." : "Category remains a non-publishable candidate until eBay verifies it."}</li></ul></div>
+      {editorTab === "listing" && <div className="form-section"><SectionHeading eyebrow="Editable OEM-keyed draft" title="Buyer-facing listing fields" body="All seller-controlled values are editable. Custom SKU remains system-locked to the exact OEM/MPN so drafts cannot mix."/>
+        {heroPhoto ? <button className="active-catalog-preview" onClick={() => setEditorTab("images")}><img src={heroPhoto.url} alt={heroPhoto.name}/><span><b>Main image · {heroPhoto.name}</b><small>{heroPhoto.publishEligible ? "Eligible after normal review" : "Reference-only · blocked from eBay payload"}</small></span><Icon name="arrow"/></button> : firstReference && <button className="active-catalog-preview" onClick={() => setEditorTab("images")}><img src={firstReference.viewUrl} alt={"Catalog evidence page " + firstReference.pageId}/><span><b>Evidence only · page {firstReference.pageId}</b><small>Move a permitted item photo into the main workbench</small></span><Icon name="arrow"/></button>}
+        <label className="form-field"><span>Title <small>{title.length}/80</small></span><input value={title} maxLength={80} onChange={(event) => { setTitle(event.target.value); onMaterialEdit(); }} onBlur={(event) => { const normalized = properCaseTitle(event.target.value); if (normalized !== title) { setTitle(normalized); onMaterialEdit(); } }}/><small className={brandRulePass ? "" : "field-error"}>{brandRulePass ? "Proper case retained. Compatible brands require Fits/For unless the physical item is confirmed genuine." : unqualifiedVeroMatches.length ? "Unqualified VeRO profile match: " + unqualifiedVeroMatches.join(", ") : compatibleBrand + " appears without Fits/For while authenticity is not confirmed."}</small></label>
+        <div className="form-grid">
+          <label className="form-field"><span>eBay leaf category ID</span><input inputMode="numeric" value={fields.categoryId} onChange={(event) => editField("categoryId", event.target.value.replace(/\D/g, ""))}/><small>{categoryVerified ? "Official exact leaf matched." : categoryFallback ? "Fallback 9886 is visible but held for a better leaf." : "Preflight will validate this as an active leaf."}</small></label>
+          <label className="form-field"><span>eBay leaf category name/path</span><input value={fields.categoryName} onChange={(event) => editField("categoryName", event.target.value)}/></label>
+          <label className="form-field"><span>Condition</span><select value={fields.condition} onChange={(event) => editField("condition", event.target.value)}><option>New</option><option>Used</option><option>Remanufactured</option><option>Not specified</option></select><small>Seller-controlled physical fact.</small></label>
+          <label className="form-field"><span>Quantity</span><input type="number" min="1" max="999" value={quantity} onChange={(event) => { setQuantity(event.target.value); onMaterialEdit(); }}/></label>
+          <label className="form-field"><span>Custom SKU</span><input value={sku} readOnly/><small>System invariant: exact normalized OEM / manufacturer part number.</small></label>
+        </div>
+        <label className="form-field"><span>Buyer-visible description</span><textarea rows={8} value={fields.description} onChange={(event) => editField("description", event.target.value)}/></label>
       </div>}
 
-      {editorTab === "identity" && <div className="form-section"><SectionHeading eyebrow="Catalog identity" title={`${preview.identity.brand ?? "Unverified brand"} · ${partNumber}`} body={preview.identity.sourceDetail}/><div className="specifics-table">{Object.entries(preview.listing.aspects).map(([field, value]) => <div key={field}><span>{field}</span><strong>{value}</strong><Badge tone="orange">Catalog stated</Badge></div>)}<div><span>Draft fingerprint</span><strong>{preview.fingerprint}</strong><Badge tone="slate">Source isolation key</Badge></div></div></div>}
+      {editorTab === "identity" && <div className="form-section"><SectionHeading eyebrow="Brand and VeRO controls" title="Describe what the physical item is" body="The public VeRO profile index is downloaded read-only, but eBay says it is not a complete list. The Fits/For rule therefore applies by brand relationship, not only list membership."/>
+        <div className={"brand-policy-card " + (brandRulePass ? "pass" : "hold")}><Icon name={brandRulePass ? "shield" : "alert"}/><div><strong>{brandRulePass ? "Brand wording passes the selected rule" : "Title wording is held"}</strong><p>{preview.brandPolicy?.explanation ?? "Confirm the actual item brand before publication."}</p><small>{preview.brandPolicy?.veroParticipant ? "Official profile match: " + preview.brandPolicy.veroParticipant : "No public profile match does not mean the brand is unprotected."}</small></div><a href={preview.brandPolicy?.profileIndexUrl ?? "#"} target="_blank" rel="noreferrer">Official VeRO index</a></div>
+        <div className="form-grid">
+          <label className="form-field"><span>Brand relationship</span><select value={fields.authenticity} onChange={(event) => editField("authenticity", event.target.value as EditableDraftFields["authenticity"])}><option value="AUTHENTICITY_NOT_CONFIRMED">Not confirmed — hold</option><option value="GENUINE_BRANDED_ITEM">Genuine branded item</option><option value="AFTERMARKET_COMPATIBLE">Aftermarket / compatible</option></select></label>
+          <label className="form-field"><span>Actual item brand</span><input value={fields.actualBrand} placeholder="Read from the physical item or package" onChange={(event) => editField("actualBrand", event.target.value)}/></label>
+          <label className="form-field"><span>Compatible vehicle brand</span><input value={fields.compatibleBrand} onChange={(event) => editField("compatibleBrand", event.target.value)}/><small>Prefilled from catalog evidence; editing marks this as a seller-controlled correction.</small></label>
+          <label className="form-field"><span>Product type</span><input value={fields.productType} onChange={(event) => editField("productType", event.target.value)}/></label>
+        </div>
+        <button className="secondary" onClick={applyCompliantTitle}>Rebuild title with Fits/For rule</button>
+        <div className="editable-specifics"><div className="table-head"><span>Item specific</span><span>Value</span><span/></div>{Object.entries(fields.aspects).map(([name, value]) => <div key={name}><input defaultValue={name} onBlur={(event) => renameAspect(name, event.target.value)}/><input value={value} onChange={(event) => updateAspect(name, event.target.value)}/><button onClick={() => removeAspect(name)}>Remove</button></div>)}
+          <div><input placeholder="New item specific" value={newAspectName} onChange={(event) => setNewAspectName(event.target.value)}/><input disabled placeholder="Add the field first"/><button disabled={!newAspectName.trim()} onClick={() => { updateAspect(newAspectName.trim(), ""); setNewAspectName(""); }}>Add</button></div>
+        </div>
+      </div>}
 
-      {editorTab === "condition" && <div className="form-section"><SectionHeading eyebrow="Physical-item facts" title="Confirm condition from the item in hand" body="Catalog scans can identify a part; they cannot prove unused condition, package contents, defects or function."/><div className="smallest-question"><Icon name="camera"/><div><span>Required next evidence</span><strong>Add seller-owned whole-item and label photos</strong><p>Condition remains {preview.intent.condition} as a seller-entered value until those photos and the item are confirmed.</p></div></div></div>}
+      {editorTab === "condition" && <div className="form-section"><SectionHeading eyebrow="Physical-item facts" title="Condition is editable but must match the item" body="Catalog scans cannot prove unused condition, package contents, defects or function."/><label className="form-field"><span>Condition</span><select value={fields.condition} onChange={(event) => editField("condition", event.target.value)}><option>New</option><option>Used</option><option>Remanufactured</option><option>Not specified</option></select></label><div className="smallest-question"><Icon name="camera"/><div><span>Required evidence</span><strong>Add seller-owned whole-item and label photos</strong><p>Used, damaged or defective items must use photos of the exact item, not a stock or marketplace reference.</p></div></div></div>}
 
-      {editorTab === "fitment" && <div className="form-section"><SectionHeading eyebrow="Compatibility inspector" title={`${preview.fitment.totalApplications} catalog-derived application${preview.fitment.totalApplications === 1 ? "" : "s"}`} body={preview.fitment.sourceDetail}/><div className="compatibility-table"><div className="table-head"><span>Application</span><span>Catalog qualifier</span><span>Status</span><span/></div>{preview.fitment.applications.map((row, index) => <div key={`${row.vehicle}-${index}`}><strong>{row.vehicle}</strong><span>{row.qualifier}</span><Badge tone="amber">{row.state === "CATALOG_STATED" ? "Catalog stated" : "Catalog derived"}</Badge><button onClick={() => showNotice("This row remains attributed and held for compatibility review.")}>Inspect</button></div>)}</div></div>}
+      {editorTab === "fitment" && <div className="form-section"><SectionHeading eyebrow="Editable compatibility inspector" title={fields.fitment.length + " application row" + (fields.fitment.length === 1 ? "" : "s")} body="Rows remain attributable. Edited rows are marked seller-edited and must pass compatibility preflight."/><div className="compatibility-table editable"><div className="table-head"><span>Application</span><span>Qualifier</span><span>Status</span><span/></div>{fields.fitment.map((row, index) => <div key={index}><input value={row.vehicle} onChange={(event) => updateFitment(index, "vehicle", event.target.value)}/><input value={row.qualifier} onChange={(event) => updateFitment(index, "qualifier", event.target.value)}/><Badge tone={row.state === "SELLER_EDITED" ? "orange" : "amber"}>{row.state.replaceAll("_", " ")}</Badge><button onClick={() => editField("fitment", fields.fitment.filter((_, rowIndex) => rowIndex !== index))}>Delete</button></div>)}</div><button className="secondary" onClick={() => editField("fitment", [...fields.fitment, { vehicle: "", qualifier: "", state: "SELLER_EDITED" }])}>Add fitment row</button></div>}
 
-      {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Catalog image evidence" title="Scans, diagrams and colored callouts" body="Catalog pages are first-party PartQuill evidence. Seller-owned item photos remain a separate required image set."/>{references.length ? <CatalogEvidenceViewer references={references}/> : <div className="empty-state"><h3>No linked catalog diagram was found</h3><p>The catalog row is retained, but PartQuill will not invent a schematic relationship.</p></div>}<EbayReferenceGallery lookup={ebayReference} loading={ebayReferenceLoading} partNumber={preview.intent.partNumber}/><div className="intelligence-warning"><Icon name="camera"/><span><strong>Seller image still required.</strong> A catalog scan or live marketplace reference supports research; neither is a photograph of the seller’s physical item.</span></div></div>}
+      {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Main listing image workbench" title="Choose, order and remove up to 24 images" body="Archived references can be moved into this main visual workbench. Personal-reference images remain blocked from the eBay payload unless rights are separately cleared."/>
+        <section className="main-image-workbench">
+          <div className="main-image-stage">{heroPhoto ? <><img src={heroPhoto.url} alt={heroPhoto.name}/><span><strong>Main image · {heroPhoto.name}</strong><small>{heroPhoto.publishEligible ? "Publish-eligible after review" : "Reference only — not eligible for eBay"}</small></span></> : <div className="empty-state"><Icon name="camera"/><h3>No main item image yet</h3><p>Upload seller-owned photos or move an archived reference into the visual workbench.</p></div>}</div>
+          <label className="image-upload-button"><Icon name="camera"/> Add images in bulk<input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label>
+          <div className="main-image-grid">{photos.map((photo, index) => <article key={photo.id} className={index === 0 ? "main" : ""}><img src={photo.url} alt={photo.name}/><div><strong>{index === 0 ? "MAIN · " : ""}{photo.name}</strong><small>{photo.source.replaceAll("_", " ")}</small><Badge tone={photo.publishEligible ? "green" : "amber"}>{photo.publishEligible ? "Listing eligible" : "Reference only"}</Badge></div><div><button disabled={index === 0} onClick={() => setMainPhoto(photo.id)}>Set main</button><button onClick={() => removePhoto(photo.id)}>Delete</button></div></article>)}</div>
+        </section>
+        {references.length ? <CatalogEvidenceViewer references={references}/> : <div className="empty-state"><h3>No linked catalog diagram was found</h3><p>The catalog row is retained, but PartQuill will not invent a schematic relationship.</p></div>}
+        <EbayReferenceGallery lookup={ebayReference} loading={ebayReferenceLoading} partNumber={preview.intent.partNumber}/>
+        {ebayReference?.reference && <div className="reference-import-actions">{ebayReference.reference.images.map((image, index) => {
+          const imported = photos.some((photo) => photo.url === image.viewUrl);
+          return <button key={image.viewUrl} disabled={imported || photos.length >= MAX_SELLER_PHOTOS} onClick={() => addReferencePhoto(image, index, ebayReference.reference!)}>{imported ? "In main workbench" : "Move reference view " + (index + 1) + " to main workbench"}</button>;
+        })}</div>}
+        <div className="intelligence-warning"><Icon name="shield"/><span><strong>Rights gate stays attached to each image.</strong> A private eBay-derived archive is useful for personal reference and identification, but cannot silently become a seller-owned listing photo.</span></div>
+      </div>}
 
-      {editorTab === "shipping" && <div className="form-section"><SectionHeading eyebrow="Calculated shipping intelligence" title={shipping?.state === "ESTIMATED_REQUIRES_CONFIRMATION" ? shipping.profileLabel ?? "Approved product-family preset" : "Packed measurements required"} body="PartQuill can propose an industry-standard starting package. The packed item must still be weighed and measured before publication."/>{shipping && packageDimensions && estimatedWeight ? <><div className="shipping-estimate-grid"><article><span>Suggested package</span><strong>{packageDimensions.length} × {packageDimensions.width} × {packageDimensions.height} in</strong><small>{shipping.packageType} · approved product-family preset</small></article><article><span>Estimated item weight</span><strong>{estimatedWeight.min}–{estimatedWeight.max} lb</strong><small>{estimatedWeight.suggested} lb working value</small></article><article><span>DIM weight</span><strong>{shipping.dimensionalWeightLb} lb</strong><small>Domestic divisor {shipping.dimDivisor}</small></article><article><span>Estimated billable</span><strong>{shipping.estimatedBillableWeightLb} lb</strong><small>Greater of DIM or working actual weight</small></article></div><div className="intelligence-warning"><Icon name="alert"/><span><strong>Estimate, not a measured fact.</strong> Confirm scale weight and all three outside package dimensions after packing; large or irregular items must override this preset.</span></div></> : <div className="empty-state"><h3>No defensible package preset</h3><p>Enter packed length, width, height and scale weight. PartQuill will not fabricate shipping values.</p></div>}</div>}
+      {editorTab === "shipping" && <div className="form-section"><SectionHeading eyebrow="P1–P17 calculated-shipping intelligence" title={fields.packageProfileId ? fields.packageProfileId + " package" : shipping?.shippingClass ?? "Packed measurements required"} body="PartQuill starts with the Ferrari product-family estimate, then uses the Deere dimension-first selector to choose the smallest saved package that fits."/>
+        <div className="form-grid">
+          <label className="form-field"><span>Saved package</span><select value={fields.packageProfileId} onChange={(event) => selectPackage(event.target.value)}><option value="">Custom / freight</option>{IRONVAULT_PACKAGE_OPTIONS.map((row) => <option value={row[0]} key={row[0]}>{row[0]} — {row[1]} × {row[2]} × {row[3]} in · {row[4]} lb carton</option>)}</select></label>
+          <label className="form-field"><span>Length (in)</span><input type="number" min="0" step="0.01" value={fields.packageLength} onChange={(event) => editField("packageLength", event.target.value)}/></label>
+          <label className="form-field"><span>Width (in)</span><input type="number" min="0" step="0.01" value={fields.packageWidth} onChange={(event) => editField("packageWidth", event.target.value)}/></label>
+          <label className="form-field"><span>Height (in)</span><input type="number" min="0" step="0.01" value={fields.packageHeight} onChange={(event) => editField("packageHeight", event.target.value)}/></label>
+          <label className="form-field"><span>Estimated item weight (lb)</span><input type="number" min="0" step="0.01" value={fields.itemWeight} onChange={(event) => editField("itemWeight", event.target.value)}/></label>
+          <label className="form-field"><span>Packed scale weight (lb)</span><input type="number" min="0" step="0.01" value={fields.packedWeight} onChange={(event) => editField("packedWeight", event.target.value)}/></label>
+        </div>
+        <div className="shipping-estimate-grid"><article><span>DIM weight</span><strong>{dimWeight || "—"} lb</strong><small>L × W × H ÷ 139, rounded up</small></article><article><span>Calculated billable</span><strong>{billableWeight || "—"} lb</strong><small>Greater of packed or DIM weight</small></article><article><span>Shipping class</span><strong>{shipping?.shippingClass ?? "Measurement required"}</strong><small>{shipping?.packageSelectionState.replaceAll("_", " ") ?? "No preset"}</small></article><article><span>Rule confidence</span><strong>{Math.round((shipping?.confidence ?? 0) * 100)}%</strong><small>{shipping?.productFamilyProfileId ?? "No family match"}</small></article></div>
+        <label className="approval-check"><input type="checkbox" checked={fields.shippingConfirmed} onChange={(event) => editField("shippingConfirmed", event.target.checked)}/><span><strong>I weighed and measured the final packed carton.</strong><small>Checking this changes the values from estimates to seller-confirmed shipping facts.</small></span></label>
+        <div className="intelligence-warning"><Icon name={fields.shippingConfirmed ? "check" : "alert"}/><span><strong>{fields.shippingConfirmed ? "Packed facts confirmed." : "Estimate, not a measured fact."}</strong> {shipping?.checkoutGate && !fields.shippingConfirmed ? "Custom or freight handling remains held." : "Calculated shipping can use the confirmed packed values after category and policy preflight."}</span></div>
+      </div>}
 
-      {editorTab === "pricing" && <div className="form-section"><SectionHeading eyebrow="Seller-controlled economics" title="Price" body="Catalog and marketplace data do not silently change the seller’s price."/><label className="form-field"><span>Buy It Now price</span><input value={price} onChange={(event) => setPrice(event.target.value)}/></label></div>}
-      {editorTab === "policies" && <div className="form-section"><SectionHeading eyebrow="Publication controls" title="Evidence and marketplace gates" body="Only the current OEM-keyed payload can advance."/><div className="specifics-table">{preview.issues.map((issue) => <div key={issue.code}><span>{issue.code}</span><strong>{issue.message}</strong><Badge tone={issue.blocking ? "amber" : "slate"}>{issue.blocking ? "Blocking" : "Review"}</Badge></div>)}</div></div>}
-      {editorTab === "preview" && <div className="form-section"><SectionHeading eyebrow="Buyer preview" title="Read the current draft—not a cached example"/><article className="buyer-preview"><div className="buyer-image">{firstReference ? <img src={firstReference.viewUrl} alt={`Catalog reference page ${firstReference.pageId}`}/> : <Icon name="box"/>}<span>Catalog evidence reference</span><small>Seller item photo required before publication</small></div><div className="buyer-copy"><h2>{title}</h2><div className="buyer-price"><strong>${price}</strong><span>Quantity {quantity}</span></div><Badge tone="amber">{preview.intent.condition} · confirmation required</Badge><p>{preview.listing.description}</p><div className="fitment-boilerplate">Please verify OEM part number {partNumber} against the original part. Catalog-derived compatibility remains subject to review.</div></div></article></div>}
-    </div><aside className="readiness-panel"><div className="readiness-score"><span>Draft isolation</span><strong>OEM<small> keyed</small></strong><p>SKU {sku} and fingerprint {preview.fingerprint.slice(0, 10)}… control every field shown.</p></div><div className="gate-list"><span>Why can’t this publish yet?</span>{preview.issues.map((issue) => <div className={issue.blocking ? "hold" : ""} key={issue.code}><Icon name={issue.blocking ? "alert" : "shield"}/><p><strong>{issue.message}</strong><small>{issue.code}</small></p></div>)}</div><button className="primary full" onClick={() => navigate("review")}>Run private preflight <Icon name="arrow"/></button><p className="safe-note">Nothing is sent to eBay.</p></aside></div>
-    <div className="sticky-economics"><div><span>Category</span><strong>{categoryVerified ? category?.categoryName : "Unverified — held"}</strong></div><div><span>OEM SKU</span><strong>{sku}</strong></div><div><span>Seller price</span><strong>${price}</strong></div><div><span>Catalog images</span><strong>{references.length}</strong></div><div><span>Shipping</span><strong>{shipping?.state === "ESTIMATED_REQUIRES_CONFIRMATION" ? "Estimate" : "Measure"}</strong></div><button onClick={() => navigate("review")}>Review gates <Icon name="arrow"/></button></div>
+      {editorTab === "pricing" && <div className="form-section"><SectionHeading eyebrow="Seller-controlled economics" title="Price" body="Catalog and marketplace data do not silently change the seller’s price."/><label className="form-field"><span>Buy It Now price</span><input type="number" min="0.01" step="0.01" value={price} onChange={(event) => { setPrice(event.target.value); onMaterialEdit(); }}/></label></div>}
+
+      {editorTab === "policies" && <div className="form-section"><SectionHeading eyebrow="Editable publication controls" title="Policies and international shipping" body="These values remain seller-controlled and are revalidated before a public payload."/><div className="form-grid"><label className="form-field"><span>Handling time</span><input value={fields.handlingTime} onChange={(event) => editField("handlingTime", event.target.value)}/></label><label className="form-field"><span>Returns</span><input value={fields.returns} onChange={(event) => editField("returns", event.target.value)}/></label><label className="form-field"><span>International</span><input value={fields.international} onChange={(event) => editField("international", event.target.value)}/></label></div><div className="specifics-table">{preview.issues.map((issue) => <div key={issue.code}><span>{issue.code}</span><strong>{issue.message}</strong><Badge tone={issue.blocking ? "amber" : "slate"}>{issue.blocking ? "Blocking" : "Review"}</Badge></div>)}</div></div>}
+
+      {editorTab === "preview" && <div className="form-section"><SectionHeading eyebrow="Buyer preview" title="Current edited draft"/><article className="buyer-preview"><div className="buyer-image">{heroPhoto ? <img src={heroPhoto.url} alt={heroPhoto.name}/> : <Icon name="box"/>}<span>{heroPhoto ? heroPhoto.name : "Seller item photo required"}</span><small>{heroPhoto?.publishEligible ? "Main listing image" : "Not eligible for eBay payload"}</small></div><div className="buyer-copy"><h2>{title}</h2><div className="buyer-price"><strong>{"$"}{price}</strong><span>Quantity {quantity}</span></div><Badge tone="amber">{fields.condition} · seller controlled</Badge><p>{fields.description}</p><div className="fitment-boilerplate">Please verify OEM part number {partNumber}. {fields.fitment.length} compatibility row{fields.fitment.length === 1 ? "" : "s"} remain subject to final eBay validation.</div></div></article></div>}
+    </div>
+
+    <aside className="readiness-panel"><div className="readiness-score"><span>Draft isolation</span><strong>OEM<small> keyed</small></strong><p>SKU {sku} and fingerprint {preview.fingerprint.slice(0, 10)}… control every field shown.</p></div><div className="gate-list"><span>Current preflight holds</span>
+      {!preview.mapping.sellerFacingAllowed && <div className="hold"><Icon name="alert"/><p><strong>GM mapping is not seller-safe</strong><small>{preview.mapping.state}</small></p></div>}
+      {!brandRulePass && <div className="hold"><Icon name="alert"/><p><strong>Brand or VeRO title wording is not qualified</strong><small>BRAND_TITLE_RULE</small></p></div>}
+      {!authenticityConfirmed && <div className="hold"><Icon name="alert"/><p><strong>Confirm genuine or aftermarket relationship</strong><small>BRAND_RELATIONSHIP_REQUIRED</small></p></div>}
+      {!fields.categoryId && <div className="hold"><Icon name="alert"/><p><strong>eBay leaf category ID is required</strong><small>CATEGORY_ID_REQUIRED</small></p></div>}
+      {categoryFallback && <div className="hold"><Icon name="alert"/><p><strong>Fallback category requires review</strong><small>EBAY_CATEGORY_FALLBACK</small></p></div>}
+      {fields.categoryId && !categoryVerified && !categoryFallback && <div className="hold"><Icon name="alert"/><p><strong>Validate the edited category as an active leaf</strong><small>CATEGORY_LEAF_VALIDATION_REQUIRED</small></p></div>}
+      {!publishablePhotos.length && <div className="hold"><Icon name="camera"/><p><strong>Seller-owned or rights-cleared image required</strong><small>LISTING_IMAGE_REQUIRED</small></p></div>}
+      {(!fields.shippingConfirmed || !shippingFieldsValid) && <div className="hold"><Icon name="truck"/><p><strong>Confirm positive packed dimensions and weight</strong><small>PACKED_SHIPPING_REQUIRED</small></p></div>}
+      {(!priceValid || !quantityValid) && <div className="hold"><Icon name="alert"/><p><strong>Positive price and quantity are required</strong><small>SELLER_VALUES_REQUIRED</small></p></div>}
+    </div><button className="primary full" disabled={!preflightReady} onClick={() => navigate("review")}>Run private preflight <Icon name="arrow"/></button><p className="safe-note">Nothing is sent to eBay.</p></aside></div>
+    <div className="sticky-economics"><div><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong></div><div><span>OEM SKU</span><strong>{sku}</strong></div><div><span>Seller price</span><strong>{"$"}{price}</strong></div><div><span>Listing images</span><strong>{publishablePhotos.length}/{photos.length}</strong></div><div><span>Package</span><strong>{fields.packageProfileId || "Custom"}</strong></div><button disabled={!preflightReady} onClick={() => navigate("review")}>Review gates <Icon name="arrow"/></button></div>
   </section>;
 }
 
@@ -481,6 +834,7 @@ export default function Home() {
   const [instantLoading, setInstantLoading] = useState(false);
   const [instantDirty, setInstantDirty] = useState(false);
   const [bootstrap, setBootstrap] = useState<SellerBootstrap | null>(null);
+  const [veroProfiles, setVeroProfiles] = useState<VeroProfileSnapshot | null>(null);
   const [instantPhotos, setInstantPhotos] = useState<StagedPhoto[]>([]);
   const [foundPartNumber, setFoundPartNumber] = useState("");
   const [ebayReference, setEbayReference] = useState<EbayReferenceLookup | null>(null);
@@ -512,7 +866,14 @@ export default function Home() {
     if (!selected.length) return;
     void Promise.all(selected.map((file) => new Promise<StagedPhoto>((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve({ id: crypto.randomUUID(), name: file.name, url: String(reader.result) });
+      reader.onload = () => resolve({
+        id: crypto.randomUUID(),
+        name: file.name,
+        url: String(reader.result),
+        source: "SELLER_UPLOAD",
+        publishEligible: true,
+        rightsState: "SELLER_PHOTOGRAPH"
+      });
       reader.onerror = () => reject(reader.error ?? new Error("Photo preview failed"));
       reader.readAsDataURL(file);
     }))).then((photos) => {
@@ -524,6 +885,44 @@ export default function Home() {
   const removeInstantPhoto = (photoId: string) => {
     setInstantPhotos((current) => current.filter((photo) => photo.id !== photoId));
     showNotice("Photo removed from this draft.");
+  };
+  const setMainInstantPhoto = (photoId: string) => {
+    setInstantPhotos((current) => {
+      const selected = current.find((photo) => photo.id === photoId);
+      return selected ? [selected, ...current.filter((photo) => photo.id !== photoId)] : current;
+    });
+    setPreflightApproved(false);
+    setPublicApproved(false);
+    showNotice("Main image changed for this OEM-keyed draft.");
+  };
+  const addReferencePhoto = (
+    image: EbayReferenceRecord["images"][number],
+    index: number,
+    record: EbayReferenceRecord
+  ) => {
+    setInstantPhotos((current) => {
+      if (current.some((photo) => photo.url === image.viewUrl) || current.length >= MAX_SELLER_PHOTOS) return current;
+      const suffix = index === 0 ? "" : "_" + index;
+      const publishEligible = record.rightsState === "RIGHTS_CLEARED" && record.listingPayloadEligible;
+      return [...current, {
+        id: crypto.randomUUID(),
+        name: record.partNumber + suffix + ".png",
+        url: image.viewUrl,
+        source: record.rightsState === "RIGHTS_CLEARED" ? "RIGHTS_CLEARED_REFERENCE" : "PRIVATE_REFERENCE",
+        publishEligible,
+        rightsState: record.rightsState === "RIGHTS_CLEARED" ? "RIGHTS_CLEARED" : "PRIVATE_PERSONAL_REFERENCE_ONLY"
+      }];
+    });
+    setPreflightApproved(false);
+    setPublicApproved(false);
+    showNotice(record.rightsState === "RIGHTS_CLEARED"
+      ? "Rights-cleared reference moved into the main image workbench."
+      : "Private reference moved into the main workbench; its eBay publish gate remains locked.");
+  };
+  const resetMaterialApprovals = () => {
+    setPreflightApproved(false);
+    setPublicApproved(false);
+    setFeeFresh(false);
   };
   const rebuildWithFoundPartNumber = () => {
     const found = foundPartNumber.trim();
@@ -627,6 +1026,12 @@ export default function Home() {
         setBootstrap(await response.json() as SellerBootstrap);
       })
       .catch(() => setBootstrap(null));
+    void fetch("/v1/seller-ui/vero-profiles")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("VeRO registry unavailable");
+        setVeroProfiles(await response.json() as VeroProfileSnapshot);
+      })
+      .catch(() => setVeroProfiles(null));
     void buildInstantDraft("List part 58487514 on eBay for $9.99 now");
     // The approved sample is bootstrapped once; later builds are seller-initiated.
     return () => window.removeEventListener("popstate", onPopState);
@@ -872,17 +1277,38 @@ export default function Home() {
           <div className="research-result"><div className="research-identity"><div className="part-glyph"><Icon name="box"/></div><div><Badge tone="green">Exact part number</Badge><h2>13568-29025 — Belt, Timing</h2><p>Superseded by <strong>13568-YZZ10</strong> · Diagram callout 13568</p></div><button className="primary" onClick={() => openDraft("identity")}>Attach identity to draft</button></div><div className="fitment-verdict amber"><span>!</span><div><strong>Fitment not verified for a specific vehicle</strong><p>Potential catalog applications exist, but this seller draft will not publish compatibility without permitted evidence.</p></div><button onClick={() => openDraft("fitment")}>Inspect applications</button></div><div className="traffic-guide"><div className="green"><b>GREEN</b><span>eBay-returned compatibility for a direct product match</span></div><div className="amber"><b>AMBER</b><span>Seller-confirmed, broad or incomplete evidence</span></div><div className="red"><b>NONE</b><span>No public fitment claim; buyer verification boilerplate used</span></div></div><div className="research-facts"><article><span>Anonymous reference range</span><strong>$49.97–$54.59</strong><small>Not an eBay market value or listing recommendation</small></article><article><span>Seller listing price</span><strong>$79.95</strong><small>Seller-entered; separate from research</small></article><article><span>Source checks</span><strong>2 of 3 exact</strong><small>One reference path unavailable</small></article><article><span>Listing condition</span><strong>Not inherited</strong><small>Seller must confirm the actual item</small></article></div></div>
         </section>}
 
-        {view === "drafts" && <ActiveDraftEditor preview={instantPreview} editorTab={editorTab} setEditorTab={setEditorTab} title={title} setTitle={(value) => { setTitle(value); setPublicApproved(false); }} price={price} setPrice={(value) => { setPrice(value); setPublicApproved(false); }} quantity={quantity} setQuantity={(value) => { setQuantity(value); setPublicApproved(false); }} navigate={navigate} showNotice={showNotice} ebayReference={ebayReference} ebayReferenceLoading={ebayReferenceLoading}/>}
+        {view === "drafts" && <ActiveDraftEditor
+          preview={instantPreview}
+          editorTab={editorTab}
+          setEditorTab={setEditorTab}
+          title={title}
+          setTitle={setTitle}
+          price={price}
+          setPrice={setPrice}
+          quantity={quantity}
+          setQuantity={setQuantity}
+          photos={instantPhotos}
+          addPhotos={stageInstantPhotos}
+          removePhoto={removeInstantPhoto}
+          setMainPhoto={setMainInstantPhoto}
+          addReferencePhoto={addReferencePhoto}
+          onMaterialEdit={resetMaterialApprovals}
+          navigate={navigate}
+          showNotice={showNotice}
+          ebayReference={ebayReference}
+          ebayReferenceLoading={ebayReferenceLoading}
+          veroProfiles={veroProfiles}
+        />}
 
 
         {view === "review" && <section className="view">
           <SectionHeading eyebrow="Stage 5 · Private preflight" title="Approve the private payload first" body="This prepares an unpublished offer and requests the latest available listing-charge estimate. It does not create a public listing." action={<Badge tone="amber">Not public</Badge>} />
-          <div className="preflight-grid"><div><div className="payload-card"><div className="payload-head"><div><span>Draft payload</span><strong>{instantPreview?.listing.sku ?? "HELD"}</strong></div><Badge tone="green">Fingerprint locked</Badge></div><code>sha256: {instantPreview?.fingerprint ?? "preview unavailable"}</code><dl><div><dt>Seller</dt><dd>Private pilot seller</dd></div><div><dt>SKU</dt><dd>{instantPreview?.listing.sku ?? "Held"}</dd></div><div><dt>Offer state</dt><dd>Unpublished simulation only</dd></div><div><dt>Fitment rows</dt><dd>0 public rows</dd></div><div><dt>Image set</dt><dd>{instantPreview?.media.catalogReferences.length ?? 0} catalog references · seller photo required</dd></div><div><dt>Inventory authority</dt><dd>PartQuill master</dd></div></dl></div><div className="diff-card"><div><span>Review summary</span><Badge tone="orange">Current OEM-keyed payload</Badge></div>{activePublishDiff.map((row) => <article key={row.field}><strong>{row.field}</strong><span>{row.before}</span><Icon name="arrow"/><b>{row.after}</b><small>{row.state}</small></article>)}</div></div><aside className="fee-card"><div className="fee-head"><Icon name="money"/><div><span>eBay preflight estimate</span><strong>{feeFresh ? "$0.00 illustrative estimate" : "Not requested"}</strong></div><Badge tone={feeFresh ? "green" : "slate"}>{feeFresh ? "Fresh · simulation" : "Pending"}</Badge></div><p>No eBay request occurs in this release. Final-value, payment, tax-dependent, advertising and transaction charges are not estimated.</p><dl><div><dt>Insertion estimate</dt><dd>{feeFresh ? "$0.00 sample" : "—"}</dd></div><div><dt>Subtitle</dt><dd>Off</dd></div><div><dt>Promoted listing</dt><dd>Off</dd></div><div><dt>Best Offer</dt><dd>Off</dd></div></dl><div className="api-ack"><Icon name="shield"/><p><strong>Inventory API ownership</strong><span>When eBay staging is enabled later, listings created here must be revised, reconciled and withdrawn through the same controlled workflow.</span></p></div><label className={feeFresh ? "approval-check" : "approval-check disabled"}><input type="checkbox" disabled={!feeFresh} checked={preflightApproved} onChange={(event) => setPreflightApproved(event.target.checked)}/><span><strong>I approve this exact payload for private simulation only.</strong><small>Nothing becomes public from this approval.</small></span></label>{!feeFresh ? <button className="primary full" onClick={() => { setFeeFresh(true); setPreflightApproved(false); showNotice("Illustrative fee state returned. No eBay request was made."); }}>Run simulated preflight</button> : <button className="primary full" disabled={!preflightApproved} onClick={() => navigate("ready")}>Lock private simulation <Icon name="arrow"/></button>}<button className="text-button center" onClick={() => navigate("instant")}>Return to command</button></aside></div>
+          <div className="preflight-grid"><div><div className="payload-card"><div className="payload-head"><div><span>Draft payload</span><strong>{instantPreview?.listing.sku ?? "HELD"}</strong></div><Badge tone="green">Fingerprint locked</Badge></div><code>sha256: {instantPreview?.fingerprint ?? "preview unavailable"}</code><dl><div><dt>Seller</dt><dd>Private pilot seller</dd></div><div><dt>SKU</dt><dd>{instantPreview?.listing.sku ?? "Held"}</dd></div><div><dt>Offer state</dt><dd>Unpublished simulation only</dd></div><div><dt>Fitment rows</dt><dd>0 public rows</dd></div><div><dt>Image set</dt><dd>{instantPhotos.filter((photo) => photo.publishEligible).length} listing-eligible · {instantPhotos.length} in workbench · {instantPreview?.media.catalogReferences.length ?? 0} catalog references</dd></div><div><dt>Inventory authority</dt><dd>PartQuill master</dd></div></dl></div><div className="diff-card"><div><span>Review summary</span><Badge tone="orange">Current OEM-keyed payload</Badge></div>{activePublishDiff.map((row) => <article key={row.field}><strong>{row.field}</strong><span>{row.before}</span><Icon name="arrow"/><b>{row.after}</b><small>{row.state}</small></article>)}</div></div><aside className="fee-card"><div className="fee-head"><Icon name="money"/><div><span>eBay preflight estimate</span><strong>{feeFresh ? "$0.00 illustrative estimate" : "Not requested"}</strong></div><Badge tone={feeFresh ? "green" : "slate"}>{feeFresh ? "Fresh · simulation" : "Pending"}</Badge></div><p>No eBay request occurs in this release. Final-value, payment, tax-dependent, advertising and transaction charges are not estimated.</p><dl><div><dt>Insertion estimate</dt><dd>{feeFresh ? "$0.00 sample" : "—"}</dd></div><div><dt>Subtitle</dt><dd>Off</dd></div><div><dt>Promoted listing</dt><dd>Off</dd></div><div><dt>Best Offer</dt><dd>Off</dd></div></dl><div className="api-ack"><Icon name="shield"/><p><strong>Inventory API ownership</strong><span>When eBay staging is enabled later, listings created here must be revised, reconciled and withdrawn through the same controlled workflow.</span></p></div><label className={feeFresh ? "approval-check" : "approval-check disabled"}><input type="checkbox" disabled={!feeFresh} checked={preflightApproved} onChange={(event) => setPreflightApproved(event.target.checked)}/><span><strong>I approve this exact payload for private simulation only.</strong><small>Nothing becomes public from this approval.</small></span></label>{!feeFresh ? <button className="primary full" onClick={() => { setFeeFresh(true); setPreflightApproved(false); showNotice("Illustrative fee state returned. No eBay request was made."); }}>Run simulated preflight</button> : <button className="primary full" disabled={!preflightApproved} onClick={() => navigate("ready")}>Lock private simulation <Icon name="arrow"/></button>}<button className="text-button center" onClick={() => navigate("instant")}>Return to command</button></aside></div>
         </section>}
 
         {view === "ready" && <section className="view">
           <SectionHeading eyebrow="Stage 6 · Separate public approval" title="Ready to send—after one final exact-payload check" body="Any material edit resets this approval and returns the item to private preflight." action={<Badge tone={preflightApproved ? "green" : "amber"}>{preflightApproved ? "Preflight locked" : "Preflight required"}</Badge>} />
-          <div className="ready-layout"><div className="ready-listing"><div className="ready-image"><Icon name="camera"/><span>Seller photo required</span></div><div><Badge tone="amber">{instantPreview?.identity.sourceLabel ?? "Identity held"}</Badge><h2>{title}</h2><p>SKU {instantPreview?.listing.sku ?? "Held"} · Qty {quantity} · {instantCondition}</p><strong>${price}</strong><div className="ready-facts"><span><b>Fitment</b>Not claimed</span><span><b>Domestic</b>{domestic ? "Default ready" : "Off"}</span><span><b>International</b>{international ? "Review" : "Held"}</span><span><b>Returns</b>30 days</span></div></div></div><aside className="public-approval"><div className="approval-seal"><Icon name="shield"/><span><strong>Exact fingerprint unchanged</strong><small>{instantPreview?.fingerprint.slice(0, 16)}… · simulation current</small></span></div><label className={!preflightApproved ? "approval-check disabled" : "approval-check"}><input type="checkbox" disabled={!preflightApproved} checked={publicApproved} onChange={(event) => setPublicApproved(event.target.checked)}/><span><strong>I approve this exact demo handoff.</strong><small>Changing title, price, quantity, images, aspects or fitment requires approval again.</small></span></label><div className="send-boundary"><strong>Safe handoff only</strong><p>The button below opens eBay’s public home page. It does not sign in, access a seller account, transmit this draft or create a listing.</p></div><a className={`ebay-send ${publicApproved ? "enabled" : "disabled"}`} href={publicApproved ? (bootstrap?.ebay.handoffUrl ?? "https://www.ebay.com/") : undefined} target="_blank" rel="noreferrer" aria-disabled={!publicApproved} onClick={(event) => { if (!publicApproved) event.preventDefault(); }}>Send to eBay <Icon name="arrow"/></a><p className="safe-note">Destination: ebay.com main page only · no listing payload attached</p></aside></div>
+          <div className="ready-layout"><div className="ready-listing"><div className="ready-image">{instantPhotos[0] ? <img src={instantPhotos[0].url} alt={instantPhotos[0].name}/> : <><Icon name="camera"/><span>Seller photo required</span></>}</div><div><Badge tone="amber">{instantPreview?.identity.sourceLabel ?? "Identity held"}</Badge><h2>{title}</h2><p>SKU {instantPreview?.listing.sku ?? "Held"} · Qty {quantity} · {instantCondition}</p><strong>${price}</strong><div className="ready-facts"><span><b>Fitment</b>Not claimed</span><span><b>Domestic</b>{domestic ? "Default ready" : "Off"}</span><span><b>International</b>{international ? "Review" : "Held"}</span><span><b>Returns</b>30 days</span></div></div></div><aside className="public-approval"><div className="approval-seal"><Icon name="shield"/><span><strong>Exact fingerprint unchanged</strong><small>{instantPreview?.fingerprint.slice(0, 16)}… · simulation current</small></span></div><label className={!preflightApproved ? "approval-check disabled" : "approval-check"}><input type="checkbox" disabled={!preflightApproved} checked={publicApproved} onChange={(event) => setPublicApproved(event.target.checked)}/><span><strong>I approve this exact demo handoff.</strong><small>Changing title, price, quantity, images, aspects or fitment requires approval again.</small></span></label><div className="send-boundary"><strong>Safe handoff only</strong><p>The button below opens eBay’s public home page. It does not sign in, access a seller account, transmit this draft or create a listing.</p></div><a className={`ebay-send ${publicApproved ? "enabled" : "disabled"}`} href={publicApproved ? (bootstrap?.ebay.handoffUrl ?? "https://www.ebay.com/") : undefined} target="_blank" rel="noreferrer" aria-disabled={!publicApproved} onClick={(event) => { if (!publicApproved) event.preventDefault(); }}>Send to eBay <Icon name="arrow"/></a><p className="safe-note">Destination: ebay.com main page only · no listing payload attached</p></aside></div>
           <div className="ready-queue"><div><span>Ready queue</span><strong>Current draft</strong></div><p>Every item keeps its own OEM key, hash, fee response and public approval.</p><button onClick={() => showNotice("Quiet-hours scheduling remains a prototype setting.")}>Schedule for 6:00 AM</button><button onClick={() => showNotice(`EvidencePack prepared for ${instantPreview?.listing.sku ?? "the active draft"}.`)}>Download EvidencePack</button></div>
         </section>}
 
@@ -912,6 +1338,7 @@ export default function Home() {
 
         {view === "settings" && <section className="view">
           <SectionHeading eyebrow="Seller-owned defaults" title="Account and listing rules" body="Reuse the seller’s own choices. Never learn unsupported fitment or marketplace-derived pricing." />
+          <div className="watch-strip"><Icon name="shield"/><div><strong>Official eBay VeRO profile registry · read only</strong><p>{veroProfiles?.status === "CURRENT" ? veroProfiles.participantCount + " public rights-owner profiles downloaded; the title engine still treats the index as incomplete." : veroProfiles?.status === "STALE" ? "Cached profile registry is stale; brand claims remain held." : "Registry unavailable; brand claims remain held and Fits/For rules still apply."}</p></div><Badge tone={veroProfiles?.status === "CURRENT" ? "green" : "amber"}>{veroProfiles?.status ?? "Checking"}</Badge></div>
           <div className="settings-layout"><div className="settings-section"><h3>Seller account</h3>{[ ["Seller account", "Private pilot seller"], ["Inventory authority", "PartQuill master"], ["Merchant location", "Confirm before live use"], ["Default return policy", "30 days · buyer-paid"], ["Default domestic shipping", "Seller default"] ].map(([label,value]) => <label key={label}><span>{label}</span><button>{value}<Icon name="arrow"/></button></label>)}</div><div className="settings-section"><h3>Safety and approvals</h3><label className="setting-toggle"><span><strong>Buyer evidence statement</strong><small>Add the optional listing-as-contract footer.</small></span><input type="checkbox" checked={sellerContract} onChange={(event) => setSellerContract(event.target.checked)}/></label><label className="setting-toggle"><span><strong>Quiet-hours publish</strong><small>Hold approved payloads until the chosen local window; recheck fee expiry.</small></span><input type="checkbox" checked={quietHours} onChange={(event) => setQuietHours(event.target.checked)}/></label><label className="setting-toggle"><span><strong>Automatic marketplace repricing</strong><small>Disabled by product policy.</small></span><input type="checkbox" disabled/></label><label className="setting-toggle"><span><strong>Two approval gates</strong><small>Required for every account and plan.</small></span><input type="checkbox" checked readOnly/></label></div><div className="settings-section"><h3>Hard blocks</h3><div className="blocked-tags"><Badge tone="red">Airbags / inflators</Badge><Badge tone="red">Recall matches</Badge><Badge tone="red">Emissions defeat</Badge><Badge tone="red">Counterfeit goods</Badge><Badge tone="red">Third-party watermark removal</Badge><Badge tone="red">Mystery used parts without actual photos</Badge></div><p>Blocked and failed items never consume the seller’s free public-listing allowance.</p></div></div>
         </section>}
 

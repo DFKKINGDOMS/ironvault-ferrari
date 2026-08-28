@@ -167,6 +167,105 @@ const catalogCurations: Readonly<Record<string, CatalogCuration>> = {
   }
 };
 
+export type GmCatalogMappingState =
+  | 'CURATED_EXACT'
+  | 'CATALOG_STATED_EXACT'
+  | 'OCR_CANDIDATE_HELD'
+  | 'PART_NUMBER_MISMATCH'
+  | 'NOT_FOUND';
+
+export interface GmCatalogMappingAssessment {
+  state: GmCatalogMappingState;
+  requestedPartNumber: string | null;
+  returnedPartNumber: string | null;
+  exactKeyMatch: boolean;
+  sellerFacingAllowed: boolean;
+  sourcePages: number[];
+  reasons: string[];
+}
+
+export function assessGmCatalogMapping(
+  catalog: GmCatalogPart | undefined,
+  requestedPartNumber: string | null
+): GmCatalogMappingAssessment {
+  const requested = requestedPartNumber ? formatOemPartNumber(requestedPartNumber) : null;
+  if (!catalog || !requested) {
+    return {
+      state: 'NOT_FOUND',
+      requestedPartNumber: requested,
+      returnedPartNumber: catalog?.partNumber ? formatOemPartNumber(catalog.partNumber) : null,
+      exactKeyMatch: false,
+      sellerFacingAllowed: false,
+      sourcePages: [],
+      reasons: ['No exact OEM-keyed catalog record was returned.']
+    };
+  }
+  const returned = formatOemPartNumber(catalog.partNumber);
+  const exactKeyMatch = canonicalOemPartNumber(returned) === canonicalOemPartNumber(requested);
+  if (!exactKeyMatch) {
+    return {
+      state: 'PART_NUMBER_MISMATCH',
+      requestedPartNumber: requested,
+      returnedPartNumber: returned,
+      exactKeyMatch: false,
+      sellerFacingAllowed: false,
+      sourcePages: [],
+      reasons: ['The returned catalog key does not exactly equal the requested normalized OEM part number.']
+    };
+  }
+
+  const curation = catalogCurations[canonicalOemPartNumber(requested)];
+  const catalogStatedApplications = catalog.applications.filter((application) =>
+    application.verificationState === 'catalog_stated'
+    && application.confidence >= 0.8
+    && Number.isInteger(application.sourcePageId)
+  );
+  const rollupPage = catalog.rollup.representativePageId ?? catalog.rollup.firstPageId;
+  const catalogStated = catalog.verificationState === 'catalog_stated'
+    && (
+      catalogStatedApplications.length > 0
+      || (catalog.rollup.catalogStatedOccurrences > 0 && Number.isInteger(rollupPage))
+    );
+  const sourcePages = [...new Set([
+    ...(curation?.applications ?? catalogStatedApplications).map((application) => application.sourcePageId),
+    ...(curation ? [] : Number.isInteger(rollupPage) ? [rollupPage] : [])
+  ].filter(Number.isInteger))];
+
+  if (curation) {
+    return {
+      state: 'CURATED_EXACT',
+      requestedPartNumber: requested,
+      returnedPartNumber: returned,
+      exactKeyMatch: true,
+      sellerFacingAllowed: true,
+      sourcePages,
+      reasons: ['Exact OEM key matched a manually curated catalog transcription with first-party page evidence.']
+    };
+  }
+  if (catalogStated) {
+    return {
+      state: 'CATALOG_STATED_EXACT',
+      requestedPartNumber: requested,
+      returnedPartNumber: returned,
+      exactKeyMatch: true,
+      sellerFacingAllowed: true,
+      sourcePages,
+      reasons: ['Exact OEM key and catalog-stated application evidence passed the seller-facing threshold.']
+    };
+  }
+  return {
+    state: 'OCR_CANDIDATE_HELD',
+    requestedPartNumber: requested,
+    returnedPartNumber: returned,
+    exactKeyMatch: true,
+    sellerFacingAllowed: false,
+    sourcePages: [],
+    reasons: [
+      'The number is only an OCR/candidate occurrence; it is retained for review and cannot populate identity, title, category or fitment.'
+    ]
+  };
+}
+
 /**
  * Return one exact OEM-keyed catalog record suitable for seller-facing use.
  * A lookup result can never replace the requested part number with a nearby OCR
@@ -178,7 +277,8 @@ export function normalizeGmCatalogPart(
 ): GmCatalogPart | undefined {
   if (!catalog || !requestedPartNumber) return undefined;
   const requestedKey = canonicalOemPartNumber(requestedPartNumber);
-  if (!requestedKey || canonicalOemPartNumber(catalog.partNumber) !== requestedKey) return undefined;
+  const assessment = assessGmCatalogMapping(catalog, requestedPartNumber);
+  if (!requestedKey || !assessment.sellerFacingAllowed) return undefined;
 
   const curation = catalogCurations[requestedKey];
   const structuredCandidates = catalog.applications.flatMap((application) => [

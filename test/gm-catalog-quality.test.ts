@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
 import {
+  assessGmCatalogMapping,
   canonicalOemPartNumber,
   credibleCatalogIdentityText,
   formatOemPartNumber,
@@ -47,8 +48,24 @@ describe('GM catalog exact-key and OCR quality controls', () => {
     expect(normalizeGmCatalogPart(emptyCatalog('5455054', 'Repair Kit'), '5455055')).toBeUndefined();
   });
 
-  it('holds unreliable OCR identity while retaining an exact occurrence record', () => {
-    const normalized = normalizeGmCatalogPart(emptyCatalog('5455999', 'Ail Moraine'), '5455999');
-    expect(normalized).toMatchObject({ partNumber: '5455999', productType: null, description: null });
+  it('retains the first-party page on a catalog-stated exact mapping', () => {
+    expect(assessGmCatalogMapping(emptyCatalog('5455998', 'Brake Repair Kit'), '5455998')).toMatchObject({
+      state: 'CATALOG_STATED_EXACT',
+      sellerFacingAllowed: true,
+      sourcePages: [2163]
+    });
+  });
+
+  it('holds an exact-key OCR candidate until catalog-stated evidence is available', () => {
+    const catalog = emptyCatalog('5455999', 'Ail Moraine');
+    catalog.verificationState = 'candidate';
+    catalog.rollup.catalogStatedOccurrences = 0;
+
+    expect(assessGmCatalogMapping(catalog, '5455999')).toMatchObject({
+      state: 'OCR_CANDIDATE_HELD',
+      exactKeyMatch: true,
+      sellerFacingAllowed: false
+    });
+    expect(normalizeGmCatalogPart(catalog, '5455999')).toBeUndefined();
   });
 });

@@ -8,8 +8,8 @@ export interface EbayCategorySuggestion {
 
 export interface CatalogListingIntelligence {
   category: {
-    state: 'EBAY_TAXONOMY_VERIFIED' | 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION' | 'NOT_CLASSIFIED';
-    source: 'EBAY_TAXONOMY_API' | 'PARTQUILL_CLASSIFIER' | 'NONE';
+    state: 'EBAY_TAXONOMY_VERIFIED' | 'EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW' | 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION' | 'NOT_CLASSIFIED';
+    source: 'EBAY_TAXONOMY_API' | 'EBAY_OFFICIAL_CATEGORY_FILE' | 'PARTQUILL_CLASSIFIER' | 'NONE';
     categoryId: string | null;
     categoryName: string | null;
     categoryPath: string | null;
@@ -21,13 +21,20 @@ export interface CatalogListingIntelligence {
     state: 'ESTIMATED_REQUIRES_CONFIRMATION' | 'MEASUREMENT_REQUIRED';
     source: 'APPROVED_PRODUCT_FAMILY_PRESET' | 'MEASURED_VALUES_REQUIRED';
     profileId: string | null;
+    productFamilyProfileId: string | null;
     profileLabel: string | null;
     packageType: 'BOX' | 'MAILER' | 'TUBE' | 'FREIGHT' | null;
+    packageSelectionState: 'SMALLEST_SAVED_PACKAGE_ESTIMATE' | 'CUSTOM_PACKAGE_REQUIRED' | 'FREIGHT_REQUIRED' | 'MEASUREMENT_REQUIRED';
+    shippingClass: 'PARCEL' | 'TRUCK_FREIGHT' | 'SPECIAL_TRUCK_FREIGHT' | 'MEASUREMENT_REQUIRED';
     estimatedItemWeightLb: { min: number; max: number; suggested: number } | null;
+    estimatedItemPackageIn: { length: number; width: number; height: number } | null;
     suggestedPackageIn: { length: number; width: number; height: number } | null;
+    emptyPackageWeightLb: number | null;
+    estimatedPackedWeightLb: number | null;
     dimensionalWeightLb: number | null;
     estimatedBillableWeightLb: number | null;
     dimDivisor: 139;
+    checkoutGate: boolean;
     confidence: number;
     basis: string[];
     confirmationRequired: true;
@@ -49,7 +56,186 @@ interface IntelligenceRule {
 
 const motorsRoot = 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories';
 
+
+export interface IronVaultPackageProfile {
+  name: `P${number}`;
+  length: number;
+  width: number;
+  height: number;
+  emptyPackageWeightLb: number;
+}
+
+/**
+ * The seller's saved Shopify package ladder, shared with the Deere workflow.
+ * The last value is empty-carton weight, never product capacity.
+ */
+export const IRONVAULT_PACKAGE_LADDER: readonly IronVaultPackageProfile[] = [
+  ['P1', 6, 4, 1, 0.5],
+  ['P2', 6, 4, 2, 0.5],
+  ['P3', 8, 6, 2, 1],
+  ['P4', 8, 6, 4, 1],
+  ['P5', 12, 9, 4, 1],
+  ['P6', 10, 8, 4, 1],
+  ['P7', 12, 10, 6, 1],
+  ['P8', 14, 12, 6, 1],
+  ['P9', 16, 12, 8, 1],
+  ['P10', 18, 14, 8, 1],
+  ['P11', 20, 16, 10, 2],
+  ['P12', 24, 18, 12, 2],
+  ['P13', 28, 20, 14, 3],
+  ['P14', 32, 24, 18, 3],
+  ['P15', 36, 24, 20, 4],
+  ['P16', 42, 30, 24, 10],
+  ['P17', 48, 40, 28, 20]
+].map(([name, length, width, height, emptyPackageWeightLb]) => ({
+  name: name as `P${number}`,
+  length: length as number,
+  width: width as number,
+  height: height as number,
+  emptyPackageWeightLb: emptyPackageWeightLb as number
+}));
+
+function packageFits(
+  required: { length: number; width: number; height: number },
+  profile: IronVaultPackageProfile
+): boolean {
+  const item = [required.length, required.width, required.height].sort((a, b) => b - a);
+  const box = [profile.length, profile.width, profile.height].sort((a, b) => b - a);
+  return item.every((value, index) => value <= (box[index] ?? 0));
+}
+
+export function selectSmallestIronVaultPackage(
+  required: { length: number; width: number; height: number }
+): IronVaultPackageProfile | null {
+  return [...IRONVAULT_PACKAGE_LADDER]
+    .filter((profile) => packageFits(required, profile))
+    .sort((left, right) =>
+      (left.length * left.width * left.height) - (right.length * right.width * right.height)
+      || Number(left.name.slice(1)) - Number(right.name.slice(1))
+    )[0] ?? null;
+}
+
 const rules: IntelligenceRule[] = [
+  {
+    id: 'small-hardware',
+    profileLabel: 'Ferrari/Deere small-hardware estimate',
+    pattern: /\b(?:circlip|retaining\s*ring|snap\s*ring|washer|bolt|screw|dowel|knob)\b/i,
+    categoryName: 'Other Engine Parts',
+    categoryPath: `${motorsRoot} › Engines & Engine Parts › Other Engine Parts`,
+    categoryKeywords: 'automotive engine mounting hardware bolt screw washer retaining ring',
+    packageType: 'BOX',
+    itemWeight: { min: 0.05, max: 1.5, suggested: 0.5 },
+    packageIn: { length: 8, width: 6, height: 3 },
+    confidence: 0.82
+  },
+  {
+    id: 'exhaust-silencer',
+    profileLabel: 'Ferrari exhaust-silencer estimate',
+    pattern: /\b(?:main\s*silencer|muffler)\b/i,
+    categoryName: 'Mufflers & Resonators',
+    categoryPath: `${motorsRoot} › Exhaust & Emission Systems › Mufflers & Resonators`,
+    categoryKeywords: 'automotive exhaust muffler silencer',
+    packageType: 'BOX',
+    itemWeight: { min: 15, max: 45, suggested: 28 },
+    packageIn: { length: 38, width: 18, height: 12 },
+    confidence: 0.84
+  },
+  {
+    id: 'exhaust-manifold',
+    profileLabel: 'Ferrari exhaust-manifold estimate',
+    pattern: /\b(?:front|rear|exhaust)\s*manifold\b/i,
+    categoryName: 'Exhaust Manifolds & Headers',
+    categoryPath: `${motorsRoot} › Exhaust & Emission Systems › Manifolds & Headers`,
+    categoryKeywords: 'automotive exhaust manifold header',
+    packageType: 'BOX',
+    itemWeight: { min: 8, max: 35, suggested: 18 },
+    packageIn: { length: 34, width: 16, height: 10 },
+    confidence: 0.82
+  },
+  {
+    id: 'flywheel',
+    profileLabel: 'Ferrari flywheel estimate',
+    pattern: /\bflywheel\b/i,
+    categoryName: 'Flywheels & Flexplates',
+    categoryPath: `${motorsRoot} › Transmission & Drivetrain › Flywheels & Flexplates`,
+    categoryKeywords: 'automotive flywheel flexplate',
+    packageType: 'BOX',
+    itemWeight: { min: 12, max: 40, suggested: 24 },
+    packageIn: { length: 16, width: 16, height: 6 },
+    confidence: 0.86
+  },
+  {
+    id: 'connecting-rod',
+    profileLabel: 'Ferrari connecting-rod estimate',
+    pattern: /\b(?:connecting\s*rod|con\s*rod)\b/i,
+    categoryName: 'Connecting Rods & Parts',
+    categoryPath: `${motorsRoot} › Engines & Engine Parts › Connecting Rods & Parts`,
+    categoryKeywords: 'automotive engine connecting rod',
+    packageType: 'BOX',
+    itemWeight: { min: 1.5, max: 8, suggested: 4 },
+    packageIn: { length: 13, width: 7, height: 5 },
+    confidence: 0.84
+  },
+  {
+    id: 'pulley-gear',
+    profileLabel: 'Ferrari pulley/gear estimate',
+    pattern: /\b(?:damper\s*pulley|pulley|timing\s*gear)\b/i,
+    categoryName: 'Pulleys & Tensioners',
+    categoryPath: `${motorsRoot} › Engines & Engine Parts › Pulleys & Tensioners`,
+    categoryKeywords: 'automotive engine pulley timing gear',
+    packageType: 'BOX',
+    itemWeight: { min: 2, max: 15, suggested: 7 },
+    packageIn: { length: 14, width: 14, height: 6 },
+    confidence: 0.8
+  },
+  {
+    id: 'timing-chain',
+    profileLabel: 'Ferrari timing-chain estimate',
+    pattern: /\b(?:timing\s*)?chain\b/i,
+    categoryName: 'Timing Chains',
+    categoryPath: `${motorsRoot} › Engines & Engine Parts › Timing Components & Kits`,
+    categoryKeywords: 'automotive engine timing chain',
+    packageType: 'BOX',
+    itemWeight: { min: 1, max: 7, suggested: 3 },
+    packageIn: { length: 11, width: 9, height: 4 },
+    confidence: 0.82
+  },
+  {
+    id: 'engine-valve',
+    profileLabel: 'Ferrari engine-valve estimate',
+    pattern: /\b(?:inlet|intake|exhaust)?\s*valve\b/i,
+    categoryName: 'Valves',
+    categoryPath: `${motorsRoot} › Engines & Engine Parts › Valves`,
+    categoryKeywords: 'automotive engine intake exhaust valve',
+    packageType: 'BOX',
+    itemWeight: { min: 0.2, max: 3, suggested: 1.25 },
+    packageIn: { length: 12, width: 5, height: 4 },
+    confidence: 0.79
+  },
+  {
+    id: 'piston-pin',
+    profileLabel: 'Ferrari piston-pin estimate',
+    pattern: /\b(?:gudgeon|piston)\s*pin\b/i,
+    categoryName: 'Pistons, Rings & Rods',
+    categoryPath: `${motorsRoot} › Engines & Engine Parts › Pistons, Rings & Rods`,
+    categoryKeywords: 'automotive engine piston pin gudgeon pin',
+    packageType: 'BOX',
+    itemWeight: { min: 0.5, max: 4, suggested: 1.5 },
+    packageIn: { length: 9, width: 5, height: 4 },
+    confidence: 0.8
+  },
+  {
+    id: 'heat-shield',
+    profileLabel: 'Ferrari heat-shield estimate',
+    pattern: /\bheat\s*shield\b/i,
+    categoryName: 'Heat Shields',
+    categoryPath: `${motorsRoot} › Exhaust & Emission Systems › Heat Shields`,
+    categoryKeywords: 'automotive exhaust heat shield',
+    packageType: 'BOX',
+    itemWeight: { min: 1, max: 8, suggested: 4 },
+    packageIn: { length: 22, width: 16, height: 5 },
+    confidence: 0.76
+  },
   {
     id: 'air-filter-element',
     profileLabel: 'Small boxed filter',
@@ -195,6 +381,18 @@ const rules: IntelligenceRule[] = [
     confidence: 0.72
   },
   {
+    id: 'spacer-plate-bracket',
+    profileLabel: 'Ferrari fabricated-part estimate',
+    pattern: /\b(?:spacer|plate|bracket|support)\b/i,
+    categoryName: 'Brackets & Hardware',
+    categoryPath: `${motorsRoot} › Other Parts & Accessories`,
+    categoryKeywords: 'automotive bracket support spacer plate hardware',
+    packageType: 'BOX',
+    itemWeight: { min: 0.25, max: 8, suggested: 3 },
+    packageIn: { length: 14, width: 10, height: 5 },
+    confidence: 0.68
+  },
+  {
     id: 'engine-transmission-assembly',
     profileLabel: 'Freight pallet',
     pattern: /\b(?:engine\s*assembly|motor\s*assembly|transmission\s*assembly|rear\s*axle\s*assembly)\b/i,
@@ -226,72 +424,153 @@ function categoryQuery(catalog: GmCatalogPart, keywords: string): string {
   return `${division} ${keywords} ${catalog.description ?? ''} ${catalog.partNumber}`.replace(/\s+/g, ' ').trim();
 }
 
+function embeddedOfficialCategory(
+  catalog: GmCatalogPart,
+  query: string,
+  fallbackBasis: string[]
+): CatalogListingIntelligence['category'] | null {
+  const embedded = catalog.ebayCategory;
+  if (!embedded || !/^\d+$/.test(embedded.categoryId) || !embedded.categoryName.trim()) return null;
+  const exact = embedded.classificationMode === 'RULE_EXACT_LEAF';
+  return {
+    state: exact ? 'EBAY_TAXONOMY_VERIFIED' : 'EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW',
+    source: 'EBAY_OFFICIAL_CATEGORY_FILE',
+    categoryId: embedded.categoryId,
+    categoryName: embedded.categoryName,
+    categoryPath: embedded.categoryPath,
+    query,
+    confidence: exact ? 0.95 : 0.25,
+    basis: [
+      `Official eBay US Motors leaf ${embedded.categoryId} from category tree ${embedded.categoryTreeId} (${embedded.categoryTreeVersion}).`,
+      exact
+        ? 'PartQuill matched the catalog product family to an exact active leaf name.'
+        : 'This is the active Other Car & Truck Parts fallback; review the leaf before submission.',
+      ...fallbackBasis
+    ]
+  };
+}
+
+function emptyShipping(): CatalogListingIntelligence['shipping'] {
+  return {
+    state: 'MEASUREMENT_REQUIRED',
+    source: 'MEASURED_VALUES_REQUIRED',
+    profileId: null,
+    productFamilyProfileId: null,
+    profileLabel: null,
+    packageType: null,
+    packageSelectionState: 'MEASUREMENT_REQUIRED',
+    shippingClass: 'MEASUREMENT_REQUIRED',
+    estimatedItemWeightLb: null,
+    estimatedItemPackageIn: null,
+    suggestedPackageIn: null,
+    emptyPackageWeightLb: null,
+    estimatedPackedWeightLb: null,
+    dimensionalWeightLb: null,
+    estimatedBillableWeightLb: null,
+    dimDivisor: 139,
+    checkoutGate: true,
+    confidence: 0,
+    basis: ['Weight and dimensions cannot be safely inferred from the available catalog wording.'],
+    confirmationRequired: true
+  };
+}
+
 export function buildCatalogListingIntelligence(catalog: GmCatalogPart): CatalogListingIntelligence {
   const text = intelligenceText(catalog);
   const rule = rules.find((candidate) => candidate.pattern.test(text));
-  if (!rule) {
-    return {
-      category: {
+  const query = categoryQuery(catalog, rule?.categoryKeywords ?? 'automotive replacement part');
+  const ruleBasis = rule
+    ? [`Matched PartQuill product-family rule ${rule.id}.`, `Catalog wording used: ${text.slice(0, 240)}`]
+    : ['No sufficiently specific PartQuill product-family rule matched the catalog wording.'];
+  const embeddedCategory = embeddedOfficialCategory(catalog, query, ruleBasis);
+
+  const category: CatalogListingIntelligence['category'] = embeddedCategory ?? (rule
+    ? {
+        state: 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION',
+        source: 'PARTQUILL_CLASSIFIER',
+        categoryId: null,
+        categoryName: rule.categoryName,
+        categoryPath: rule.categoryPath,
+        query,
+        confidence: rule.confidence,
+        basis: ruleBasis
+      }
+    : {
         state: 'NOT_CLASSIFIED',
         source: 'NONE',
         categoryId: null,
         categoryName: null,
         categoryPath: null,
-        query: categoryQuery(catalog, 'automotive replacement part'),
+        query,
         confidence: 0,
-        basis: ['No sufficiently specific PartQuill product-family rule matched the catalog wording.']
-      },
-      shipping: {
-        state: 'MEASUREMENT_REQUIRED',
-        source: 'MEASURED_VALUES_REQUIRED',
-        profileId: null,
-        profileLabel: null,
-        packageType: null,
-        estimatedItemWeightLb: null,
-        suggestedPackageIn: null,
-        dimensionalWeightLb: null,
-        estimatedBillableWeightLb: null,
-        dimDivisor: 139,
-        confidence: 0,
-        basis: ['Weight and dimensions cannot be safely inferred from the available catalog wording.'],
-        confirmationRequired: true
-      }
-    };
-  }
+        basis: ruleBasis
+      });
 
-  const dimensionalWeight = Math.ceil(
-    (rule.packageIn.length * rule.packageIn.width * rule.packageIn.height) / 139
+  if (!rule) return { category, shipping: emptyShipping() };
+
+  const shippingClass = rule.itemWeight.suggested > 500
+    ? 'SPECIAL_TRUCK_FREIGHT' as const
+    : rule.itemWeight.suggested > 150 || rule.packageType === 'FREIGHT'
+      ? 'TRUCK_FREIGHT' as const
+      : 'PARCEL' as const;
+  const selectedPackage = shippingClass === 'PARCEL'
+    ? selectSmallestIronVaultPackage(rule.packageIn)
+    : null;
+  const packageSelectionState = shippingClass !== 'PARCEL'
+    ? 'FREIGHT_REQUIRED' as const
+    : selectedPackage
+      ? 'SMALLEST_SAVED_PACKAGE_ESTIMATE' as const
+      : 'CUSTOM_PACKAGE_REQUIRED' as const;
+  const suggestedPackage = selectedPackage
+    ? { length: selectedPackage.length, width: selectedPackage.width, height: selectedPackage.height }
+    : rule.packageIn;
+  const emptyPackageWeightLb = selectedPackage?.emptyPackageWeightLb ?? null;
+  const estimatedPackedWeightLb = Number(
+    (rule.itemWeight.suggested + (emptyPackageWeightLb ?? 0)).toFixed(2)
   );
+  const dimensionalWeight = shippingClass === 'PARCEL'
+    ? Math.ceil((suggestedPackage.length * suggestedPackage.width * suggestedPackage.height) / 139)
+    : null;
+
   return {
-    category: {
-      state: 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION',
-      source: 'PARTQUILL_CLASSIFIER',
-      categoryId: null,
-      categoryName: rule.categoryName,
-      categoryPath: rule.categoryPath,
-      query: categoryQuery(catalog, rule.categoryKeywords),
-      confidence: rule.confidence,
-      basis: [
-        `Matched PartQuill product-family rule ${rule.id}.`,
-        `Catalog wording used: ${text.slice(0, 240)}`
-      ]
-    },
+    category,
     shipping: {
       state: 'ESTIMATED_REQUIRES_CONFIRMATION',
       source: 'APPROVED_PRODUCT_FAMILY_PRESET',
-      profileId: rule.id,
-      profileLabel: rule.profileLabel,
+      profileId: selectedPackage?.name ?? null,
+      productFamilyProfileId: rule.id,
+      profileLabel: selectedPackage
+        ? `${selectedPackage.name} · ${selectedPackage.length} × ${selectedPackage.width} × ${selectedPackage.height} in · ${rule.profileLabel}`
+        : shippingClass === 'PARCEL'
+          ? `Custom package required · ${rule.profileLabel}`
+          : `Freight review · ${rule.profileLabel}`,
       packageType: rule.packageType,
+      packageSelectionState,
+      shippingClass,
       estimatedItemWeightLb: rule.itemWeight,
-      suggestedPackageIn: rule.packageIn,
+      estimatedItemPackageIn: rule.packageIn,
+      suggestedPackageIn: suggestedPackage,
+      emptyPackageWeightLb,
+      estimatedPackedWeightLb,
       dimensionalWeightLb: dimensionalWeight,
-      estimatedBillableWeightLb: Math.max(Math.ceil(rule.itemWeight.suggested), dimensionalWeight),
+      estimatedBillableWeightLb: dimensionalWeight == null
+        ? null
+        : Math.max(Math.ceil(estimatedPackedWeightLb), dimensionalWeight),
       dimDivisor: 139,
+      checkoutGate: packageSelectionState !== 'SMALLEST_SAVED_PACKAGE_ESTIMATE',
       confidence: Math.max(0.4, rule.confidence - 0.18),
       basis: [
-        `PartQuill approved automotive package preset: ${rule.profileLabel} (${rule.id}).`,
-        'This is a product-family starting point, not a measured item or carrier promise.',
-        'DIM estimate uses L × W × H ÷ 139 and rounds up; the carrier bills the greater of dimensional or actual weight.'
+        `PartQuill automotive family estimate: ${rule.profileLabel} (${rule.id}).`,
+        selectedPackage
+          ? `Dimension-first IronVault selector chose the smallest saved carton that contains the estimate: ${selectedPackage.name}.`
+          : packageSelectionState === 'CUSTOM_PACKAGE_REQUIRED'
+            ? 'The estimate exceeds every P1–P17 saved carton; a reusable custom package is required.'
+            : 'The estimated item requires freight review and cannot inherit a parcel carton.',
+        'P1–P17 carton weights are empty-package weights, never maximum product capacity.',
+        'This is a working estimate, not a measured item or carrier promise.',
+        ...(dimensionalWeight == null
+          ? []
+          : ['DIM estimate uses L × W × H ÷ 139 and rounds up; billable weight uses the greater of packed or dimensional weight.'])
       ],
       confirmationRequired: true
     }

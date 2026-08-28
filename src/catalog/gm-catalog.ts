@@ -67,6 +67,18 @@ export interface GmCatalogDiagram {
   verificationState: string;
 }
 
+export interface GmCatalogEbayCategory {
+  marketplaceId: string;
+  categoryId: string;
+  categoryName: string;
+  categoryPath: string;
+  source: 'EBAY_OFFICIAL_CATEGORY_FILE';
+  classificationMode: 'RULE_EXACT_LEAF' | 'OTHER_FALLBACK_REVIEWED' | 'PENDING_RULE_REFINEMENT';
+  categoryTreeId: string;
+  categoryTreeVersion: string;
+  verifiedAt: string;
+}
+
 export interface GmCatalogPart {
   partNumber: string;
   manufacturer: string;
@@ -75,6 +87,7 @@ export interface GmCatalogPart {
   description: string | null;
   catalogGroup: string | null;
   verificationState: string;
+  ebayCategory?: GmCatalogEbayCategory;
   rollup: {
     occurrenceCount: number;
     pageCount: number;

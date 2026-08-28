@@ -25,7 +25,7 @@ import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
 import { resolveCatalogImage } from '../catalog/image-proxy.js';
 import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema, parseListingCommand } from '../seller/command-preview.js';
-import { normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
+import { assessGmCatalogMapping, normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
 import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
 import { applyEbayCategorySuggestion, buildCatalogListingIntelligence } from '../catalog/listing-intelligence.js';
@@ -33,6 +33,7 @@ import { EbayTaxonomyClient } from '../ebay/taxonomy-client.js';
 import type { EbayReferenceService } from '../ebay/reference-service.js';
 import { isBlockedReferenceImageBytes } from '../ebay/reference-image-policy.js';
 import type { CommunityImageService } from '../community/service.js';
+import { EbayVeroProfileService } from '../ebay/vero-profile-service.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -118,6 +119,7 @@ function publicStudioJob(job: StudioJobRecord) {
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
   const { config, store, service, tokenVault, imageStudio, ebayReference, communityImages } = dependencies;
+  const veroProfiles = new EbayVeroProfileService();
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
   const referenceAssetRoot = resolve(process.cwd(), 'data/reference-assets');
@@ -176,6 +178,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     )) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-reference/')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/vero-profiles')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/reference-assets/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/community-assets/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/community/submissions/')) return;
@@ -216,7 +219,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.16.3' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.17.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -257,6 +260,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         gitArchiveConnected: communityImages?.archiveActivated ?? false
       }
     }));
+  app.get('/v1/seller-ui/vero-profiles', async (_request, reply) => reply
+    .header('cache-control', 'private, max-age=3600')
+    .header('x-content-type-options', 'nosniff')
+    .send(await veroProfiles.getSnapshot()));
   app.post('/v1/seller-ui/command-preview', { bodyLimit: 16 * 1024 }, async (request, reply) => {
     const permit = sellerPreviewGuard.acquire(request.ip);
     try {
@@ -265,6 +272,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       const rawGmCatalog = intent.partNumber
         ? await store.lookupGmCatalogPart?.(intent.partNumber)
         : undefined;
+      const mapping = assessGmCatalogMapping(rawGmCatalog, intent.partNumber);
       const gmCatalog = normalizeGmCatalogPart(rawGmCatalog, intent.partNumber);
       let intelligence = gmCatalog ? buildCatalogListingIntelligence(gmCatalog) : undefined;
       if (gmCatalog && intelligence && ebayTaxonomy) {
@@ -278,7 +286,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return reply
         .header('cache-control', 'no-store')
         .header('x-content-type-options', 'nosniff')
-        .send({ preview: buildSellerCommandPreview(command, gmCatalog, intelligence) });
+        .send({ preview: buildSellerCommandPreview(command, gmCatalog, intelligence, mapping) });
     } finally {
       permit.release();
     }
@@ -442,7 +450,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.16.3',
+          version: '0.17.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

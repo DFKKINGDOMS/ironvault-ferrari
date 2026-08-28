@@ -147,9 +147,9 @@ describe('one-command seller preview', () => {
       category: { state: 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION', categoryName: 'Air Filters' },
       shipping: {
         state: 'ESTIMATED_REQUIRES_CONFIRMATION',
-        suggestedPackageIn: { length: 8, width: 8, height: 4 },
-        dimensionalWeightLb: 2,
-        estimatedBillableWeightLb: 2
+        suggestedPackageIn: { length: 10, width: 8, height: 4 },
+        dimensionalWeightLb: 3,
+        estimatedBillableWeightLb: 3
       }
     });
     expect(JSON.stringify(preview)).not.toContain('gmpartswiki.com');
@@ -174,7 +174,7 @@ describe('one-command seller preview', () => {
     ]);
     expect(preview.intelligence).toMatchObject({
       category: { categoryName: 'Wheel Hubs, Bearings & Parts' },
-      shipping: { profileId: 'steering-knuckle-hub', confirmationRequired: true }
+      shipping: { profileId: 'P12', productFamilyProfileId: 'steering-knuckle-hub', confirmationRequired: true }
     });
     expect(JSON.stringify(preview)).not.toContain('gmpartswiki.com');
   });
@@ -183,7 +183,7 @@ describe('one-command seller preview', () => {
     const preview = buildSellerCommandPreview('List part 581167 for $29.99', gm581167);
     expect(preview.listing).toMatchObject({
       sku: '581167',
-      title: 'Oldsmobile 581167 Switch & Bracket, Lamp 1961–1962'
+      title: '581167 Switch & Bracket, Lamp Fits Oldsmobile 1961–1962'
     });
     expect(preview.identity.productType).toBe('Switch & Bracket, Lamp');
     expect(preview.fitment.applications).toHaveLength(8);
@@ -202,7 +202,8 @@ describe('one-command seller preview', () => {
       },
       shipping: {
         source: 'APPROVED_PRODUCT_FAMILY_PRESET',
-        profileId: 'lighting-switch-control',
+        profileId: 'P4',
+        productFamilyProfileId: 'lighting-switch-control',
         suggestedPackageIn: { length: 8, width: 6, height: 4 },
         confirmationRequired: true
       }
@@ -219,7 +220,7 @@ describe('one-command seller preview', () => {
     });
     expect(preview.listing).toMatchObject({
       sku: '5455054',
-      title: 'Oldsmobile 5455054 Moraine Power Brake Repair Kit 1955–1957'
+      title: '5455054 Moraine Power Brake Repair Kit Fits Oldsmobile 1955–1957'
     });
     expect(JSON.stringify(preview)).not.toContain('Po 567095');
     expect(preview.fitment.applications).toEqual([
@@ -229,8 +230,8 @@ describe('one-command seller preview', () => {
     expect(preview.intelligence).toMatchObject({
       category: { categoryName: 'Brake Master Cylinders & Parts', categoryId: null },
       shipping: {
-        profileId: 'power-brake-repair-kit',
-        suggestedPackageIn: { length: 9, width: 7, height: 4 },
+        profileId: 'P6',
+        suggestedPackageIn: { length: 10, width: 8, height: 4 },
         confirmationRequired: true
       }
     });
@@ -246,7 +247,7 @@ describe('one-command seller preview', () => {
     });
     expect(preview.listing).toMatchObject({
       sku: '5455055',
-      title: 'Oldsmobile 5455055 Moraine Vacuum Cylinder Repair Kit 1955–1956'
+      title: '5455055 Moraine Vacuum Cylinder Repair Kit Fits Oldsmobile 1955–1956'
     });
     expect(preview.fitment.applications).toEqual([
       expect.objectContaining({ vehicle: '1955–1956 Oldsmobile Moraine power-brake equipped vehicles' })
@@ -341,4 +342,44 @@ describe('one-command seller preview', () => {
     expect(first.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(second.fingerprint).toBe(first.fingerprint);
   });
+
+  it('holds an exact-number OCR candidate until catalog-stated or curated evidence exists', () => {
+    const candidate: GmCatalogPart = {
+      ...gm5459066,
+      partNumber: '9999999',
+      verificationState: 'ocr_candidate',
+      applications: [],
+      diagrams: [],
+      rollup: {
+        ...gm5459066.rollup,
+        catalogStatedOccurrences: 0,
+        representativePageId: 9999
+      }
+    };
+    const preview = buildSellerCommandPreview('List part 9999999 for $19.99', candidate);
+    expect(preview.mapping).toMatchObject({
+      state: 'OCR_CANDIDATE_HELD',
+      exactKeyMatch: true,
+      sellerFacingAllowed: false
+    });
+    expect(preview.identity.state).toBe('NOT_VERIFIED');
+    expect(preview.issues).toContainEqual(expect.objectContaining({
+      code: 'GM_OCR_CANDIDATE_HELD',
+      blocking: true
+    }));
+  });
+
+  it('uses Fits before the compatible GM division until physical-item authenticity is confirmed', () => {
+    const preview = buildSellerCommandPreview('List part 5455055 for $49.99', gm5455055);
+    expect(preview.listing.title).toContain('Fits Oldsmobile');
+    expect(preview.listing.title.startsWith('Oldsmobile ')).toBe(false);
+    expect(preview.brandPolicy).toMatchObject({
+      state: 'SELLER_CONFIRMATION_REQUIRED',
+      rule: 'AUTHENTICITY_HELD',
+      veroParticipant: 'General Motors'
+    });
+    expect(preview.listing.aspects.Brand).toBeUndefined();
+    expect(preview.listing.aspects['Compatible Vehicle Brand']).toBe('Oldsmobile');
+  });
+
 });
