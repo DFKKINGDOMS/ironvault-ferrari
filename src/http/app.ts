@@ -71,7 +71,7 @@ const gmCatalogImportSchema = z.object({
   records: z.array(z.object({
     partNumber: z.string().regex(/^[A-Z0-9]+$/),
     verificationState: z.string().min(1)
-  }).passthrough()).min(1).max(100),
+  }).passthrough()).min(1).max(1000),
   complete: z.boolean().default(false)
 });
 
@@ -260,7 +260,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     }
     return reply.code(404).send({ error: { code: 'CATALOG_SCAN_NOT_AVAILABLE', message: 'catalog scan is not available in PartQuill media storage' } });
   });
-  app.post('/internal/gm-catalog/import', { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
+  app.post('/internal/gm-catalog/import', { bodyLimit: 16 * 1024 * 1024 }, async (request, reply) => {
     const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
     if (!secureTokenMatches(supplied, config.GM_IMPORT_TOKEN) || !store.importGmCatalogRecords) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
