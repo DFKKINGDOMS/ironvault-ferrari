@@ -14,6 +14,7 @@ import { runMigrations } from './store/migrate.js';
 import { PostgresStore } from './store/postgres-store.js';
 import { EbayBrowseReferenceClient } from './ebay/reference-discovery.js';
 import { EbayReferenceService } from './ebay/reference-service.js';
+import { CuratedEbayReferenceProvider } from './ebay/curated-reference.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -45,7 +46,13 @@ await imageStudio.initialize();
 const ebayReferenceProvider = config.EBAY_REFERENCE_DISCOVERY_MODE === 'live'
   ? new EbayBrowseReferenceClient(config)
   : undefined;
-const ebayReference = new EbayReferenceService(store, ebayReferenceProvider, config);
+const ebayReference = new EbayReferenceService(
+  store,
+  ebayReferenceProvider,
+  config,
+  () => new Date(),
+  new CuratedEbayReferenceProvider()
+);
 await ebayReference.purgeExpired();
 const ebayReferenceCleanup = setInterval(() => {
   void ebayReference.purgeExpired().catch((error: unknown) => {

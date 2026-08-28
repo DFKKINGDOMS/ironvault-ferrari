@@ -7,6 +7,7 @@ import {
   type EbayReferenceProvider
 } from '../src/ebay/reference-discovery.js';
 import { EbayReferenceService } from '../src/ebay/reference-service.js';
+import { CuratedEbayReferenceProvider } from '../src/ebay/curated-reference.js';
 import type { EbayReferenceCacheRecord, EbayReferenceCandidate } from '../src/ebay/reference-types.js';
 import { buildApp } from '../src/http/app.js';
 import { MemoryStore } from '../src/store/memory-store.js';
@@ -119,6 +120,31 @@ describe('eBay exact-reference discovery', () => {
     expect(searchExact).toHaveBeenCalledTimes(1);
     expect(first.reference?.archiveAllowed).toBe(false);
     expect(first.reference?.listingPayloadEligible).toBe(false);
+  });
+
+  it('shows a reviewed 5455055 live reference even before global Browse credentials are configured', async () => {
+    const store = new MemoryStore();
+    const service = new EbayReferenceService(
+      store,
+      undefined,
+      testConfig({ EBAY_REFERENCE_DISCOVERY_MODE: 'disabled' }),
+      () => new Date('2026-08-28T07:00:00Z'),
+      new CuratedEbayReferenceProvider()
+    );
+    const first = await service.lookup('5455055', catalog5455055());
+    const second = await service.lookup('5455055', catalog5455055());
+    expect(first).toMatchObject({
+      status: 'MATCHED_LIVE_REFERENCE',
+      searchSuppressed: false,
+      reference: {
+        sourceItemId: '165201602251',
+        sourceUrl: 'https://www.ebay.com/itm/165201602251',
+        archiveAllowed: false,
+        listingPayloadEligible: false
+      }
+    });
+    expect(first.reference?.images).toHaveLength(3);
+    expect(second).toMatchObject({ status: 'MATCHED_LIVE_REFERENCE', searchSuppressed: true });
   });
 
   it('deletes expired eBay content before a failed refresh', async () => {

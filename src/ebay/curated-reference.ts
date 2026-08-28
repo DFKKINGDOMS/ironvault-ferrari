@@ -1,0 +1,40 @@
+import type { GmCatalogPart } from '../catalog/gm-catalog.js';
+import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
+import {
+  selectExactEbayReference,
+  type EbayBrowseItem,
+  type EbayReferenceProvider
+} from './reference-discovery.js';
+import type { EbayReferenceCandidate } from './reference-types.js';
+
+/**
+ * Exact public listings already reviewed against PartQuill catalog evidence.
+ * These remain live, temporary references: PartQuill does not download,
+ * background-remove, archive or place the seller's images in a listing.
+ */
+const reviewedListings: Record<string, EbayBrowseItem> = {
+  '5455055': {
+    itemId: '165201602251',
+    title: '1955-1956 Oldsmobile Brake Vacuum Cylinder Repair Kit NOS Delco OEM #5455055',
+    itemWebUrl: 'https://www.ebay.com/itm/165201602251',
+    categoryId: '33566',
+    categoryPath: 'eBay Motors › Parts & Accessories › Car & Truck Parts & Accessories › Brakes & Brake Parts › Other Brake Parts',
+    localizedAspects: [
+      { name: 'Brand', value: 'Delco/GM' },
+      { name: 'Manufacturer Part Number', value: '5455055' }
+    ],
+    image: { imageUrl: 'https://i.ebayimg.com/images/g/esgAAOSwxSphn3bC/s-l1600.jpg' },
+    additionalImages: [
+      { imageUrl: 'https://i.ebayimg.com/images/g/WDsAAOSwBgphn3bF/s-l1600.jpg' },
+      { imageUrl: 'https://i.ebayimg.com/images/g/WEkAAOSwBgphn3bI/s-l1600.jpg' }
+    ]
+  }
+};
+
+export class CuratedEbayReferenceProvider implements EbayReferenceProvider {
+  async searchExact(partNumber: string, catalog: GmCatalogPart): Promise<EbayReferenceCandidate | undefined> {
+    const exactPart = canonicalOemPartNumber(partNumber);
+    const listing = reviewedListings[exactPart];
+    return listing ? selectExactEbayReference(exactPart, catalog, listing, 3) : undefined;
+  }
+}
