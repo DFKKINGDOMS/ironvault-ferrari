@@ -53,6 +53,7 @@ export function validPayload(overrides: Partial<ListingPayload> = {}): ListingPa
     title: 'WIX 51040 Engine Oil Filter New',
     description: 'New boxed WIX oil filter. Verify the part number before purchase.',
     condition: 'NEW',
+    conditionId: '1000',
     categoryId: '33661',
     brand: 'WIX',
     mpn: '51040',

@@ -47,6 +47,11 @@ const ebayReferenceImageParams = ebayReferenceParams.extend({
 const referenceAssetParams = z.object({
   fileName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]*(?:_[0-9]+)?\.png$/)
 });
+const ebayCategoryParams = z.object({ categoryId: z.string().regex(/^\d+$/) });
+const ebayCategoryQuery = z.object({
+  query: z.string().trim().max(120).default(''),
+  limit: z.coerce.number().int().min(1).max(2_500).default(2_000)
+});
 const evidenceSchema = z.object({
   field: z.string().min(1),
   value: z.unknown(),
@@ -178,6 +183,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       || request.url.startsWith('/connected')
     )) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-categories')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-category-policy/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-reference/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/vero-profiles')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/reference-assets/')) return;
@@ -220,7 +227,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.18.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.19.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -252,6 +259,11 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     .header('cache-control', 'no-store')
     .send({
       ...buildSellerUiBootstrap(config),
+      imageStudio: {
+        mode: config.IMAGE_STUDIO_MODE,
+        path: '/image-studio',
+        activated: Boolean(imageStudio && config.IMAGE_STUDIO_MODE === 'live' && config.PARTQUILL_AI_PROVIDER !== 'disabled')
+      },
       communityImages: {
         enabled: Boolean(communityImages),
         maxImages: config.COMMUNITY_IMAGE_MAX_IMAGES,
@@ -261,6 +273,50 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         gitArchiveConnected: communityImages?.archiveActivated ?? false
       }
     }));
+  app.get('/v1/seller-ui/ebay-categories', async (request, reply) => {
+    const { query, limit } = ebayCategoryQuery.parse(request.query);
+    const categories = await store.listEbayLeafCategories?.(query, limit) ?? [];
+    return reply
+      .header('cache-control', 'private, max-age=300')
+      .header('x-content-type-options', 'nosniff')
+      .send({
+        marketplaceId: 'EBAY_US',
+        rootCategoryId: '6028',
+        source: categories.length ? 'EBAY_OFFICIAL_MOTORS_CATEGORY_TREE' : 'UNAVAILABLE',
+        categories
+      });
+  });
+  app.get('/v1/seller-ui/ebay-category-policy/:categoryId', async (request, reply) => {
+    const { categoryId } = ebayCategoryParams.parse(request.params);
+    if (!ebayTaxonomy) {
+      return reply.header('cache-control', 'no-store').send({
+        categoryId,
+        source: 'UNAVAILABLE',
+        verified: false,
+        itemConditionRequired: true,
+        conditions: []
+      });
+    }
+    try {
+      const policy = await ebayTaxonomy.getItemConditionPolicy(categoryId);
+      return reply.header('cache-control', 'private, max-age=1800').send({
+        categoryId,
+        source: policy ? 'EBAY_METADATA_API' : 'UNAVAILABLE',
+        verified: Boolean(policy),
+        itemConditionRequired: policy?.itemConditionRequired ?? true,
+        conditions: policy?.conditions ?? []
+      });
+    } catch (error) {
+      request.log.warn({ error, categoryId }, 'eBay condition policy unavailable');
+      return reply.header('cache-control', 'no-store').send({
+        categoryId,
+        source: 'UNAVAILABLE',
+        verified: false,
+        itemConditionRequired: true,
+        conditions: []
+      });
+    }
+  });
   app.get('/v1/seller-ui/vero-profiles', async (_request, reply) => reply
     .header('cache-control', 'private, max-age=3600')
     .header('x-content-type-options', 'nosniff')
@@ -451,7 +507,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.18.0',
+          version: '0.19.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

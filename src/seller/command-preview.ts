@@ -224,9 +224,7 @@ function findItemDescription(command: string, partNumber: string | null): string
 
 export function parseListingCommand(command: string): ListingCommandIntent {
   const normalized = command.toLowerCase();
-  const saleMode = /\bgiveaway\b|\bgive\s+(?:(?:this|the|it|item)\s+)?away\b|\bfree\s+item\b/i.test(command)
-    ? 'GIVEAWAY' as const
-    : 'FIXED_PRICE' as const;
+  const saleMode = 'FIXED_PRICE' as const;
   const explicitPrice = command.match(/\$\s*(-?\d+(?:\.\d+)?)(?![\d.])/)?.[1]
     ?? command.match(/\b(?:for|at|price(?:d)?(?:\s+at)?)\s+(-?\d+(?:\.\d+)?)(?![\d.])/i)?.[1];
   const quantityValue = command.match(/\b(?:quantity|qty)\s*[:=]?\s*(\d+)\b/i)?.[1]
@@ -254,12 +252,14 @@ export function parseListingCommand(command: string): ListingCommandIntent {
       ? 'CATALOG_ASSISTED'
       : 'PHOTO_FIRST';
 
+  const parsedPrice = normalizePrice(explicitPrice);
+  const price = parsedPrice && Number(parsedPrice) >= 0.99 ? parsedPrice : '0.99';
   return {
     partNumber,
     itemDescription: findItemDescription(command, partNumber),
     route,
     safetyClass,
-    price: normalizePrice(explicitPrice) ?? (saleMode === 'GIVEAWAY' ? '0.00' : null),
+    price,
     saleMode,
     quantity: quantityFrom(quantityValue),
     condition: explicitCondition ?? (route === 'CATALOG_ASSISTED' ? 'New' : 'Not specified'),
@@ -579,12 +579,8 @@ export function buildSellerCommandPreview(
       ]
     : [];
   const issues: SellerCommandPreview['issues'] = [];
-  if (!intent.price) issues.push({ code: 'PRICE_REQUIRED', message: 'Add the seller-owned Buy It Now price.', blocking: true });
-  if (intent.price === '0.00' && intent.saleMode !== 'GIVEAWAY') {
-    issues.push({ code: 'ZERO_PRICE_REQUIRES_GIVEAWAY', message: 'A zero price is valid only when this draft is explicitly marked free/giveaway.', blocking: true });
-  }
-  if (intent.saleMode === 'GIVEAWAY') {
-    issues.push({ code: 'GIVEAWAY_NOT_EBAY_ELIGIBLE', message: 'The free/giveaway draft may be saved, but an eBay fixed-price offer requires a positive price.', blocking: true });
+  if (Number(intent.price) < 0.99) {
+    issues.push({ code: 'EBAY_MOTORS_MINIMUM_PRICE_REQUIRED', message: 'eBay Motors Buy It Now price must be at least $0.99.', blocking: true });
   }
   if (catalogNumberMismatch) {
     issues.push({
@@ -831,7 +827,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.18.0',
+    version: '0.19.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
@@ -860,7 +856,21 @@ export function buildSellerUiBootstrap(config: AppConfig) {
     },
     defaults: {
       listingFormat: 'Buy It Now · GTC',
+      minimumPrice: '0.99',
       handlingTime: '1 business day',
+      handlingTimes: [
+        { days: 0, label: 'Same business day' },
+        { days: 1, label: '1 business day' },
+        { days: 2, label: '2 business days' },
+        { days: 3, label: '3 business days' },
+        { days: 4, label: '4 business days' },
+        { days: 5, label: '5 business days' },
+        { days: 10, label: '10 business days' },
+        { days: 15, label: '15 business days' },
+        { days: 20, label: '20 business days' },
+        { days: 30, label: '30 business days' },
+        { days: 40, label: '40 business days' }
+      ],
       domesticShipping: 'Calculated shipping',
       returns: '30 days · buyer-paid',
       international: 'Held until origin is verified'

@@ -5310,7 +5310,7 @@ input:focus-visible {
   .reference-import-actions { grid-template-columns: 1fr; }
 }
 
-/* v0.18 seller controls: pinned aspects, movable media, shipping gates and eBay-style preview. */
+/* Seller controls: pinned aspects, movable media, shipping gates and eBay-style preview. */
 .inline-image-upload,
 .sticky-image-upload {
   display: flex;
@@ -5516,4 +5516,110 @@ input:focus-visible {
   .ebay-main-photo,
   .ebay-main-photo img { min-height: 320px; height: 320px; }
   .sticky-image-upload { min-height: 48px; }
+}
+
+/* v0.19 seller-editable eBay policy controls. */
+.category-field { grid-column: span 1; }
+.category-field select { text-overflow: ellipsis; }
+.category-field small { min-height: 34px; }
+
+.description-editor {
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line-dark);
+  background: #fff;
+}
+.description-editor > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  background: #efede7;
+  border-bottom: 1px solid var(--line);
+}
+.description-editor > header > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.description-editor header strong { font-size: 12px; }
+.description-editor header small { color: var(--muted); font-size: 10px; }
+.description-mode { display: flex; gap: 5px; }
+.description-mode button,
+.html-toolbar button,
+.fitment-actions button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-dark);
+  background: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+.description-mode button.active { color: #fff; background: var(--orange-dark); border-color: var(--orange-dark); }
+.html-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; background: #faf8f3; border-bottom: 1px solid var(--line); }
+.description-editor > textarea { width: 100%; min-height: 260px; display: block; padding: 14px; resize: vertical; border: 0; border-bottom: 1px solid var(--line); font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.description-live-preview { padding: 14px; }
+.description-live-preview > span { display: block; margin-bottom: 9px; color: var(--orange-dark); font-size: 9px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; }
+.description-live-preview > p,
+.description-live-preview > div { margin: 0; white-space: pre-wrap; font-size: 12px; line-height: 1.6; }
+.description-live-preview table,
+.ebay-description-preview table { border-collapse: collapse; }
+.description-live-preview th,
+.description-live-preview td,
+.ebay-description-preview th,
+.ebay-description-preview td { padding: 6px 8px; border: 1px solid #ccc; }
+
+.fitment-impact-preview {
+  margin-bottom: 14px;
+  padding: 14px;
+  border-left: 5px solid var(--orange);
+  background: #fff7ef;
+}
+.fitment-impact-preview > span { color: var(--orange-dark); font-size: 9px; font-weight: 850; text-transform: uppercase; }
+.fitment-impact-preview > strong { display: block; margin-top: 5px; font: 700 18px/1.25 Georgia, serif; }
+.fitment-impact-preview p { margin: 8px 0; font-size: 11px; line-height: 1.5; }
+.fitment-impact-preview small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.fitment-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.fitment-actions .primary { margin-left: auto; color: #fff; background: var(--orange-dark); border-color: var(--orange-dark); }
+.fitment-actions button:disabled { opacity: .45; cursor: not-allowed; }
+
+.main-image-grid article > .photo-edit-actions {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 9px;
+  padding: 9px 0 0;
+  border-top: 1px solid var(--line);
+}
+.main-image-grid article > .photo-edit-actions > span { grid-column: 1 / -1; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.main-image-grid .photo-edit-actions button { min-height: 38px; white-space: normal; line-height: 1.25; }
+
+.free-shipping-gate,
+.price-floor-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 14px;
+  padding: 11px 12px;
+  color: #604716;
+  background: var(--amber-pale);
+  border: 1px solid #ddc58f;
+}
+.free-shipping-gate .icon,
+.price-floor-note .icon { width: 22px; flex: 0 0 auto; }
+.free-shipping-gate span,
+.price-floor-note span { display: flex; flex-direction: column; gap: 2px; }
+.free-shipping-gate strong,
+.price-floor-note strong { font-size: 11px; }
+.free-shipping-gate small,
+.price-floor-note small { font-size: 9px; line-height: 1.4; }
+.rate-planner.gated .rate-zip-grid { opacity: .55; }
+.rate-planner input:disabled { cursor: not-allowed; background: #ece9e2; }
+.ebay-listing-preview > nav { display: flex; flex-direction: column; gap: 4px; }
+.ebay-listing-preview > nav small { color: #777; }
+.ebay-description-preview > div { font-size: 12px; line-height: 1.6; }
+
+@media (max-width: 700px) {
+  .description-editor > header { align-items: flex-start; flex-direction: column; }
+  .fitment-actions .primary { width: 100%; margin-left: 0; }
+  .main-image-grid article > .photo-edit-actions { grid-template-columns: 1fr; }
+  .main-image-grid article > .photo-edit-actions > span { grid-column: auto; }
 }

@@ -1,6 +1,6 @@
 import type { StudioBackground, StudioWatermarkStatus } from './types.js';
 
-const FERRARI_INTEGRITY_PROMPT = `Create a premium ecommerce catalog image from this exact automotive-part source.
+const PARTQUILL_INTEGRITY_PROMPT = `Create a premium ecommerce catalog image from this exact automotive-part source.
 
 Preserve the exact product geometry, orientation, holes, openings, fasteners, connectors, labels, serial numbers, material, finish, wear, damage, proportions, camera angle, quantity, and piece count. Do not invent, remove, reshape, polish away, repair, beautify, or alter any physical product feature. Do not merge views or create a collage.
 
@@ -21,7 +21,7 @@ export function buildStudioPrompt(background: StudioBackground, watermarkStatus:
       ? 'The seller has confirmed ownership or written authorization for the photograph. Remove seller-authorized background watermarking, repeating background text, corner branding, borders, and unrelated background elements. Never remove a label, logo, part number, serial number, stamp, engraving, molding, or marking physically attached to the product.'
       : 'No watermark removal is requested. Preserve every physical product marking and remove only unrelated surrounding background elements.';
 
-  return `${FERRARI_INTEGRITY_PROMPT}\n\n${backgroundRule}\n\n${watermarkRule}\n\nReturn exactly one finished catalog image for this one source image.`;
+  return `${PARTQUILL_INTEGRITY_PROMPT}\n\n${backgroundRule}\n\n${watermarkRule}\n\nReturn exactly one finished catalog image for this one source image.`;
 }
 
 export const STUDIO_QA_PROMPT = `You are the final QA inspector for an automotive ecommerce image.

@@ -59,10 +59,35 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.18.0',
+      version: '0.19.0',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
+      defaults: {
+        minimumPrice: '0.99',
+        handlingTimes: expect.arrayContaining([
+          { days: 0, label: 'Same business day' },
+          { days: 40, label: '40 business days' }
+        ])
+      },
       safeguards: { unknownCatalogClaimsHeld: true, sellerPhotoRequired: true, dualApproval: true }
+    });
+
+    const categories = await app.inject({ method: 'GET', url: '/v1/seller-ui/ebay-categories' });
+    expect(categories.statusCode).toBe(200);
+    expect(categories.json()).toMatchObject({
+      source: 'EBAY_OFFICIAL_MOTORS_CATEGORY_TREE',
+      categories: expect.arrayContaining([
+        expect.objectContaining({ categoryId: '174021', categoryName: 'Brake Boosters' })
+      ])
+    });
+
+    const conditionPolicy = await app.inject({ method: 'GET', url: '/v1/seller-ui/ebay-category-policy/174021' });
+    expect(conditionPolicy.statusCode).toBe(200);
+    expect(conditionPolicy.json()).toMatchObject({
+      categoryId: '174021',
+      source: 'UNAVAILABLE',
+      verified: false,
+      conditions: []
     });
 
     const preview = await app.inject({

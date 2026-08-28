@@ -12,6 +12,12 @@ import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
+export interface EbayLeafCategory {
+  categoryId: string;
+  categoryName: string;
+  categoryPath: string;
+}
+
 export interface Store {
   ping?(): Promise<void>;
   close?(): Promise<void>;
@@ -56,4 +62,5 @@ export interface Store {
   listCommunityImagesByPartNumber(partNumber: string): Promise<StoredCommunityImage[]>;
   listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]>;
   getPublishedCommunityAsset(filename: string): Promise<StoredCommunityImage | undefined>;
+  listEbayLeafCategories?(query?: string, limit?: number): Promise<EbayLeafCategory[]>;
 }

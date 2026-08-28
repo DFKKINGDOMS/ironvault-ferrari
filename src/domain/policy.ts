@@ -38,6 +38,26 @@ export function evaluateDraft(
     });
   }
 
+  if (!payload.conditionId) {
+    exceptions.push({
+      code: 'EBAY_CATEGORY_CONDITION_ID_REQUIRED',
+      severity: 'HOLD',
+      field: 'conditionId',
+      message: 'The listing condition must be selected from the current eBay policy for its primary category.',
+      nextAction: 'Refresh the category condition policy and select an exact eBay condition.'
+    });
+  }
+
+  if (payload.secondaryCategoryId) {
+    exceptions.push({
+      code: 'SECONDARY_CATEGORY_TRADING_API_REQUIRED',
+      severity: 'HOLD',
+      field: 'secondaryCategoryId',
+      message: 'The eBay Inventory API cannot publish a secondary category.',
+      nextAction: 'Remove the second category or route this listing through the eBay Trading API after fee review.'
+    });
+  }
+
   const missingAspects = REQUIRED_EBAY_ASPECTS.filter((name) =>
     !(payload.aspects[name]?.some((value) => value.trim().length > 0))
   );
@@ -52,22 +72,22 @@ export function evaluateDraft(
   }
 
   const numericPrice = Number(payload.price.value);
-  if (numericPrice <= 0 && payload.saleMode !== 'GIVEAWAY') {
+  if (!Number.isFinite(numericPrice) || numericPrice < 0.99) {
     exceptions.push({
-      code: 'POSITIVE_PRICE_REQUIRED',
+      code: 'EBAY_MOTORS_MINIMUM_PRICE_REQUIRED',
       severity: 'HOLD',
       field: 'price',
-      message: 'A zero price is valid only for an explicitly marked free/giveaway draft.',
-      nextAction: 'Enter a positive fixed price or change the draft sale mode to giveaway.'
+      message: 'eBay Motors fixed-price listings must be priced at $0.99 or more.',
+      nextAction: 'Enter a Buy It Now price of at least $0.99.'
     });
   }
   if (payload.saleMode === 'GIVEAWAY') {
     exceptions.push({
       code: 'GIVEAWAY_CHANNEL_HOLD',
-      severity: 'HOLD',
+      severity: 'BLOCK',
       field: 'price',
-      message: 'A free/giveaway draft cannot be published as an eBay fixed-price offer.',
-      nextAction: 'Keep the draft off eBay or enter a positive eBay Buy It Now price.'
+      message: 'Giveaway mode is not supported for eBay Motors listings.',
+      nextAction: 'Use fixed-price mode and enter at least $0.99.'
     });
   }
 

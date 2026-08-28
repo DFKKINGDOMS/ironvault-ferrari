@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CommunityImages } from "./CommunityImages";
+import { cleanCatalogBackground, rotateCatalogImage } from "./image-editing";
 
 type SellerBootstrap = {
   version: string;
@@ -9,7 +10,7 @@ type SellerBootstrap = {
   backendConnected: boolean;
   ebay: { environment: string; mode: string; writesEnabled: boolean; handoffUrl: string };
   persistence: string;
-  imageStudio: { mode: string; path: string };
+  imageStudio: { mode: string; path: string; activated: boolean };
   ebayReferenceDiscovery: { mode: "disabled" | "live"; maxImages: number; cacheHours: number; permanentArchiveRequiresRights: true };
   veroProfileRegistry: {
     mode: "read-only-official-profile-index";
@@ -26,6 +27,36 @@ type SellerBootstrap = {
     chatGptManualActive: boolean;
     gitArchiveConnected: boolean;
   };
+  defaults: {
+    listingFormat: string;
+    minimumPrice: string;
+    handlingTime: string;
+    handlingTimes: Array<{ days: number; label: string }>;
+    domesticShipping: string;
+    returns: string;
+    international: string;
+  };
+};
+
+type EbayCategoryChoice = {
+  categoryId: string;
+  categoryName: string;
+  categoryPath: string;
+};
+
+type EbayConditionChoice = {
+  conditionId: string;
+  description: string;
+  helpText: string;
+  usage: string;
+};
+
+type EbayConditionPolicy = {
+  categoryId: string;
+  source: "EBAY_METADATA_API" | "UNAVAILABLE";
+  verified: boolean;
+  itemConditionRequired: boolean;
+  conditions: EbayConditionChoice[];
 };
 
 type VeroProfileSnapshot = {
@@ -264,6 +295,8 @@ type StagedPhoto = {
   source: "SELLER_UPLOAD" | "PRIVATE_REFERENCE" | "RIGHTS_CLEARED_REFERENCE";
   publishEligible: boolean;
   rightsState: "SELLER_PHOTOGRAPH" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED";
+  originalUrl?: string;
+  editState?: "ORIGINAL" | "BROWSER_EDITED" | "AI_EDITED";
 };
 
 type EditableFitmentRow = { vehicle: string; qualifier: string; state: string };
@@ -271,14 +304,18 @@ type EditableFitmentRow = { vehicle: string; qualifier: string; state: string };
 type EditableDraftFields = {
   categoryId: string;
   categoryName: string;
+  secondaryCategoryId: string;
+  secondaryCategoryName: string;
+  conditionId: string;
   condition: string;
+  conditionHelpText: string;
   description: string;
+  descriptionFormat: "TEXT" | "HTML";
   actualBrand: string;
   compatibleBrand: string;
   productType: string;
   authenticity: "AUTHENTICITY_NOT_CONFIRMED" | "GENUINE_BRANDED_ITEM" | "AFTERMARKET_COMPATIBLE";
   aspects: Record<string, string>;
-  giveaway: boolean;
   fitment: EditableFitmentRow[];
   packageProfileId: string;
   packageLength: string;
@@ -370,7 +407,7 @@ const exceptionRows = [
 const publishedRows = [
   { sku: "VLT-1018", listing: "BRP Latch Base 204070037", price: "$44.95", qty: 4, views: 39, status: "Healthy", reconciled: "8m ago" },
   { sku: "VLT-1009", listing: "Porsche Oil Filter OX-171D", price: "$18.42", qty: 8, views: 112, status: "Remote drift", reconciled: "31m ago" },
-  { sku: "VLT-1003", listing: "Ferrari Body Panel Bracket", price: "$289.00", qty: 1, views: 76, status: "Healthy", reconciled: "1h ago" },
+  { sku: "VLT-1003", listing: "GM Body Panel Bracket", price: "$289.00", qty: 1, views: 76, status: "Healthy", reconciled: "1h ago" },
 ];
 
 function Icon({ name }: { name: IconName }) {
@@ -509,8 +546,13 @@ function draftFieldsFromPreview(preview: SellerPreview): EditableDraftFields {
   return {
     categoryId: preview.listing.categoryId ?? "",
     categoryName: preview.listing.category ?? preview.intelligence?.category.categoryName ?? "",
+    secondaryCategoryId: "",
+    secondaryCategoryName: "",
+    conditionId: "",
     condition: preview.intent.condition,
+    conditionHelpText: "",
     description: preview.listing.description,
+    descriptionFormat: "TEXT",
     actualBrand,
     compatibleBrand: preview.brandPolicy?.compatibleBrand ?? "",
     productType: preview.identity.productType ?? "",
@@ -524,7 +566,6 @@ function draftFieldsFromPreview(preview: SellerPreview): EditableDraftFields {
       "OE/OEM Part Number": preview.listing.aspects["OE/OEM Part Number"] ?? partNumber,
       "California Prop 65 Warning": preview.listing.aspects["California Prop 65 Warning"] ?? ""
     },
-    giveaway: preview.intent.saleMode === "GIVEAWAY",
     fitment: preview.fitment.applications.map((row) => ({ ...row })),
     packageProfileId: shipping?.profileId ?? "",
     packageLength: packageIn ? String(packageIn.length) : "",
@@ -574,6 +615,45 @@ function properCaseTitle(value: string): string {
   }).join(" "));
 }
 
+const FITMENT_BLOCK_START = "<!-- PARTQUILL_FITMENT_START -->";
+const FITMENT_BLOCK_END = "<!-- PARTQUILL_FITMENT_END -->";
+
+function fitmentDescriptionBlock(rows: EditableFitmentRow[], html: boolean): string {
+  const content = rows.length
+    ? rows.map((row) => `${row.vehicle}${row.qualifier ? ` — ${row.qualifier}` : ""}`)
+    : ["No vehicle compatibility is being published."];
+  return html
+    ? `${FITMENT_BLOCK_START}<h3>Seller-reviewed compatibility</h3><ul>${content.map((row) => `<li>${escapeHtml(row)}</li>`).join("")}</ul>${FITMENT_BLOCK_END}`
+    : `${FITMENT_BLOCK_START}\nSeller-reviewed compatibility:\n${content.map((row) => `• ${row}`).join("\n")}\n${FITMENT_BLOCK_END}`;
+}
+
+function replaceFitmentDescriptionBlock(description: string, rows: EditableFitmentRow[], html: boolean): string {
+  const start = description.indexOf(FITMENT_BLOCK_START);
+  const end = description.indexOf(FITMENT_BLOCK_END);
+  const withoutExisting = start >= 0 && end >= start
+    ? `${description.slice(0, start)}${description.slice(end + FITMENT_BLOCK_END.length)}`.trim()
+    : description.trim();
+  return `${withoutExisting}${withoutExisting ? html ? "<br><br>" : "\n\n" : ""}${fitmentDescriptionBlock(rows, html)}`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+  })[character] ?? character);
+}
+
+function sanitizeSellerHtml(value: string): string {
+  const parser = new DOMParser();
+  const documentValue = parser.parseFromString(value, "text/html");
+  documentValue.querySelectorAll("script,style,iframe,object,embed,form,link,meta").forEach((node) => node.remove());
+  const allowed = new Set(["P", "BR", "B", "STRONG", "I", "EM", "U", "UL", "OL", "LI", "H2", "H3", "H4", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DIV", "SPAN"]);
+  for (const element of [...documentValue.body.querySelectorAll("*")]) {
+    for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+    if (!allowed.has(element.tagName)) element.replaceWith(...element.childNodes);
+  }
+  return documentValue.body.innerHTML;
+}
+
 type ActiveDraftEditorProps = {
   preview: SellerPreview | null;
   editorTab: EditorTab;
@@ -589,6 +669,7 @@ type ActiveDraftEditorProps = {
   removePhoto: (photoId: string) => void;
   setMainPhoto: (photoId: string) => void;
   reorderPhoto: (photoId: string, targetIndex: number) => void;
+  updatePhoto: (photoId: string, patch: Partial<StagedPhoto>) => void;
   addReferencePhoto: (image: EbayReferenceRecord["images"][number], index: number, record: EbayReferenceRecord) => void;
   onMaterialEdit: () => void;
   navigate: (view: View) => void;
@@ -596,19 +677,29 @@ type ActiveDraftEditorProps = {
   ebayReference: EbayReferenceLookup | null;
   ebayReferenceLoading: boolean;
   veroProfiles: VeroProfileSnapshot | null;
+  handlingTimes: Array<{ days: number; label: string }>;
+  imageStudioActivated: boolean;
 };
 
 function ActiveDraftEditor({
   preview, editorTab, setEditorTab, title, setTitle, price, setPrice, quantity, setQuantity,
   photos, addPhotos, removePhoto, setMainPhoto, addReferencePhoto, onMaterialEdit,
-  reorderPhoto,
-  navigate, showNotice, ebayReference, ebayReferenceLoading, veroProfiles
+  reorderPhoto, updatePhoto,
+  navigate, showNotice, ebayReference, ebayReferenceLoading, veroProfiles,
+  handlingTimes, imageStudioActivated
 }: ActiveDraftEditorProps) {
   const [fields, setFields] = useState<EditableDraftFields | null>(preview ? draftFieldsFromPreview(preview) : null);
   const [newAspectName, setNewAspectName] = useState("");
   const [draggedPhotoId, setDraggedPhotoId] = useState<string | null>(null);
   const [rateEstimateVisible, setRateEstimateVisible] = useState(false);
   const [previewPhotoId, setPreviewPhotoId] = useState<string | null>(null);
+  const [categoryOptions, setCategoryOptions] = useState<EbayCategoryChoice[]>([]);
+  const [categoryTreeVerified, setCategoryTreeVerified] = useState(false);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [conditionPolicy, setConditionPolicy] = useState<EbayConditionPolicy | null>(null);
+  const [catalogFitment, setCatalogFitment] = useState<EditableFitmentRow[]>([]);
+  const [appliedFitment, setAppliedFitment] = useState<EditableFitmentRow[]>([]);
+  const [photoEditBusy, setPhotoEditBusy] = useState<string | null>(null);
 
   useEffect(() => {
     if (!preview) {
@@ -616,7 +707,7 @@ function ActiveDraftEditor({
       return;
     }
     const fresh = draftFieldsFromPreview(preview);
-    const key = "partquill-draft-v2:" + (preview.listing.sku ?? "held") + ":" + preview.fingerprint;
+    const key = "partquill-draft-v3:" + (preview.listing.sku ?? "held") + ":" + preview.fingerprint;
     try {
       const saved = window.localStorage.getItem(key);
       const parsed = saved ? JSON.parse(saved) as { fingerprint?: string; fields?: EditableDraftFields } : null;
@@ -626,7 +717,78 @@ function ActiveDraftEditor({
     }
     setRateEstimateVisible(false);
     setPreviewPhotoId(null);
+    const sourceFitment = preview.fitment.applications.map((row) => ({ ...row }));
+    setCatalogFitment(sourceFitment);
+    setAppliedFitment(sourceFitment);
   }, [preview?.fingerprint]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const controller = new AbortController();
+    setCategoryLoading(true);
+    void fetch("/v1/seller-ui/ebay-categories?limit=2500", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("category tree unavailable");
+        return response.json() as Promise<{ source: string; categories: EbayCategoryChoice[] }>;
+      })
+      .then((result) => {
+        const currentId = preview.listing.categoryId ?? "";
+        const currentPath = preview.listing.category ?? preview.intelligence?.category.categoryPath ?? "";
+        const hasCurrent = result.categories.some((row) => row.categoryId === currentId);
+        setCategoryOptions(currentId && !hasCurrent
+          ? [{ categoryId: currentId, categoryName: preview.intelligence?.category.categoryName ?? currentPath, categoryPath: currentPath }, ...result.categories]
+          : result.categories);
+        setCategoryTreeVerified(result.source === "EBAY_OFFICIAL_MOTORS_CATEGORY_TREE");
+      })
+      .catch((error: unknown) => {
+        if ((error as { name?: string }).name === "AbortError") return;
+        const currentId = preview.listing.categoryId ?? "";
+        setCategoryOptions(currentId ? [{
+          categoryId: currentId,
+          categoryName: preview.intelligence?.category.categoryName ?? preview.listing.category ?? currentId,
+          categoryPath: preview.listing.category ?? preview.intelligence?.category.categoryPath ?? currentId
+        }] : []);
+        setCategoryTreeVerified(false);
+      })
+      .finally(() => setCategoryLoading(false));
+    return () => controller.abort();
+  }, [preview?.fingerprint]);
+
+  useEffect(() => {
+    const categoryId = fields?.categoryId;
+    if (!categoryId) {
+      setConditionPolicy(null);
+      return;
+    }
+    const controller = new AbortController();
+    setConditionPolicy(null);
+    void fetch(`/v1/seller-ui/ebay-category-policy/${encodeURIComponent(categoryId)}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("condition policy unavailable");
+        return response.json() as Promise<EbayConditionPolicy>;
+      })
+      .then((policy) => {
+        setConditionPolicy(policy);
+        if (!policy.verified) return;
+        setFields((current) => {
+          if (!current || current.categoryId !== policy.categoryId) return current;
+          const selected = policy.conditions.find((row) => row.conditionId === current.conditionId)
+            ?? policy.conditions.find((row) => row.description.toLowerCase() === current.condition.toLowerCase());
+          return selected ? {
+            ...current,
+            conditionId: selected.conditionId,
+            condition: selected.description,
+            conditionHelpText: selected.helpText
+          } : current;
+        });
+      })
+      .catch((error: unknown) => {
+        if ((error as { name?: string }).name !== "AbortError") {
+          setConditionPolicy({ categoryId, source: "UNAVAILABLE", verified: false, itemConditionRequired: true, conditions: [] });
+        }
+      });
+    return () => controller.abort();
+  }, [fields?.categoryId]);
 
   if (!preview || !fields) {
     return <section className="view editor-view"><div className="empty-state"><h2>No active draft</h2><p>Build or select a part first. PartQuill will not reuse fields from a previous item.</p><button className="primary" onClick={() => navigate("instant")}>List a part</button></div></section>;
@@ -645,6 +807,84 @@ function ActiveDraftEditor({
 
   function updateFitment(index: number, field: "vehicle" | "qualifier", value: string) {
     editField("fitment", activeFields.fitment.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value, state: "SELLER_EDITED" } : row));
+  }
+
+  function selectCategory(categoryId: string, secondary = false) {
+    const selected = categoryOptions.find((row) => row.categoryId === categoryId);
+    if (secondary) {
+      editField("secondaryCategoryId", categoryId);
+      setFields((current) => current ? { ...current, secondaryCategoryName: selected?.categoryPath ?? "" } : current);
+      return;
+    }
+    setFields((current) => current ? {
+      ...current,
+      categoryId,
+      categoryName: selected?.categoryPath ?? "",
+      conditionId: "",
+      conditionHelpText: ""
+    } : current);
+    onMaterialEdit();
+  }
+
+  function selectCondition(conditionId: string) {
+    const selected = conditionPolicy?.conditions.find((row) => row.conditionId === conditionId);
+    if (!selected) return;
+    setFields((current) => current ? {
+      ...current,
+      conditionId,
+      condition: selected.description,
+      conditionHelpText: selected.helpText
+    } : current);
+    onMaterialEdit();
+  }
+
+  function appendDescriptionMarkup(markup: string) {
+    editField("description", `${activeFields.description}${activeFields.description ? "\n" : ""}${markup}`);
+  }
+
+  function applyFitmentChanges() {
+    setAppliedFitment(activeFields.fitment.map((row) => ({ ...row })));
+    setFields((current) => current ? {
+      ...current,
+      description: replaceFitmentDescriptionBlock(current.description, current.fitment, current.descriptionFormat === "HTML")
+    } : current);
+    applyCompliantTitle();
+    showNotice("Applied: the Fits/For title and the marked compatibility block in the description now use these rows.");
+  }
+
+  function cancelFitmentChanges() {
+    editField("fitment", appliedFitment.map((row) => ({ ...row })));
+    showNotice("Unapplied fitment edits were cancelled. The title and description were not changed.");
+  }
+
+  function revertFitmentToCatalog() {
+    editField("fitment", catalogFitment.map((row) => ({ ...row })));
+    showNotice("Catalog rows restored in the editor. Select Apply to update the title and description.");
+  }
+
+  async function runBrowserPhotoEdit(photo: StagedPhoto, action: "clean" | "left" | "right") {
+    setPhotoEditBusy(photo.id);
+    try {
+      const result = action === "clean"
+        ? await cleanCatalogBackground(photo.url)
+        : await rotateCatalogImage(photo.url, action === "left" ? -90 : 90);
+      updatePhoto(photo.id, {
+        originalUrl: photo.originalUrl ?? photo.url,
+        url: result,
+        editState: "BROWSER_EDITED"
+      });
+      showNotice(action === "clean" ? "White-background catalog edit applied in this browser." : "Rotation applied in this browser.");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "The browser image edit could not be applied.");
+    } finally {
+      setPhotoEditBusy(null);
+    }
+  }
+
+  function restorePhoto(photo: StagedPhoto) {
+    if (!photo.originalUrl) return;
+    updatePhoto(photo.id, { url: photo.originalUrl, editState: "ORIGINAL" });
+    showNotice("Original seller image restored.");
   }
 
   function updateAspect(name: string, value: string) {
@@ -708,15 +948,24 @@ function ActiveDraftEditor({
   const sku = preview.listing.sku ?? (preview.intent.partNumber || "OEM part number required");
 
   function saveDraft() {
-    const key = "partquill-draft-v2:" + sku + ":" + activePreview.fingerprint;
+    const key = "partquill-draft-v3:" + sku + ":" + activePreview.fingerprint;
     window.localStorage.setItem(key, JSON.stringify({ sku, fingerprint: activePreview.fingerprint, fields: activeFields, title, price, quantity, photos: photos.map(({ id, name, source, publishEligible, rightsState }) => ({ id, name, source, publishEligible, rightsState })) }));
     showNotice("Draft saved under the exact OEM SKU and fingerprint. No other item can inherit these fields.");
   }
 
   const category = preview.intelligence?.category;
-  const categoryVerified = category?.state === "EBAY_TAXONOMY_VERIFIED"
+  const categoryVerified = categoryTreeVerified
+    && categoryOptions.some((row) => row.categoryId === fields.categoryId);
+  const categoryFallback = category?.state === "EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW"
     && fields.categoryId === (category.categoryId ?? "");
-  const categoryFallback = category?.state === "EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW";
+  const secondaryCategoryValid = !fields.secondaryCategoryId
+    || (fields.secondaryCategoryId !== fields.categoryId
+      && categoryTreeVerified
+      && categoryOptions.some((row) => row.categoryId === fields.secondaryCategoryId));
+  const secondaryCategoryPublishable = !fields.secondaryCategoryId;
+  const conditionReady = Boolean(conditionPolicy?.verified)
+    && (!conditionPolicy?.itemConditionRequired || Boolean(fields.conditionId))
+    && conditionPolicy?.conditions.some((row) => row.conditionId === fields.conditionId) === true;
   const shipping = preview.intelligence?.shipping;
   const references = preview.media.catalogReferences;
   const firstReference = references.find((reference) => reference.primary) ?? references[0];
@@ -779,8 +1028,8 @@ function ActiveDraftEditor({
   const authenticityConfirmed = fields.authenticity !== "AUTHENTICITY_NOT_CONFIRMED";
   const priceSyntaxValid = /^\d+(?:\.\d{1,2})?$/.test(price.trim());
   const numericPrice = Number(price);
-  const priceValid = priceSyntaxValid && (fields.giveaway ? numericPrice === 0 : numericPrice > 0);
-  const ebayPriceEligible = priceValid && !fields.giveaway && numericPrice > 0;
+  const priceValid = priceSyntaxValid && numericPrice >= 0.99;
+  const ebayPriceEligible = priceValid;
   const quantityValid = /^\d+$/.test(quantity.trim()) && Number.isInteger(Number(quantity)) && Number(quantity) >= 0 && Number(quantity) <= 999;
   const internationalRequested = fields.international === "Enabled after origin + HS review";
   const tariffReady = !internationalRequested || (
@@ -792,6 +1041,9 @@ function ActiveDraftEditor({
     && brandRulePass
     && authenticityConfirmed
     && categoryVerified
+    && secondaryCategoryValid
+    && secondaryCategoryPublishable
+    && conditionReady
     && requiredAspectsComplete
     && publishablePhotos.length > 0
     && fields.shippingConfirmed
@@ -801,6 +1053,7 @@ function ActiveDraftEditor({
     && quantityValid
     && tariffReady
     && Boolean(title.trim());
+  const fitmentDirty = JSON.stringify(activeFields.fitment) !== JSON.stringify(appliedFitment);
   const editorTabs: Array<[EditorTab, string]> = [
     ["listing", "Listing"], ["identity", "Identity"], ["condition", "Condition"], ["fitment", "Fitment"],
     ["images", "Images"], ["shipping", "Shipping"], ["pricing", "Pricing"], ["policies", "Policies"], ["preview", "Buyer preview"]
@@ -842,13 +1095,13 @@ function ActiveDraftEditor({
         {heroPhoto ? <button className="active-catalog-preview" onClick={() => setEditorTab("images")}><img src={heroPhoto.url} alt={heroPhoto.name}/><span><b>Main image · {heroPhoto.name}</b><small>{heroPhoto.publishEligible ? "Eligible after normal review" : "Reference-only · blocked from eBay payload"}</small></span><Icon name="arrow"/></button> : firstReference && <button className="active-catalog-preview" onClick={() => setEditorTab("images")}><img src={firstReference.viewUrl} alt={"Catalog evidence page " + firstReference.pageId}/><span><b>Evidence only · page {firstReference.pageId}</b><small>Move a permitted item photo into the main workbench</small></span><Icon name="arrow"/></button>}
         <label className="form-field"><span>Title <small>{title.length}/80</small></span><input value={title} maxLength={80} onChange={(event) => { setTitle(event.target.value); onMaterialEdit(); }} onBlur={(event) => { const normalized = properCaseTitle(event.target.value); if (normalized !== title) { setTitle(normalized); onMaterialEdit(); } }}/><small className={brandRulePass ? "" : "field-error"}>{brandRulePass ? "Proper case retained. Compatible brands require Fits/For unless the physical item is confirmed genuine." : unqualifiedVeroMatches.length ? "Unqualified VeRO profile match: " + unqualifiedVeroMatches.join(", ") : compatibleBrand + " appears without Fits/For while authenticity is not confirmed."}</small></label>
         <div className="form-grid">
-          <label className="form-field"><span>eBay leaf category ID</span><input inputMode="numeric" value={fields.categoryId} onChange={(event) => editField("categoryId", event.target.value.replace(/\D/g, ""))}/><small>{categoryVerified ? "Official exact leaf matched." : categoryFallback ? "Fallback 9886 is visible but held for a better leaf." : "Preflight will validate this as an active leaf."}</small></label>
-          <label className="form-field"><span>eBay leaf category name/path</span><input value={fields.categoryName} onChange={(event) => editField("categoryName", event.target.value)}/></label>
-          <label className="form-field"><span>Condition</span><select value={fields.condition} onChange={(event) => editField("condition", event.target.value)}><option>New</option><option>Used</option><option>Remanufactured</option><option>Not specified</option></select><small>Seller-controlled physical fact.</small></label>
+          <label className="form-field category-field"><span>Primary eBay Motors category</span><select value={fields.categoryId} disabled={categoryLoading} onChange={(event) => selectCategory(event.target.value)}><option value="">{categoryLoading ? "Loading official categories…" : "Select an active leaf category"}</option>{categoryOptions.map((row) => <option value={row.categoryId} key={row.categoryId}>{row.categoryName} — {row.categoryId}</option>)}</select><small>{fields.categoryName || (categoryVerified ? "Official active leaf." : "Official tree validation required.")}</small></label>
+          <label className="form-field category-field"><span>Second eBay category · optional</span><select value={fields.secondaryCategoryId} disabled={categoryLoading} onChange={(event) => selectCategory(event.target.value, true)}><option value="">No second category</option>{categoryOptions.filter((row) => row.categoryId !== fields.categoryId).map((row) => <option value={row.categoryId} key={row.categoryId}>{row.categoryName} — {row.categoryId}</option>)}</select><small>{fields.secondaryCategoryId ? "Saved with the draft. eBay permits this only through the Trading API and may charge another insertion fee; the current Inventory API publish route is held." : "Optional. The AI-selected primary category remains the default."}</small></label>
+          <label className="form-field"><span>Condition</span><select value={fields.conditionId} disabled={!conditionPolicy?.verified} onChange={(event) => selectCondition(event.target.value)}><option value="">{conditionPolicy ? conditionPolicy.verified ? "Select an eBay category condition" : "eBay category policy unavailable" : "Loading category conditions…"}</option>{conditionPolicy?.conditions.map((row) => <option value={row.conditionId} key={row.conditionId}>{row.description}{row.usage === "RESTRICTED" ? " · restricted" : ""}</option>)}</select><small>{fields.conditionHelpText || "Choices come from eBay Metadata for the selected category; seller confirms the physical item."}</small></label>
           <label className="form-field"><span>Quantity</span><input type="number" min="0" max="999" value={quantity} onChange={(event) => { setQuantity(event.target.value); onMaterialEdit(); }}/><small>0 is valid and keeps the draft out of stock.</small></label>
           <label className="form-field"><span>Custom SKU</span><input value={sku} readOnly/><small>System invariant: exact normalized OEM / manufacturer part number.</small></label>
         </div>
-        <label className="form-field"><span>Buyer-visible description</span><textarea rows={8} value={fields.description} onChange={(event) => editField("description", event.target.value)}/></label>
+        <section className="description-editor"><header><div><strong>Buyer-visible description</strong><small>Seller-authored content is fully editable. Choose plain text or sanitized HTML.</small></div><div className="description-mode"><button className={fields.descriptionFormat === "TEXT" ? "active" : ""} onClick={() => editField("descriptionFormat", "TEXT")}>Plain text</button><button className={fields.descriptionFormat === "HTML" ? "active" : ""} onClick={() => editField("descriptionFormat", "HTML")}>HTML</button></div></header>{fields.descriptionFormat === "HTML" && <div className="html-toolbar"><button onClick={() => appendDescriptionMarkup("<h3>Details</h3>")}>Heading</button><button onClick={() => appendDescriptionMarkup("<p><strong>Important:</strong> </p>")}>Bold note</button><button onClick={() => appendDescriptionMarkup("<ul><li></li></ul>")}>List</button><button onClick={() => appendDescriptionMarkup("<table><tr><th>Detail</th><th>Value</th></tr><tr><td></td><td></td></tr></table>")}>Table</button></div>}<textarea rows={12} value={fields.description} onChange={(event) => editField("description", event.target.value)} spellCheck/><div className="description-live-preview"><span>Safe buyer preview</span>{fields.descriptionFormat === "HTML" ? <div dangerouslySetInnerHTML={{ __html: sanitizeSellerHtml(fields.description) }}/> : <p>{fields.description}</p>}</div></section>
       </div>}
 
       {editorTab === "identity" && <div className="form-section"><SectionHeading eyebrow="Brand and VeRO controls" title="Describe what the physical item is" body="The public VeRO profile index is downloaded read-only, but eBay says it is not a complete list. The Fits/For rule therefore applies by brand relationship, not only list membership."/>
@@ -859,16 +1112,16 @@ function ActiveDraftEditor({
           <label className="form-field"><span>Compatible vehicle brand</span><input value={fields.compatibleBrand} onChange={(event) => editField("compatibleBrand", event.target.value)}/><small>One deterministic make is selected from the strongest fitment evidence; editing marks a seller correction.</small></label>
           <label className="form-field"><span>Product type</span><input value={fields.productType} onChange={(event) => editField("productType", event.target.value)}/></label>
         </div>
-        <button className="secondary" onClick={applyCompliantTitle}>Rebuild title with Fits/For rule</button>
+        <button className="secondary" onClick={applyCompliantTitle}>Apply brand relationship to title</button>
         <div className="required-aspects-card"><header><span><strong>Four pinned eBay item specifics</strong><small>{requiredAspectCount}/4 complete · these fields cannot be renamed or removed</small></span><Badge tone={requiredAspectsComplete ? "green" : "amber"}>{requiredAspectsComplete ? "Complete" : "Required"}</Badge></header>{REQUIRED_EBAY_ASPECTS.map((name) => <label key={name}><span>{name}<i>Required</i></span>{name === "California Prop 65 Warning" ? <select value={fields.aspects[name] ?? ""} onChange={(event) => updateAspect(name, event.target.value)}><option value="">Seller must choose</option><option value="No">No</option><option value="Yes — see item description">Yes — see item description</option><option value="Does not apply">Does not apply</option></select> : <input value={fields.aspects[name] ?? ""} onChange={(event) => updateAspect(name, event.target.value)}/>}</label>)}</div>
         <div className="editable-specifics"><div className="table-head"><span>Optional item specific</span><span>Value</span><span/></div>{optionalAspects.map(([name, value]) => <div key={name}><input defaultValue={name} onBlur={(event) => renameAspect(name, event.target.value)}/><input value={value} onChange={(event) => updateAspect(name, event.target.value)}/><button onClick={() => removeAspect(name)}>Remove</button></div>)}
           <div><input placeholder="New item specific" value={newAspectName} onChange={(event) => setNewAspectName(event.target.value)}/><input disabled placeholder="Add the field first"/><button disabled={!newAspectName.trim()} onClick={() => { updateAspect(newAspectName.trim(), ""); setNewAspectName(""); }}>Add</button></div>
         </div>
       </div>}
 
-      {editorTab === "condition" && <div className="form-section"><SectionHeading eyebrow="Physical-item facts" title="Condition is editable but must match the item" body="Catalog scans cannot prove unused condition, package contents, defects or function."/><label className="form-field"><span>Condition</span><select value={fields.condition} onChange={(event) => editField("condition", event.target.value)}><option>New</option><option>Used</option><option>Remanufactured</option><option>Not specified</option></select></label><div className="smallest-question"><Icon name="camera"/><div><span>Required evidence</span><strong>Add seller-owned whole-item and label photos</strong><p>Used, damaged or defective items must use photos of the exact item, not a stock or marketplace reference.</p></div></div></div>}
+      {editorTab === "condition" && <div className="form-section"><SectionHeading eyebrow="Physical-item facts" title="Use the exact eBay condition for this category" body="The list refreshes from eBay Metadata whenever the primary category changes. Catalog scans cannot prove unused condition, package contents, defects or function."/><label className="form-field"><span>eBay condition</span><select value={fields.conditionId} disabled={!conditionPolicy?.verified} onChange={(event) => selectCondition(event.target.value)}><option value="">{conditionPolicy?.verified ? "Select condition" : "Condition policy is unavailable"}</option>{conditionPolicy?.conditions.map((row) => <option value={row.conditionId} key={row.conditionId}>{row.description}{row.usage === "RESTRICTED" ? " · restricted" : ""}</option>)}</select><small>{fields.conditionHelpText || "An exact category condition is required before preflight."}</small></label><label className="inline-image-upload"><Icon name="camera"/><span><strong>Add condition and label photos</strong><small>Upload seller-owned whole-item, packaging, wear and label views without leaving this screen.</small></span><input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label><div className="smallest-question"><Icon name="camera"/><div><span>Required evidence</span><strong>Add seller-owned whole-item and label photos</strong><p>Used, damaged or defective items must use photos of the exact item, not a stock or marketplace reference.</p></div></div></div>}
 
-      {editorTab === "fitment" && <div className="form-section"><SectionHeading eyebrow="Editable compatibility inspector" title={fields.fitment.length + " application row" + (fields.fitment.length === 1 ? "" : "s")} body="Rows remain attributable. Edited rows are marked seller-edited and must pass compatibility preflight."/><div className="compatibility-table editable"><div className="table-head"><span>Application</span><span>Qualifier</span><span>Status</span><span/></div>{fields.fitment.map((row, index) => <div key={index}><input value={row.vehicle} onChange={(event) => updateFitment(index, "vehicle", event.target.value)}/><input value={row.qualifier} onChange={(event) => updateFitment(index, "qualifier", event.target.value)}/><Badge tone={row.state === "SELLER_EDITED" ? "orange" : "amber"}>{row.state.replaceAll("_", " ")}</Badge><button onClick={() => editField("fitment", fields.fitment.filter((_, rowIndex) => rowIndex !== index))}>Delete</button></div>)}</div><button className="secondary" onClick={() => editField("fitment", [...fields.fitment, { vehicle: "", qualifier: "", state: "SELLER_EDITED" }])}>Add fitment row</button></div>}
+      {editorTab === "fitment" && <div className="form-section"><SectionHeading eyebrow="Editable compatibility inspector" title={fields.fitment.length + " application row" + (fields.fitment.length === 1 ? "" : "s")} body="Edits appear in the impact preview immediately, but title and description stay unchanged until you select Apply."/><div className="fitment-impact-preview"><span>Live, not yet applied</span><strong>{properCaseTitle([fields.actualBrand.toLowerCase().replace(/[^a-z0-9]/g, "") === "generalmotors" ? "GM" : fields.actualBrand, sku, fields.productType || "Automotive Part", fields.authenticity === "AFTERMARKET_COMPATIBLE" && fields.compatibleBrand ? `Fits ${fields.compatibleBrand}` : "", fields.fitment.map((row) => row.vehicle.match(/\b\d{4}(?:[–-]\d{4})?\b/)?.[0]).find(Boolean) ?? ""].filter(Boolean).join(" "))}</strong><p>{fields.fitment.length ? fields.fitment.map((row) => `${row.vehicle}${row.qualifier ? ` — ${row.qualifier}` : ""}`).join(" · ") : "No compatibility rows will be published."}</p><small>Apply updates both the Fits/For title rule and a clearly marked seller-reviewed compatibility block in the description. Cancel restores the last applied rows. Revert restores the original catalog rows.</small></div><div className="compatibility-table editable"><div className="table-head"><span>Application</span><span>Qualifier</span><span>Status</span><span/></div>{fields.fitment.map((row, index) => <div key={index}><input value={row.vehicle} onChange={(event) => updateFitment(index, "vehicle", event.target.value)}/><input value={row.qualifier} onChange={(event) => updateFitment(index, "qualifier", event.target.value)}/><Badge tone={row.state === "SELLER_EDITED" ? "orange" : "amber"}>{row.state.replaceAll("_", " ")}</Badge><button onClick={() => editField("fitment", fields.fitment.filter((_, rowIndex) => rowIndex !== index))}>Delete</button></div>)}</div><div className="fitment-actions"><button className="secondary" onClick={() => editField("fitment", [...fields.fitment, { vehicle: "", qualifier: "", state: "SELLER_EDITED" }])}>Add fitment row</button><button className="secondary" disabled={!fitmentDirty} onClick={cancelFitmentChanges}>Cancel edits</button><button className="secondary" onClick={revertFitmentToCatalog}>Revert to catalog</button><button className="primary" disabled={!fitmentDirty} onClick={applyFitmentChanges}>Apply to title + description</button></div></div>}
 
       {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Main listing image workbench" title="Choose, order and remove up to 24 images" body="Archived references can be moved into this main visual workbench. Personal-reference images remain blocked from the eBay payload unless rights are separately cleared."/>
         <section className="main-image-workbench">
@@ -883,7 +1136,13 @@ function ActiveDraftEditor({
             onDrop={(event) => { event.preventDefault(); if (draggedPhotoId) reorderPhoto(draggedPhotoId, index); setDraggedPhotoId(null); }}
             onDragEnd={() => setDraggedPhotoId(null)}
             className={[index === 0 ? "main" : "", draggedPhotoId === photo.id ? "dragging" : ""].filter(Boolean).join(" ")}
-          ><button className="drag-handle" type="button" aria-label={`Drag ${photo.name} to reorder`}>⋮⋮</button><button className="image-preview-button" type="button" onClick={() => setPreviewPhotoId(photo.id)}><img src={photo.url} alt={photo.name}/></button><div><strong>{index === 0 ? "MAIN · " : ""}{photo.name}</strong><small>{photo.source.replaceAll("_", " ")}</small><Badge tone={photo.publishEligible ? "green" : "amber"}>{photo.publishEligible ? "Listing eligible" : "Reference only"}</Badge></div><div className="image-order-actions"><button disabled={index === 0} aria-label={`Move ${photo.name} left`} onClick={() => reorderPhoto(photo.id, index - 1)}>←</button><button disabled={index === photos.length - 1} aria-label={`Move ${photo.name} right`} onClick={() => reorderPhoto(photo.id, index + 1)}>→</button><button disabled={index === 0} onClick={() => setMainPhoto(photo.id)}>Set main</button><button onClick={() => removePhoto(photo.id)}>Delete</button></div></article>)}</div>
+          >
+            <button className="drag-handle" type="button" aria-label={`Drag ${photo.name} to reorder`}>⋮⋮</button>
+            <button className="image-preview-button" type="button" onClick={() => setPreviewPhotoId(photo.id)}><img src={photo.url} alt={photo.name}/></button>
+            <div><strong>{index === 0 ? "MAIN · " : ""}{photo.name}</strong><small>{photo.source.replaceAll("_", " ")} · {(photo.editState ?? "ORIGINAL").replaceAll("_", " ")}</small><Badge tone={photo.publishEligible ? "green" : "amber"}>{photo.publishEligible ? "Listing eligible" : "Reference only"}</Badge></div>
+            <div className="image-order-actions"><button disabled={index === 0} aria-label={`Move ${photo.name} left`} onClick={() => reorderPhoto(photo.id, index - 1)}>←</button><button disabled={index === photos.length - 1} aria-label={`Move ${photo.name} right`} onClick={() => reorderPhoto(photo.id, index + 1)}>→</button><button disabled={index === 0} onClick={() => setMainPhoto(photo.id)}>Set main</button><button onClick={() => removePhoto(photo.id)}>Delete</button></div>
+            <div className="photo-edit-actions"><span>Edit here · original is retained</span><button disabled={photoEditBusy === photo.id} onClick={() => void runBrowserPhotoEdit(photo, "left")}>Rotate left</button><button disabled={photoEditBusy === photo.id} onClick={() => void runBrowserPhotoEdit(photo, "right")}>Rotate right</button><button disabled={photoEditBusy === photo.id || !photo.publishEligible} onClick={() => void runBrowserPhotoEdit(photo, "clean")}>{photoEditBusy === photo.id ? "Editing…" : "Clean white background"}</button><button disabled title={imageStudioActivated ? "Private AI processing is connected but requires its separate access token; the in-browser editor works here now" : "Private AI provider is not connected; the in-browser editor works here now"}>{imageStudioActivated ? "AI edit · private access" : "AI edit not connected"}</button><button disabled={!photo.originalUrl || photo.editState === "ORIGINAL"} onClick={() => restorePhoto(photo)}>Restore original</button></div>
+          </article>)}</div>
         </section>
         {references.length ? <CatalogEvidenceViewer references={references}/> : <div className="empty-state"><h3>No linked catalog diagram was found</h3><p>The catalog row is retained, but PartQuill will not invent a schematic relationship.</p></div>}
         <EbayReferenceGallery lookup={ebayReference} loading={ebayReferenceLoading} partNumber={preview.intent.partNumber}/>
@@ -894,7 +1153,7 @@ function ActiveDraftEditor({
         <div className="intelligence-warning"><Icon name="shield"/><span><strong>Rights gate stays attached to each image.</strong> A private eBay-derived archive is useful for personal reference and identification, but cannot silently become a seller-owned listing photo.</span></div>
       </div>}
 
-      {editorTab === "shipping" && <div className="form-section"><SectionHeading eyebrow="P1–P17 calculated-shipping intelligence" title={fields.packageProfileId ? fields.packageProfileId + " package" : shipping?.shippingClass ?? "Packed measurements required"} body="PartQuill starts with the Ferrari product-family estimate, then uses the Deere dimension-first selector to choose the smallest saved package that fits."/>
+      {editorTab === "shipping" && <div className="form-section"><SectionHeading eyebrow="P1–P17 calculated-shipping intelligence" title={fields.packageProfileId ? fields.packageProfileId + " package" : shipping?.shippingClass ?? "Packed measurements required"} body="PartQuill uses deterministic real-world part-family evidence and a smallest-fitting saved-package rule. The result is a close planning estimate, not a guaranteed measurement; the seller must verify it."/>
         <div className="shipping-mode-grid">
           <button className={fields.shippingMode === "CALCULATED" ? "selected" : ""} onClick={() => editField("shippingMode", "CALCULATED")}><Icon name="truck"/><span><strong>Calculated shipping</strong><small>Default · buyer pays the eBay-calculated service cost.</small></span></button>
           <button className={fields.shippingMode === "FREE" ? "selected" : ""} onClick={() => editField("shippingMode", "FREE")}><Icon name="money"/><span><strong>Free domestic shipping</strong><small>Seller absorbs the selected service cost.</small></span></button>
@@ -910,20 +1169,32 @@ function ActiveDraftEditor({
           <label className="form-field"><span>Packed scale weight (lb)</span><input type="number" min="0" step="0.01" value={fields.packedWeight} onChange={(event) => editField("packedWeight", event.target.value)}/></label>
         </div>
         <div className="shipping-estimate-grid"><article><span>DIM weight</span><strong>{dimWeight || "—"} lb</strong><small>L × W × H ÷ 139, rounded up</small></article><article><span>Calculated billable</span><strong>{billableWeight || "—"} lb</strong><small>Greater of packed or DIM weight</small></article><article><span>Shipping class</span><strong>{shipping?.shippingClass ?? "Measurement required"}</strong><small>{shipping?.packageSelectionState.replaceAll("_", " ") ?? "No preset"}</small></article><article><span>Rule confidence</span><strong>{Math.round((shipping?.confidence ?? 0) * 100)}%</strong><small>{shipping?.productFamilyProfileId ?? "No family match"}</small></article></div>
-        <section className="rate-planner"><header><div><span>Planning estimate only</span><strong>Origin ZIP → destination ZIP</strong><small>This is not a live carrier or buyer quote. Checkout rates remain owned by eBay.</small></div><Badge tone="amber">Rough estimate</Badge></header><div className="rate-zip-grid"><label><span>Ship from ZIP</span><input inputMode="numeric" maxLength={5} placeholder="12345" value={fields.originZip} onChange={(event) => editField("originZip", event.target.value.replace(/\D/g, "").slice(0, 5))}/></label><label><span>Ship to ZIP</span><input inputMode="numeric" maxLength={5} placeholder="90210" value={fields.destinationZip} onChange={(event) => editField("destinationZip", event.target.value.replace(/\D/g, "").slice(0, 5))}/></label><button disabled={!zipPairValid || !shippingFieldsValid || !carrierSelectionValid} onClick={() => setRateEstimateVisible(true)}>Estimate planning range</button></div>{rateEstimateVisible && <div className="planning-rate-results">{planningRates.map((rate) => <article key={rate.carrier}><strong>{CARRIER_LABELS[rate.carrier]}</strong><span>{rate.service}</span><b>Cost model ~${rate.estimatedCost.toFixed(2)}</b><small>Proposed seller charge with 10% service margin: ${rate.sellerCharge.toFixed(2)}</small></article>)}</div>}</section>
-        <section className="shipping-routing-gate"><header><Icon name="shield"/><span><strong>Shopify discounted-label route · gated</strong><small>No eBay buyer is sent to Shop Pay. Buyer payment stays entirely on eBay.</small></span><Badge tone="amber">Connection required</Badge></header><ol><li><b>1</b><span>Import the paid eBay order into the seller workflow.</span></li><li><b>2</b><span>Confirm Shopify store authorization and label-purchase eligibility.</span></li><li><b>3</b><span>Show actual carrier cost and any approved 10% seller-side service margin before purchase.</span></li><li><b>4</b><span>Buy the label, then upload carrier and tracking through eBay Fulfillment.</span></li></ol><p>Live Shopify rate comparison, label purchase, payment capture, and eBay tracking writes are all disabled until their separate credentials and approvals are connected.</p></section>
+        <section className={`rate-planner ${fields.shippingMode === "FREE" ? "gated" : ""}`}><header><div><span>Automated estimate only</span><strong>Estimate shipping cost by ZIP</strong><small>This is not a live carrier or buyer quote. It uses the confirmed package facts to provide rough USPS, UPS and FedEx guidance; eBay owns checkout rates.</small></div><Badge tone="amber">Rough estimate</Badge></header>{fields.shippingMode === "FREE" && <div className="free-shipping-gate"><Icon name="shield"/><span><strong>Shipping estimate disabled while free shipping is selected.</strong><small>Switch back to calculated shipping to compare buyer-paid planning estimates.</small></span></div>}<div className="rate-zip-grid"><label><span>Ship from ZIP</span><input disabled={fields.shippingMode === "FREE"} inputMode="numeric" maxLength={5} placeholder="12345" value={fields.originZip} onChange={(event) => editField("originZip", event.target.value.replace(/\D/g, "").slice(0, 5))}/></label><label><span>Ship to ZIP</span><input disabled={fields.shippingMode === "FREE"} inputMode="numeric" maxLength={5} placeholder="90210" value={fields.destinationZip} onChange={(event) => editField("destinationZip", event.target.value.replace(/\D/g, "").slice(0, 5))}/></label><button disabled={fields.shippingMode === "FREE" || !zipPairValid || !shippingFieldsValid || !carrierSelectionValid} onClick={() => setRateEstimateVisible(true)}>Get shipping estimate</button></div>{fields.shippingMode === "CALCULATED" && rateEstimateVisible && <div className="planning-rate-results">{planningRates.map((rate) => <article key={rate.carrier}><strong>{CARRIER_LABELS[rate.carrier]}</strong><span>{rate.service}</span><b>Estimated carrier cost ~${rate.estimatedCost.toFixed(2)}</b><small>Suggested buyer charge with a 10% planning buffer: ${rate.sellerCharge.toFixed(2)}</small></article>)}</div>}</section>
+        <section className="shipping-routing-gate"><header><Icon name="shield"/><span><strong>Shipping labels are not sold in PartQuill</strong><small>These values are listing guidance only.</small></span><Badge tone="slate">No label purchase</Badge></header><p>After an order, purchase the label through eBay—or purchase it from your own approved provider and enter the carrier and tracking directly in eBay. PartQuill does not collect buyer card details, route payment through Shop Pay, sell a label, or upload tracking in this release.</p></section>
         <label className="approval-check"><input type="checkbox" checked={fields.shippingConfirmed} onChange={(event) => editField("shippingConfirmed", event.target.checked)}/><span><strong>I weighed and measured the final packed carton.</strong><small>Checking this changes the values from estimates to seller-confirmed shipping facts.</small></span></label>
         <div className="intelligence-warning"><Icon name={fields.shippingConfirmed ? "check" : "alert"}/><span><strong>{fields.shippingConfirmed ? "Packed facts confirmed." : "Estimate, not a measured fact."}</strong> {shipping?.checkoutGate && !fields.shippingConfirmed ? "Custom or freight handling remains held." : "Calculated shipping can use the confirmed packed values after category and policy preflight."}</span></div>
       </div>}
 
-      {editorTab === "pricing" && <div className="form-section"><SectionHeading eyebrow="Seller-controlled economics" title="Price and zero handling" body="Catalog and marketplace data do not silently change the seller’s price."/><label className="form-field"><span>Buy It Now price</span><input type="number" min="0" step="0.01" value={price} disabled={fields.giveaway} onChange={(event) => { setPrice(event.target.value); onMaterialEdit(); }}/><small className={priceValid ? "" : "field-error"}>{fields.giveaway ? "Explicit giveaway: $0.00 may be saved, but cannot become an eBay fixed-price listing." : numericPrice === 0 ? "Zero is not a valid Buy It Now price. Mark the draft as a giveaway or enter a positive amount." : priceSyntaxValid ? "Positive seller-entered eBay price." : "Enter a number with no more than two decimal places."}</small></label><label className="approval-check giveaway-toggle"><input type="checkbox" checked={fields.giveaway} onChange={(event) => { const checked = event.target.checked; editField("giveaway", checked); if (checked) setPrice("0.00"); }}/><span><strong>Free / giveaway draft</strong><small>Explicitly permits a zero-value internal draft. eBay publication remains gated until a positive Buy It Now price is entered.</small></span></label></div>}
+      {editorTab === "pricing" && <div className="form-section"><SectionHeading eyebrow="Seller-controlled economics" title="eBay Motors price" body="The seller-stated price is preserved when it is legal. If the initial command has no price—or gives a lower price—the draft defaults to $0.99."/><label className="form-field"><span>Buy It Now price</span><input type="number" min="0.99" step="0.01" value={price} onChange={(event) => { const next = event.target.value; setPrice(next && Number(next) >= 0.99 ? next : "0.99"); onMaterialEdit(); }}/><small className={priceValid ? "" : "field-error"}>{priceValid ? "Seller-entered price. eBay Motors minimum enforced: $0.99." : "Enter $0.99 or more. Lower values and giveaways are not permitted for this eBay Motors draft."}</small></label><div className="price-floor-note"><Icon name="shield"/><span><strong>Hard floor: $0.99</strong><small>The field, preflight policy, and server payload all enforce the same minimum.</small></span></div></div>}
 
-      {editorTab === "policies" && <div className="form-section"><SectionHeading eyebrow="Editable publication controls" title="eBay policy and customs controls" body="Only supported structured choices are used. The selected business policies are revalidated against the seller account before a public payload."/><div className="form-grid"><label className="form-field"><span>Handling time</span><select value={fields.handlingTime} onChange={(event) => editField("handlingTime", event.target.value)}><option>1 business day</option><option>2 business days</option><option>3 business days</option></select></label><label className="form-field"><span>Returns</span><select value={fields.returns} onChange={(event) => editField("returns", event.target.value)}><option>30 days · buyer-paid</option><option>30 days · free returns</option><option>60 days · buyer-paid</option><option>60 days · free returns</option><option>No returns · where eBay permits</option></select><small>eBay Money Back Guarantee rights still apply where required.</small></label><label className="form-field"><span>International</span><select value={fields.international} onChange={(event) => editField("international", event.target.value)}><option>Held until origin is verified</option><option>Disabled</option><option>Enabled after origin + HS review</option></select><small>Domestic calculated shipping is not blocked by missing origin.</small></label></div>
+      {editorTab === "policies" && <div className="form-section"><SectionHeading eyebrow="Editable publication controls" title="eBay policy and customs controls" body="Only supported structured choices are used. The selected business policies are revalidated against the seller account before a public payload."/><div className="form-grid"><label className="form-field"><span>Handling time</span><select value={fields.handlingTime} onChange={(event) => editField("handlingTime", event.target.value)}>{handlingTimes.map((option) => <option key={option.days} value={option.label}>{option.label}</option>)}</select><small>Current eBay US choices run from same-day through 40 business days; 45 days is not an allowed value.</small></label><label className="form-field"><span>Returns</span><select value={fields.returns} onChange={(event) => editField("returns", event.target.value)}><option>30 days · buyer-paid</option><option>30 days · free returns</option><option>60 days · buyer-paid</option><option>60 days · free returns</option><option>No returns · where eBay permits</option></select><small>eBay Money Back Guarantee rights still apply where required.</small></label><label className="form-field"><span>International</span><select value={fields.international} onChange={(event) => editField("international", event.target.value)}><option>Held until origin is verified</option><option>Disabled</option><option>Enabled after origin + HS review</option></select><small>Domestic calculated shipping is not blocked by missing origin.</small></label></div>
         <div className="policy-links"><a href="https://www.ebay.com/help/selling/business-policies/business-policies?id=4212" target="_blank" rel="noreferrer">eBay business policies <Icon name="arrow"/></a><a href="https://www.ebay.com/help/selling/managing-returns-refunds/handling-return-requests/setting-return-policy?id=4368" target="_blank" rel="noreferrer">eBay return rules <Icon name="arrow"/></a></div>
         <section className="tariff-review"><header><div><span>Customs classification candidate</span><strong>{preview.tariff?.htsCode ?? "No narrow candidate"}</strong><small>{preview.tariff?.description ?? "A customs reviewer must classify this item before international publication."}</small></div><Badge tone={preview.tariff?.state === "CANDIDATE_REQUIRES_SELLER_REVIEW" ? "amber" : "slate"}>{preview.tariff?.state === "CANDIDATE_REQUIRES_SELLER_REVIEW" ? `${Math.round((preview.tariff?.confidence ?? 0) * 100)}% candidate` : "Unclassified"}</Badge></header><div className="form-grid"><label className="form-field"><span>Country of origin · ISO-2</span><input maxLength={2} placeholder="US" value={fields.countryOfOrigin} onChange={(event) => editField("countryOfOrigin", event.target.value.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 2))}/></label><label className="form-field"><span>HS code · 6–10 digits</span><input inputMode="numeric" placeholder="870830" value={fields.hsCode} onChange={(event) => editField("hsCode", event.target.value.replace(/\D/g, "").slice(0, 10))}/><small>{preview.tariff?.hsCode ? `Suggested HS ${preview.tariff.hsCode}${preview.tariff.htsCode ? ` / US HTS ${preview.tariff.htsCode}` : ""}.` : "No description-only candidate is available; enter a reviewed classification."}</small></label></div><label className="approval-check"><input type="checkbox" checked={fields.tariffConfirmed} onChange={(event) => editField("tariffConfirmed", event.target.checked)}/><span><strong>I reviewed the item function, composition, vehicle class and origin.</strong><small>Description matching proposes a candidate; it cannot guarantee a 100% accurate customs classification.</small></span></label><a href={preview.tariff?.sourceUrl ?? "https://hts.usitc.gov/"} target="_blank" rel="noreferrer">Open the official USITC HTS source <Icon name="arrow"/></a></section>
         <div className="specifics-table">{preview.issues.map((issue) => <div key={issue.code}><span>{issue.code}</span><strong>{issue.message}</strong><Badge tone={issue.blocking ? "amber" : "slate"}>{issue.blocking ? "Blocking" : "Review"}</Badge></div>)}</div></div>}
 
-      {editorTab === "preview" && <div className="form-section"><SectionHeading eyebrow="eBay-style preview · draft only" title="Exact current buyer view" body="This mock uses the current title, ordered images, price, quantity, shipping, returns, item specifics and fitment. Nothing is sent to eBay."/><article className="ebay-listing-preview"><header><span className="ebay-wordmark">ebay</span><label><Icon name="search"/><input readOnly value="Search for anything"/></label><span>Draft preview</span></header><nav>{fields.categoryName || "eBay Motors › Parts & Accessories"}</nav><div className="ebay-preview-body"><section className="ebay-gallery"><div className="ebay-thumbnails">{photos.map((photo, index) => <button key={photo.id} className={previewPhoto?.id === photo.id ? "active" : ""} onClick={() => setPreviewPhotoId(photo.id)}><img src={photo.url} alt={`View ${index + 1}: ${photo.name}`}/></button>)}</div><div className="ebay-main-photo">{previewPhoto ? <img src={previewPhoto.url} alt={previewPhoto.name}/> : <div><Icon name="camera"/><span>Seller photo required</span></div>}</div></section><section className="ebay-purchase-panel"><small>PartQuill seller draft · SKU {sku}</small><h2>{title || "Title required"}</h2><div className="ebay-condition"><span>Condition:</span><strong>{fields.condition}</strong></div><div className="ebay-price-line"><strong>{fields.giveaway ? "Free draft" : `$${price || "—"}`}</strong>{Number(quantity) === 0 && <Badge tone="red">Out of stock</Badge>}</div><div className="ebay-quantity"><span>Quantity:</span><select value={quantity} disabled><option>{quantity}</option></select><span>{Number(quantity) > 0 ? `${quantity} available` : "0 available"}</span></div><button className="ebay-buy" disabled={!ebayPriceEligible || Number(quantity) === 0}>Buy It Now</button><button className="ebay-cart" disabled={!ebayPriceEligible || Number(quantity) === 0}>Add to cart</button><dl><div><dt>Shipping</dt><dd>{fields.shippingMode === "FREE" ? "FREE domestic shipping" : `Calculated at checkout · ${selectedCarriers.map((carrier) => CARRIER_LABELS[carrier]).join(", ") || "service required"}`}</dd></div><div><dt>Handling</dt><dd>{fields.handlingTime}</dd></div><div><dt>Returns</dt><dd>{fields.returns}</dd></div></dl></section></div><section className="ebay-specifics-preview"><h3>Item specifics</h3><dl>{REQUIRED_EBAY_ASPECTS.map((name) => <div key={name}><dt>{name}</dt><dd>{fields.aspects[name] || "Not provided"}</dd></div>)}{optionalAspects.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value || "Not provided"}</dd></div>)}</dl></section><section className="ebay-description-preview"><h3>Item description from the seller</h3><p>{fields.description}</p><div className="fitment-boilerplate">Verify OEM part number {partNumber}. {fields.fitment.length ? fields.fitment.map((row) => row.vehicle).join(" · ") : "No compatibility row will publish."}</div></section><footer>Preview only · exact eBay rendering can still vary by device, category, account policy and live eBay UI.</footer></article></div>}
+      {editorTab === "preview" && <div className="form-section">
+        <SectionHeading eyebrow="eBay-style preview · draft only" title="Exact current buyer view" body="This mock uses the current title, ordered images, price, quantity, shipping, returns, item specifics and fitment. Nothing is sent to eBay."/>
+        <article className="ebay-listing-preview">
+          <header><span className="ebay-wordmark">ebay</span><label><Icon name="search"/><input readOnly value="Search for anything"/></label><span>Draft preview</span></header>
+          <nav><span>{fields.categoryName || "eBay Motors › Parts & Accessories"}</span>{fields.secondaryCategoryName && <small>Second category: {fields.secondaryCategoryName}</small>}</nav>
+          <div className="ebay-preview-body"><section className="ebay-gallery"><div className="ebay-thumbnails">{photos.map((photo, index) => <button key={photo.id} className={previewPhoto?.id === photo.id ? "active" : ""} onClick={() => setPreviewPhotoId(photo.id)}><img src={photo.url} alt={`View ${index + 1}: ${photo.name}`}/></button>)}</div><div className="ebay-main-photo">{previewPhoto ? <img src={previewPhoto.url} alt={previewPhoto.name}/> : <div><Icon name="camera"/><span>Seller photo required</span></div>}</div></section>
+            <section className="ebay-purchase-panel"><small>PartQuill seller draft · SKU {sku}</small><h2>{title || "Title required"}</h2><div className="ebay-condition"><span>Condition:</span><strong>{fields.condition}</strong></div><div className="ebay-price-line"><strong>${price || "—"}</strong>{Number(quantity) === 0 && <Badge tone="red">Out of stock</Badge>}</div><div className="ebay-quantity"><span>Quantity:</span><select value={quantity} disabled><option>{quantity}</option></select><span>{Number(quantity) > 0 ? `${quantity} available` : "0 available"}</span></div><button className="ebay-buy" disabled={!ebayPriceEligible || Number(quantity) === 0}>Buy It Now</button><button className="ebay-cart" disabled={!ebayPriceEligible || Number(quantity) === 0}>Add to cart</button><dl><div><dt>Shipping</dt><dd>{fields.shippingMode === "FREE" ? "FREE domestic shipping" : `Calculated at checkout · ${selectedCarriers.map((carrier) => CARRIER_LABELS[carrier]).join(", ") || "service required"}`}</dd></div><div><dt>Handling</dt><dd>{fields.handlingTime}</dd></div><div><dt>Returns</dt><dd>{fields.returns}</dd></div></dl></section>
+          </div>
+          <section className="ebay-specifics-preview"><h3>Item specifics</h3><dl>{REQUIRED_EBAY_ASPECTS.map((name) => <div key={name}><dt>{name}</dt><dd>{fields.aspects[name] || "Not provided"}</dd></div>)}{optionalAspects.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value || "Not provided"}</dd></div>)}</dl></section>
+          <section className="ebay-description-preview"><h3>Item description from the seller</h3>{fields.descriptionFormat === "HTML" ? <div dangerouslySetInnerHTML={{ __html: sanitizeSellerHtml(fields.description) }}/> : <p>{fields.description}</p>}<div className="fitment-boilerplate">Verify OEM part number {partNumber}. {appliedFitment.length ? appliedFitment.map((row) => row.vehicle).join(" · ") : "No compatibility row will publish."}</div></section>
+          <footer>Preview only · exact eBay rendering can still vary by device, category, account policy and live eBay UI.</footer>
+        </article>
+      </div>}
     </div>
 
     <aside className="readiness-panel"><div className="readiness-score"><span>Draft isolation</span><strong>OEM<small> keyed</small></strong><p>SKU {sku} and fingerprint {preview.fingerprint.slice(0, 10)}… control every field shown.</p></div><div className="gate-list"><span>Current preflight holds</span>
@@ -933,16 +1204,18 @@ function ActiveDraftEditor({
       {!fields.categoryId && <div className="hold"><Icon name="alert"/><p><strong>eBay leaf category ID is required</strong><small>CATEGORY_ID_REQUIRED</small></p></div>}
       {categoryFallback && <div className="hold"><Icon name="alert"/><p><strong>Fallback category requires review</strong><small>EBAY_CATEGORY_FALLBACK</small></p></div>}
       {fields.categoryId && !categoryVerified && !categoryFallback && <div className="hold"><Icon name="alert"/><p><strong>Validate the edited category as an active leaf</strong><small>CATEGORY_LEAF_VALIDATION_REQUIRED</small></p></div>}
+      {!secondaryCategoryValid && <div className="hold"><Icon name="alert"/><p><strong>Choose a different active leaf for the second category</strong><small>SECONDARY_CATEGORY_INVALID</small></p></div>}
+      {fields.secondaryCategoryId && !secondaryCategoryPublishable && <div className="hold"><Icon name="alert"/><p><strong>Second category requires the eBay Trading API publish route</strong><small>INVENTORY_API_SECONDARY_CATEGORY_UNSUPPORTED</small></p></div>}
+      {!conditionReady && <div className="hold"><Icon name="alert"/><p><strong>Select an exact eBay condition for this category</strong><small>EBAY_CONDITION_POLICY_REQUIRED</small></p></div>}
       {!requiredAspectsComplete && <div className="hold"><Icon name="alert"/><p><strong>Complete all four pinned item specifics</strong><small>REQUIRED_ASPECTS_{requiredAspectCount}_OF_4</small></p></div>}
       {!publishablePhotos.length && <div className="hold"><Icon name="camera"/><p><strong>Seller-owned or rights-cleared image required</strong><small>LISTING_IMAGE_REQUIRED</small></p></div>}
       {(!fields.shippingConfirmed || !shippingFieldsValid) && <div className="hold"><Icon name="truck"/><p><strong>Confirm positive packed dimensions and weight</strong><small>PACKED_SHIPPING_REQUIRED</small></p></div>}
       {!carrierSelectionValid && <div className="hold"><Icon name="truck"/><p><strong>Select at least one shipping carrier</strong><small>SHIPPING_SERVICE_REQUIRED</small></p></div>}
-      {!priceValid && <div className="hold"><Icon name="alert"/><p><strong>{fields.giveaway ? "Giveaway drafts must remain exactly $0.00" : "Enter a positive Buy It Now price"}</strong><small>PRICE_VALUE_REQUIRED</small></p></div>}
-      {fields.giveaway && <div className="hold"><Icon name="alert"/><p><strong>Giveaway cannot publish as an eBay fixed-price offer</strong><small>GIVEAWAY_CHANNEL_HOLD</small></p></div>}
+      {!priceValid && <div className="hold"><Icon name="alert"/><p><strong>Enter an eBay Motors price of at least $0.99</strong><small>EBAY_MOTORS_MINIMUM_PRICE_REQUIRED</small></p></div>}
       {!quantityValid && <div className="hold"><Icon name="alert"/><p><strong>Quantity must be a whole number from 0 to 999</strong><small>QUANTITY_VALUE_REQUIRED</small></p></div>}
       {!tariffReady && <div className="hold"><Icon name="alert"/><p><strong>Confirm origin and reviewed HS code for international shipping</strong><small>INTERNATIONAL_CUSTOMS_HOLD</small></p></div>}
     </div><button className="primary full" disabled={!preflightReady} onClick={() => navigate("review")}>Run private preflight <Icon name="arrow"/></button><p className="safe-note">Nothing is sent to eBay.</p></aside></div>
-    <div className="sticky-economics"><div><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong></div><div><span>OEM SKU</span><strong>{sku}</strong></div><div><span>Seller price</span><strong>{fields.giveaway ? "Giveaway" : `$${price}`}</strong></div><div><span>Listing images</span><strong>{publishablePhotos.length}/{photos.length}</strong></div><label className="sticky-image-upload"><Icon name="camera"/><span>Add images</span><input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label><button disabled={!preflightReady} onClick={() => navigate("review")}>Review gates <Icon name="arrow"/></button></div>
+    <div className="sticky-economics"><div><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong></div><div><span>OEM SKU</span><strong>{sku}</strong></div><div><span>Seller price</span><strong>${price}</strong></div><div><span>Listing images</span><strong>{publishablePhotos.length}/{photos.length}</strong></div><label className="sticky-image-upload"><Icon name="camera"/><span>Add images</span><input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label><button disabled={!preflightReady} onClick={() => navigate("review")}>Review gates <Icon name="arrow"/></button></div>
   </section>;
 }
 
@@ -952,7 +1225,7 @@ export default function Home() {
   const [inventoryFilter, setInventoryFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [title, setTitle] = useState("");
-  const [price, setPrice] = useState("0.00");
+  const [price, setPrice] = useState("0.99");
   const [quantity, setQuantity] = useState("1");
   const [domestic] = useState(true);
   const [international] = useState(false);
@@ -1012,6 +1285,8 @@ export default function Home() {
         id: crypto.randomUUID(),
         name: file.name,
         url: String(reader.result),
+        originalUrl: String(reader.result),
+        editState: "ORIGINAL",
         source: "SELLER_UPLOAD",
         publishEligible: true,
         rightsState: "SELLER_PHOTOGRAPH"
@@ -1058,6 +1333,12 @@ export default function Home() {
     setPublicApproved(false);
     setFeeFresh(false);
     showNotice("Image order updated. The first image is now the main eBay image.");
+  };
+  const updateInstantPhoto = (photoId: string, patch: Partial<StagedPhoto>) => {
+    setInstantPhotos((current) => current.map((photo) => photo.id === photoId ? { ...photo, ...patch } : photo));
+    setPreflightApproved(false);
+    setPublicApproved(false);
+    setFeeFresh(false);
   };
   const addReferencePhoto = (
     image: EbayReferenceRecord["images"][number],
@@ -1125,7 +1406,7 @@ export default function Home() {
       setInstantPhotos([]);
       setFoundPartNumber("");
       setTitle(preview.listing.title);
-      setPrice(preview.intent.price ?? "0.00");
+      setPrice(preview.intent.price ?? "0.99");
       setQuantity(String(preview.intent.quantity));
       setInstantBuilt(true);
       if (preview.identity.state === "CATALOG_STATED" && preview.intent.partNumber) {
@@ -1372,7 +1653,7 @@ export default function Home() {
                       <button onClick={() => openDraft("fitment")}>Inspect compatibility evidence <Icon name="arrow"/></button>
                     </div>}
                     <div className="instant-key-fields">
-                      <label><span>Buy It Now price</span><div><b>$</b><input value={instantPrice} onChange={(event) => { setInstantPrice(event.target.value); setInstantDirty(true); setInstantPartConfirmed(false); setInstantConditionConfirmed(false); }}/></div><Badge tone={instantDirty ? "amber" : "green"}>{instantDirty ? "Rebuild required" : "Your command"}</Badge></label>
+                      <label><span>Buy It Now price · $0.99 minimum</span><div><b>$</b><input type="number" min="0.99" step="0.01" value={instantPrice} onChange={(event) => { const next = event.target.value; setInstantPrice(next && Number(next) >= 0.99 ? next : "0.99"); setInstantDirty(true); setInstantPartConfirmed(false); setInstantConditionConfirmed(false); }}/></div><Badge tone={instantDirty ? "amber" : "green"}>{instantDirty ? "Rebuild required" : "Your command"}</Badge></label>
                       <label><span>Quantity</span><input value={instantQuantity} readOnly/><Badge tone={instantQuantity === "1" ? "slate" : "green"}>{instantQuantity === "1" ? "Seller default" : "Your command"}</Badge></label>
                       <label><span>Condition</span><input value={instantCondition} readOnly/><Badge tone="amber">{instantCondition === "Not specified" ? "Selection required" : "Confirm actual item"}</Badge></label>
                       <label><span>Custom SKU</span><input value={instantPreview?.listing.sku ?? "Pending identity"} readOnly/><Badge tone={instantHeld ? "amber" : "green"}>{instantHeld ? "Reservation only" : "Generated"}</Badge></label>
@@ -1456,6 +1737,7 @@ export default function Home() {
           removePhoto={removeInstantPhoto}
           setMainPhoto={setMainInstantPhoto}
           reorderPhoto={reorderInstantPhoto}
+          updatePhoto={updateInstantPhoto}
           addReferencePhoto={addReferencePhoto}
           onMaterialEdit={resetMaterialApprovals}
           navigate={navigate}
@@ -1463,6 +1745,15 @@ export default function Home() {
           ebayReference={ebayReference}
           ebayReferenceLoading={ebayReferenceLoading}
           veroProfiles={veroProfiles}
+          handlingTimes={bootstrap?.defaults.handlingTimes ?? [
+            { days: 0, label: "Same business day" }, { days: 1, label: "1 business day" },
+            { days: 2, label: "2 business days" }, { days: 3, label: "3 business days" },
+            { days: 4, label: "4 business days" }, { days: 5, label: "5 business days" },
+            { days: 10, label: "10 business days" }, { days: 15, label: "15 business days" },
+            { days: 20, label: "20 business days" }, { days: 30, label: "30 business days" },
+            { days: 40, label: "40 business days" }
+          ]}
+          imageStudioActivated={bootstrap?.imageStudio.activated ?? false}
         />}
 
 
