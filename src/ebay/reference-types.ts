@@ -1,6 +1,7 @@
 export type EbayReferenceCacheStatus =
   | 'MATCHED_LIVE_REFERENCE'
   | 'NO_EXACT_MATCH'
+  | 'PRIVATE_REFERENCE_ARCHIVE'
   | 'RIGHTS_CLEARED_ARCHIVE';
 
 export interface EbayReferenceImage {
@@ -20,15 +21,15 @@ export interface EbayReferenceImage {
 }
 
 /**
- * eBay listing media is reference-only and short-lived. A record can become a
- * durable archive only after a separate rights review has replaced the eBay
- * URLs with PartQuill-owned media URLs.
+ * Marketplace media remains excluded from listing payloads. Permanent records
+ * distinguish personal-use reference archives from separately rights-cleared
+ * media so the UI never overstates the permission basis.
  */
 export interface EbayReferenceCacheRecord {
   partNumber: string;
   status: EbayReferenceCacheStatus;
-  source: 'EBAY_BROWSE_API' | 'PARTQUILL_RIGHTS_CLEARED';
-  rightsState: 'EBAY_PUBLIC_REFERENCE_ONLY' | 'RIGHTS_CLEARED';
+  source: 'EBAY_BROWSE_API' | 'PARTQUILL_PRIVATE_ARCHIVE' | 'PARTQUILL_RIGHTS_CLEARED';
+  rightsState: 'EBAY_PUBLIC_REFERENCE_ONLY' | 'PRIVATE_PERSONAL_REFERENCE_ONLY' | 'RIGHTS_CLEARED';
   sourceItemId: string | null;
   sourceUrl: string | null;
   title: string | null;
@@ -51,11 +52,12 @@ export interface EbayReferenceCandidate {
   categoryPath: string | null;
   images: EbayReferenceImage[];
   matchEvidence: string[];
+  archiveState?: 'PRIVATE_PERSONAL_REFERENCE_ONLY';
 }
 
 export type EbayReferenceLookup =
   | {
-      status: 'MATCHED_LIVE_REFERENCE' | 'RIGHTS_CLEARED_ARCHIVE';
+      status: 'MATCHED_LIVE_REFERENCE' | 'PRIVATE_REFERENCE_ARCHIVE' | 'RIGHTS_CLEARED_ARCHIVE';
       reference: EbayReferenceCacheRecord;
       searchSuppressed: boolean;
     }

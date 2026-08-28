@@ -39,7 +39,7 @@ export class EbayReferenceService {
   private async lookupUnshared(partNumber: string, catalog: GmCatalogPart): Promise<EbayReferenceLookup> {
     const at = this.clock();
     const cached = await this.store.getEbayReferenceCache(partNumber);
-    if (cached?.status === 'RIGHTS_CLEARED_ARCHIVE') {
+    if (cached?.status === 'RIGHTS_CLEARED_ARCHIVE' || cached?.status === 'PRIVATE_REFERENCE_ARCHIVE') {
       return { status: cached.status, reference: cached, searchSuppressed: true };
     }
     if (
@@ -109,12 +109,13 @@ export class EbayReferenceService {
       return { status: 'TEMPORARILY_UNAVAILABLE', reference: null, searchSuppressed: false };
     }
     const cacheHours = Math.min(6, this.config.EBAY_REFERENCE_CACHE_HOURS);
-    const expiresAt = new Date(at.getTime() + cacheHours * 3_600_000).toISOString();
+    const privateArchive = candidate.archiveState === 'PRIVATE_PERSONAL_REFERENCE_ONLY';
+    const expiresAt = privateArchive ? null : new Date(at.getTime() + cacheHours * 3_600_000).toISOString();
     const record: EbayReferenceCacheRecord = {
       partNumber,
-      status: 'MATCHED_LIVE_REFERENCE',
-      source: 'EBAY_BROWSE_API',
-      rightsState: 'EBAY_PUBLIC_REFERENCE_ONLY',
+      status: privateArchive ? 'PRIVATE_REFERENCE_ARCHIVE' : 'MATCHED_LIVE_REFERENCE',
+      source: privateArchive ? 'PARTQUILL_PRIVATE_ARCHIVE' : 'EBAY_BROWSE_API',
+      rightsState: privateArchive ? 'PRIVATE_PERSONAL_REFERENCE_ONLY' : 'EBAY_PUBLIC_REFERENCE_ONLY',
       sourceItemId: candidate.sourceItemId,
       sourceUrl: candidate.sourceUrl,
       title: candidate.title,
@@ -125,7 +126,7 @@ export class EbayReferenceService {
       checkedAt: at.toISOString(),
       expiresAt,
       retryAfter: null,
-      archiveAllowed: false,
+      archiveAllowed: privateArchive,
       listingPayloadEligible: false
     };
     await this.store.saveEbayReferenceCache(record);

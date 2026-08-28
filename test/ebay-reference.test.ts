@@ -161,7 +161,7 @@ describe('eBay exact-reference discovery', () => {
     expect(searchExact).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a reviewed 5455055 live reference even before global Browse credentials are configured', async () => {
+  it('shows a permanent private 5455055 archive even before global Browse credentials are configured', async () => {
     const store = new MemoryStore();
     const service = new EbayReferenceService(
       store,
@@ -173,17 +173,26 @@ describe('eBay exact-reference discovery', () => {
     const first = await service.lookup('5455055', catalog5455055());
     const second = await service.lookup('5455055', catalog5455055());
     expect(first).toMatchObject({
-      status: 'MATCHED_LIVE_REFERENCE',
+      status: 'PRIVATE_REFERENCE_ARCHIVE',
       searchSuppressed: false,
       reference: {
+        status: 'PRIVATE_REFERENCE_ARCHIVE',
+        source: 'PARTQUILL_PRIVATE_ARCHIVE',
+        rightsState: 'PRIVATE_PERSONAL_REFERENCE_ONLY',
         sourceItemId: '165201602251',
         sourceUrl: 'https://www.ebay.com/itm/165201602251',
-        archiveAllowed: false,
+        expiresAt: null,
+        archiveAllowed: true,
         listingPayloadEligible: false
       }
     });
     expect(first.reference?.images).toHaveLength(3);
-    expect(second).toMatchObject({ status: 'MATCHED_LIVE_REFERENCE', searchSuppressed: true });
+    expect(first.reference?.images.map((image) => image.url)).toEqual([
+      '/v1/reference-assets/5455055.png',
+      '/v1/reference-assets/5455055_1.png',
+      '/v1/reference-assets/5455055_2.png'
+    ]);
+    expect(second).toMatchObject({ status: 'PRIVATE_REFERENCE_ARCHIVE', searchSuppressed: true });
   });
 
   it('deletes expired eBay content before a failed refresh', async () => {
@@ -296,6 +305,12 @@ describe('eBay exact-reference discovery', () => {
       expect(image.statusCode).toBe(200);
       expect(image.headers['content-type']).toContain('image/jpeg');
       expect(image.headers['cache-control']).toBe('no-store, max-age=0');
+
+      const permanentAsset = await app.inject({ method: 'GET', url: '/v1/reference-assets/5455055.png' });
+      expect(permanentAsset.statusCode).toBe(200);
+      expect(permanentAsset.headers['content-type']).toContain('image/png');
+      expect(permanentAsset.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(permanentAsset.rawPayload.length).toBeGreaterThan(100_000);
 
       const unknown = await app.inject({ method: 'GET', url: '/v1/seller-ui/ebay-reference/9999999' });
       expect(unknown.json()).toEqual({ status: 'NOT_CATALOG_VERIFIED', reference: null, searchSuppressed: true });

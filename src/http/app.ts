@@ -42,6 +42,9 @@ const ebayReferenceParams = z.object({
 const ebayReferenceImageParams = ebayReferenceParams.extend({
   index: z.coerce.number().int().min(0).max(2)
 });
+const referenceAssetParams = z.object({
+  fileName: z.string().regex(/^[A-Za-z0-9]+(?:_[0-9]+)?\.png$/)
+});
 const evidenceSchema = z.object({
   field: z.string().min(1),
   value: z.unknown(),
@@ -115,6 +118,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   const { config, store, service, tokenVault, imageStudio, ebayReference } = dependencies;
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
+  const referenceAssetRoot = resolve(process.cwd(), 'data/reference-assets');
   const sellerIndexPath = join(webRoot, 'index.html');
   const sellerIndex = existsSync(sellerIndexPath)
     ? await readFile(sellerIndexPath, 'utf8')
@@ -163,6 +167,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     )) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-reference/')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/reference-assets/')) return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
@@ -199,7 +204,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.3' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.4' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -261,7 +266,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
               ...result.reference,
               images: result.reference.images.map((image, index) => ({
                 alt: image.alt,
-                viewUrl: result.status === 'RIGHTS_CLEARED_ARCHIVE' && image.url.startsWith('/')
+                viewUrl: image.url.startsWith('/')
                   ? image.url
                   : `/v1/seller-ui/ebay-reference/${encodeURIComponent(result.reference!.partNumber)}/image/${index}`
               }))
@@ -275,6 +280,18 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     } finally {
       permit.release();
     }
+  });
+  app.get('/v1/reference-assets/:fileName', async (request, reply) => {
+    const { fileName } = referenceAssetParams.parse(request.params);
+    const localPath = resolve(referenceAssetRoot, fileName);
+    if (!localPath.startsWith(`${referenceAssetRoot}/`) || !existsSync(localPath)) {
+      return reply.code(404).send({ error: { code: 'REFERENCE_ASSET_NOT_AVAILABLE', message: 'reference asset is not available' } });
+    }
+    return reply
+      .header('cache-control', 'public, max-age=31536000, immutable')
+      .header('x-content-type-options', 'nosniff')
+      .type('image/png')
+      .send(createReadStream(localPath));
   });
   app.get('/v1/seller-ui/ebay-reference/:partNumber/image/:index', async (request, reply) => {
     const permit = sellerPreviewGuard.acquire(request.ip);
@@ -377,7 +394,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.15.3',
+          version: '0.15.4',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

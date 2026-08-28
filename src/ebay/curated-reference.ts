@@ -7,11 +7,7 @@ import {
 } from './reference-discovery.js';
 import type { EbayReferenceCandidate } from './reference-types.js';
 
-/**
- * Exact public listings already reviewed against PartQuill catalog evidence.
- * These remain live, temporary references: PartQuill does not download,
- * background-remove, archive or place the seller's images in a listing.
- */
+/** Exact public listings reviewed against PartQuill catalog evidence. */
 const reviewedListings: Record<string, EbayBrowseItem> = {
   '5455055': {
     itemId: '165201602251',
@@ -39,8 +35,10 @@ export class CuratedEbayReferenceProvider implements EbayReferenceProvider {
     if (!candidate) return undefined;
     return {
       ...candidate,
-      images: candidate.images.map((image) => ({
+      archiveState: 'PRIVATE_PERSONAL_REFERENCE_ONLY',
+      images: candidate.images.map((image, index) => ({
         ...image,
+        url: `/v1/reference-assets/5455055${index === 0 ? '' : `_${index}`}.png`,
         contentReview: {
           decision: 'ACCEPT_PART_ONLY',
           method: 'MANUAL_EXACT_LISTING_REVIEW',

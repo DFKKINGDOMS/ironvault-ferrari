@@ -14,9 +14,9 @@ type SellerBootstrap = {
 
 type EbayReferenceRecord = {
   partNumber: string;
-  status: "MATCHED_LIVE_REFERENCE" | "NO_EXACT_MATCH" | "RIGHTS_CLEARED_ARCHIVE";
-  source: "EBAY_BROWSE_API" | "PARTQUILL_RIGHTS_CLEARED";
-  rightsState: "EBAY_PUBLIC_REFERENCE_ONLY" | "RIGHTS_CLEARED";
+  status: "MATCHED_LIVE_REFERENCE" | "NO_EXACT_MATCH" | "PRIVATE_REFERENCE_ARCHIVE" | "RIGHTS_CLEARED_ARCHIVE";
+  source: "EBAY_BROWSE_API" | "PARTQUILL_PRIVATE_ARCHIVE" | "PARTQUILL_RIGHTS_CLEARED";
+  rightsState: "EBAY_PUBLIC_REFERENCE_ONLY" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED";
   sourceItemId: string | null;
   sourceUrl: string | null;
   title: string | null;
@@ -32,7 +32,7 @@ type EbayReferenceRecord = {
 };
 
 type EbayReferenceLookup = {
-  status: "MATCHED_LIVE_REFERENCE" | "NO_EXACT_MATCH" | "RIGHTS_CLEARED_ARCHIVE" | "DISCOVERY_DISABLED" | "TEMPORARILY_UNAVAILABLE" | "NOT_CATALOG_VERIFIED";
+  status: "MATCHED_LIVE_REFERENCE" | "NO_EXACT_MATCH" | "PRIVATE_REFERENCE_ARCHIVE" | "RIGHTS_CLEARED_ARCHIVE" | "DISCOVERY_DISABLED" | "TEMPORARILY_UNAVAILABLE" | "NOT_CATALOG_VERIFIED";
   reference: EbayReferenceRecord | null;
   searchSuppressed: boolean;
 };
@@ -333,18 +333,19 @@ function EbayReferenceGallery({ lookup, loading, partNumber }: { lookup: EbayRef
   const reference = lookup?.reference;
   const requestedKey = partNumber.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
   const matched = reference?.partNumber === requestedKey
-    && (lookup?.status === "MATCHED_LIVE_REFERENCE" || lookup?.status === "RIGHTS_CLEARED_ARCHIVE");
+    && (lookup?.status === "MATCHED_LIVE_REFERENCE" || lookup?.status === "PRIVATE_REFERENCE_ARCHIVE" || lookup?.status === "RIGHTS_CLEARED_ARCHIVE");
   const durable = lookup?.status === "RIGHTS_CLEARED_ARCHIVE";
+  const privateArchive = lookup?.status === "PRIVATE_REFERENCE_ARCHIVE";
   return <section className={`ebay-reference-gallery ${matched ? "matched" : "empty"}`} aria-live="polite">
     <header>
-      <div><span>{durable ? "PARTQUILL RIGHTS-CLEARED REFERENCE" : "LIVE EBAY REFERENCE · SEPARATE SOURCE"}</span><h3>{matched ? `Visual reference for OEM ${partNumber}` : `Visual reference search for OEM ${partNumber}`}</h3><p>{durable ? "The source passed a separate ownership or written-permission review." : "eBay content is visually isolated from catalog evidence and seller-owned listing photos."}</p></div>
-      <Badge tone={durable ? "green" : matched ? "orange" : "slate"}>{durable ? "Rights cleared" : matched ? "Reference only" : loading ? "Checking" : "No live image"}</Badge>
+      <div><span>{durable ? "PARTQUILL RIGHTS-CLEARED REFERENCE" : privateArchive ? "PARTQUILL PRIVATE REFERENCE ARCHIVE" : "LIVE EBAY REFERENCE · SEPARATE SOURCE"}</span><h3>{matched ? `Visual reference for OEM ${partNumber}` : `Visual reference search for OEM ${partNumber}`}</h3><p>{durable ? "The source passed a separate ownership or written-permission review." : privateArchive ? "A permanent personal-use reference copy is stored separately from seller listing photos." : "eBay content is visually isolated from catalog evidence and seller-owned listing photos."}</p></div>
+      <Badge tone={durable || privateArchive ? "green" : matched ? "orange" : "slate"}>{durable ? "Rights cleared" : privateArchive ? "Private archive" : matched ? "Reference only" : loading ? "Checking" : "No live image"}</Badge>
     </header>
     {matched ? <>
-      <div className="ebay-reference-warning"><Icon name="shield"/><span><strong>{durable ? "Approved reference archive" : "Another seller’s listing — not your item photo"}</strong><small>{durable ? "The archived media remains outside the seller-item photo set unless separately selected and permitted." : "Temporary live reference only. These images are not downloaded, background-removed, archived or placed in the listing payload."}</small></span></div>
-      <div className="ebay-reference-grid">{reference.images.map((item, index) => <figure key={item.viewUrl}><img src={item.viewUrl} alt={item.alt} loading="lazy"/><figcaption>Reference view {index + 1} · {durable ? "rights cleared" : "live eBay"}</figcaption></figure>)}</div>
+      <div className="ebay-reference-warning"><Icon name="shield"/><span><strong>{durable ? "Approved reference archive" : privateArchive ? "Permanent personal-use reference" : "Another seller’s listing — not your item photo"}</strong><small>{durable ? "The archived media remains outside the seller-item photo set unless separately selected and permitted." : privateArchive ? "Saved permanently by SKU and excluded from the eBay listing-photo payload." : "Temporary live reference only. These images are not downloaded, background-removed, archived or placed in the listing payload."}</small></span></div>
+      <div className="ebay-reference-grid">{reference.images.map((item, index) => <figure key={item.viewUrl}><img src={item.viewUrl} alt={item.alt} loading="lazy"/><figcaption>Reference view {index + 1} · {durable ? "rights cleared" : privateArchive ? "archived" : "live eBay"}</figcaption></figure>)}</div>
       <div className="ebay-reference-detail"><div><strong>{reference.title}</strong><span>{reference.categoryPath ?? "eBay Motors Parts & Accessories"}</span><small>{reference.matchEvidence.join(" · ")}</small></div>{reference.sourceUrl && <a href={reference.sourceUrl} target="_blank" rel="noreferrer">View current source on eBay <Icon name="arrow"/></a>}</div>
-      {!durable && <footer><span>Checked {new Date(reference.checkedAt).toLocaleString()} · expires no later than {reference.expiresAt ? new Date(reference.expiresAt).toLocaleString() : "six hours"}</span><strong>Seller-owned photo is still required</strong></footer>}
+      {!durable && <footer><span>{privateArchive ? `Permanently saved by SKU · checked ${new Date(reference.checkedAt).toLocaleString()}` : `Checked ${new Date(reference.checkedAt).toLocaleString()} · expires no later than ${reference.expiresAt ? new Date(reference.expiresAt).toLocaleString() : "six hours"}`}</span><strong>Seller-owned photo is still required</strong></footer>}
     </> : <div className="ebay-reference-empty"><Icon name={loading ? "live" : "camera"}/><div><strong>{loading ? "Checking eBay Motors for an exact catalog-consistent match…" : lookup?.status === "NO_EXACT_MATCH" ? "No exact eBay Motors match passed validation" : lookup?.status === "TEMPORARILY_UNAVAILABLE" ? "eBay reference search is temporarily unavailable" : lookup?.status === "DISCOVERY_DISABLED" ? "Live eBay reference discovery is not configured" : "No separate marketplace reference is available"}</strong><p>PartQuill keeps the GM catalog scan and highlighted callout as durable evidence. It will not substitute a loose keyword match or reuse unrelated photos.</p></div></div>}
   </section>;
 }
