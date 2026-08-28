@@ -3,27 +3,18 @@ import type { AppConfig } from '../config.js';
 import { buildCatalogListingIntelligence } from '../catalog/listing-intelligence.js';
 import { normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
-import { EbayTaxonomyClient } from './taxonomy-client.js';
 
 const { Pool } = pg;
 const MARKETPLACE_ID = 'EBAY_US';
 const MOTORS_ROOT_CATEGORY_ID = '6028';
+const MOTORS_CATEGORY_TREE_ID = '100';
+const OFFICIAL_CATEGORY_TREE_VERSION = 'US_JUNE_2026';
+const OFFICIAL_CATEGORY_CSV_URL =
+  'https://ir.ebaystatic.com/cr/v/c01/US_New_Structure_Jun2026.csv';
+const OTHER_CAR_TRUCK_PARTS_CATEGORY_ID = '9886';
 const TREE_REFRESH_MS = 24 * 60 * 60_000;
-const ASSIGNMENT_INTERVAL_MS = 5 * 60_000;
-const ASSIGNMENT_BATCH = 10;
-
-interface CategoryTreeNode {
-  category?: { categoryId?: string; categoryName?: string };
-  categoryTreeNodeLevel?: number;
-  leafCategoryTreeNode?: boolean;
-  childCategoryTreeNodes?: CategoryTreeNode[];
-}
-
-interface CategorySubtreeResponse {
-  categoryTreeId?: string;
-  categoryTreeVersion?: string;
-  categorySubtreeNode?: CategoryTreeNode;
-}
+const ASSIGNMENT_INTERVAL_MS = 30_000;
+const ASSIGNMENT_BATCH = 250;
 
 interface CategoryRow {
   category_id: string;
@@ -34,214 +25,228 @@ interface CategoryRow {
   leaf_category: boolean;
 }
 
-function flattenCategoryTree(
-  node: CategoryTreeNode,
-  parentCategoryId: string | null = null,
-  ancestors: string[] = []
-): CategoryRow[] {
-  const categoryId = node.category?.categoryId?.trim();
-  const categoryName = node.category?.categoryName?.trim();
-  if (!categoryId || !categoryName) return [];
-  const categoryPath = [...ancestors, categoryName];
-  const current: CategoryRow = {
-    category_id: categoryId,
-    parent_category_id: parentCategoryId,
-    category_name: categoryName,
-    category_path: categoryPath,
-    category_level: Number(node.categoryTreeNodeLevel ?? Math.max(0, categoryPath.length - 1)),
-    leaf_category: Boolean(node.leafCategoryTreeNode ?? !(node.childCategoryTreeNodes?.length))
-  };
-  return [
-    current,
-    ...(node.childCategoryTreeNodes ?? []).flatMap((child) =>
-      flattenCategoryTree(child, categoryId, categoryPath)
-    )
-  ];
+interface StoredLeafCategory {
+  category_id: string;
+  category_name: string;
+  category_path: string[];
 }
 
-class ReadOnlyEbayCategoryTreeClient {
-  private token: { value: string; expiresAt: number } | undefined;
+interface LocalCategoryChoice extends StoredLeafCategory {
+  classificationMode: 'RULE_EXACT_LEAF' | 'OTHER_FALLBACK_REVIEWED';
+  confidence: number;
+}
 
-  constructor(private readonly config: AppConfig) {}
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
 
-  private async applicationToken(): Promise<string> {
-    if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
-    if (!this.config.EBAY_CLIENT_ID || !this.config.EBAY_CLIENT_SECRET) {
-      throw new Error('eBay application credentials are not configured');
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quoted) {
+      if (character === '"') {
+        if (text[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += character;
+      }
+      continue;
     }
-    const credentials = Buffer.from(
-      `${this.config.EBAY_CLIENT_ID}:${this.config.EBAY_CLIENT_SECRET}`
-    ).toString('base64');
-    const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${credentials}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        scope: 'https://api.ebay.com/oauth/api_scope'
-      }),
-      signal: AbortSignal.timeout(10_000)
-    });
-    const body = await response.text();
-    if (!response.ok) throw new Error(`eBay application token failed (${response.status})`);
-    const parsed = JSON.parse(body) as { access_token?: string; expires_in?: number };
-    if (!parsed.access_token) throw new Error('eBay application token response was incomplete');
-    this.token = {
-      value: parsed.access_token,
-      expiresAt: Date.now() + Math.max(300, parsed.expires_in ?? 7_200) * 1_000
-    };
-    return parsed.access_token;
+
+    if (character === '"') {
+      quoted = true;
+    } else if (character === ',') {
+      row.push(field);
+      field = '';
+    } else if (character === '\n' || character === '\r') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+      if (character === '\r' && text[index + 1] === '\n') index += 1;
+    } else {
+      field += character;
+    }
   }
 
-  private async get(path: string): Promise<unknown> {
-    const response = await fetch(`https://api.ebay.com${path}`, {
-      headers: {
-        Authorization: `Bearer ${await this.applicationToken()}`,
-        Accept: 'application/json'
-      },
+  if (field.length || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parseOfficialMotorsPartsCsv(text: string): CategoryRow[] {
+  const csv = parseCsv(text.replace(/^\uFEFF/, ''));
+  const title = csv[0]?.[0]?.trim() ?? '';
+  if (!title.includes('New Category Structure from June 1st, 2026 - US')) {
+    throw new Error('Official eBay category file version was not the expected June 2026 US structure');
+  }
+
+  const pathNames: string[] = [];
+  const pathIds: string[] = [];
+  const result: CategoryRow[] = [];
+  let insidePartsSubtree = false;
+
+  for (const raw of csv) {
+    const categoryId = (raw[6] ?? '').trim();
+    let level = -1;
+    let categoryName = '';
+    for (let candidateLevel = 0; candidateLevel < 6; candidateLevel += 1) {
+      const value = (raw[candidateLevel] ?? '').trim();
+      if (value) {
+        level = candidateLevel;
+        categoryName = value;
+        break;
+      }
+    }
+    if (level < 0 || !categoryId || !/^\d+$/.test(categoryId)) continue;
+
+    if (!insidePartsSubtree) {
+      if (categoryId !== MOTORS_ROOT_CATEGORY_ID) continue;
+      insidePartsSubtree = true;
+      pathNames[0] = 'eBay Motors';
+      pathIds[0] = '6000';
+    } else if (level <= 1 && categoryId !== MOTORS_ROOT_CATEGORY_ID) {
+      break;
+    }
+
+    pathNames.length = level;
+    pathIds.length = level;
+    pathNames[level] = categoryName;
+    pathIds[level] = categoryId;
+
+    const parentCategoryId =
+      categoryId === MOTORS_ROOT_CATEGORY_ID ? null : (pathIds[level - 1] ?? null);
+    if (categoryId !== MOTORS_ROOT_CATEGORY_ID && !parentCategoryId) {
+      throw new Error('Official eBay category file contained an incomplete Motors category path');
+    }
+
+    result.push({
+      category_id: categoryId,
+      parent_category_id: parentCategoryId,
+      category_name: categoryName,
+      category_path: pathNames.slice(0, level + 1),
+      category_level: Math.max(0, level - 1),
+      leaf_category: false
+    });
+  }
+
+  const parentIds = new Set(
+    result
+      .map((category) => category.parent_category_id)
+      .filter((categoryId): categoryId is string => Boolean(categoryId))
+  );
+  for (const category of result) {
+    category.leaf_category = !parentIds.has(category.category_id);
+  }
+
+  const ids = new Set(result.map((category) => category.category_id));
+  if (
+    result.length < 1_500 ||
+    !ids.has(MOTORS_ROOT_CATEGORY_ID) ||
+    !ids.has('6030') ||
+    !ids.has(OTHER_CAR_TRUCK_PARTS_CATEGORY_ID)
+  ) {
+    throw new Error('Official eBay Motors Parts & Accessories category subtree was incomplete');
+  }
+  return result;
+}
+
+class ReadOnlyOfficialEbayCategoryClient {
+  async categories(): Promise<CategoryRow[]> {
+    const response = await fetch(OFFICIAL_CATEGORY_CSV_URL, {
+      method: 'GET',
+      headers: { Accept: 'text/csv,text/plain;q=0.9' },
       signal: AbortSignal.timeout(45_000)
     });
+    if (!response.ok) {
+      throw new Error('Official eBay category file download failed (' + response.status + ')');
+    }
     const body = await response.text();
-    if (!response.ok) throw new Error(`eBay Taxonomy API failed (${response.status})`);
-    return body ? JSON.parse(body) : {};
-  }
-
-  private async shoppingCategoryInfo(categoryId: string): Promise<{
-    version?: string;
-    categories: Array<{
-      CategoryID?: string;
-      CategoryName?: string;
-      CategoryParentID?: string;
-      CategoryLevel?: number | string;
-      LeafCategory?: boolean | string;
-    }>;
-  }> {
-    if (!this.config.EBAY_CLIENT_ID) throw new Error('eBay application ID is not configured');
-    const params = new URLSearchParams({
-      callname: 'GetCategoryInfo',
-      responseencoding: 'JSON',
-      appid: this.config.EBAY_CLIENT_ID,
-      siteid: '0',
-      version: '1193',
-      CategoryID: categoryId,
-      IncludeSelector: 'ChildCategories'
-    });
-    const response = await fetch(`https://open.api.ebay.com/shopping?${params.toString()}`, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(20_000)
-    });
-    const body = await response.text();
-    if (!response.ok) throw new Error(`eBay Shopping category API failed (${response.status})`);
-    const parsed = JSON.parse(body) as {
-      Ack?: string;
-      Version?: string;
-      Errors?: Array<{ LongMessage?: string; ShortMessage?: string }>;
-      CategoryArray?: { Category?: unknown };
-    };
-    if (!['Success', 'Warning'].includes(String(parsed.Ack ?? ''))) {
-      const detail = parsed.Errors?.[0]?.LongMessage ?? parsed.Errors?.[0]?.ShortMessage ?? 'unknown response';
-      throw new Error(`eBay Shopping category API rejected request: ${detail}`);
+    if (body.length < 100_000) {
+      throw new Error('Official eBay category file download was unexpectedly small');
     }
-    const raw = parsed.CategoryArray?.Category;
-    const categories = Array.isArray(raw) ? raw : raw ? [raw] : [];
-    return { version: parsed.Version, categories };
+    return parseOfficialMotorsPartsCsv(body);
+  }
+}
+
+function normalizeCategoryText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function chooseLocalCategory(
+  categories: StoredLeafCategory[],
+  catalog: GmCatalogPart | undefined
+): LocalCategoryChoice | undefined {
+  const intelligence = catalog ? buildCatalogListingIntelligence(catalog) : undefined;
+  const candidateName = intelligence?.category.categoryName?.trim();
+  const candidatePath = intelligence?.category.categoryPath?.trim();
+  const expectedName = candidateName ? normalizeCategoryText(candidateName) : '';
+  const expectedPath = candidatePath ? normalizeCategoryText(candidatePath) : '';
+
+  if (expectedName) {
+    const exactNameMatches = categories
+      .filter((category) => normalizeCategoryText(category.category_name) === expectedName)
+      .sort((left, right) => {
+        const leftPath = normalizeCategoryText(left.category_path.join(' › '));
+        const rightPath = normalizeCategoryText(right.category_path.join(' › '));
+        const leftExact = leftPath === expectedPath ? 1 : 0;
+        const rightExact = rightPath === expectedPath ? 1 : 0;
+        if (leftExact !== rightExact) return rightExact - leftExact;
+        const leftCarTruck = left.category_path.includes('Car & Truck Parts & Accessories') ? 1 : 0;
+        const rightCarTruck = right.category_path.includes('Car & Truck Parts & Accessories') ? 1 : 0;
+        if (leftCarTruck !== rightCarTruck) return rightCarTruck - leftCarTruck;
+        return right.category_path.length - left.category_path.length;
+      });
+    const exact = exactNameMatches[0];
+    if (exact) {
+      return {
+        ...exact,
+        classificationMode: 'RULE_EXACT_LEAF',
+        confidence: Math.max(0.5, intelligence?.category.confidence ?? 0.5)
+      };
+    }
   }
 
-  private async shoppingSubtree(): Promise<CategorySubtreeResponse> {
-    const nodes = new Map<string, CategoryTreeNode>();
-    const parents = new Map<string, string | null>();
-    const queue = [MOTORS_ROOT_CATEGORY_ID];
-    const visited = new Set<string>();
-    let version = 'shopping-current';
-
-    while (queue.length) {
-      const categoryId = queue.shift()!;
-      if (visited.has(categoryId)) continue;
-      visited.add(categoryId);
-      const result = await this.shoppingCategoryInfo(categoryId);
-      version = result.version ?? version;
-      for (const row of result.categories) {
-        const id = String(row.CategoryID ?? '').trim();
-        const name = String(row.CategoryName ?? '').trim();
-        if (!id || !name) continue;
-        const leaf = String(row.LeafCategory ?? '').toLowerCase() === 'true';
-        const level = Number(row.CategoryLevel ?? 0);
-        const parent = id === MOTORS_ROOT_CATEGORY_ID
-          ? null
-          : String(row.CategoryParentID ?? categoryId).trim() || categoryId;
-        const existing = nodes.get(id);
-        nodes.set(id, {
-          category: { categoryId: id, categoryName: name },
-          categoryTreeNodeLevel: Number.isFinite(level) ? level : 0,
-          leafCategoryTreeNode: leaf,
-          childCategoryTreeNodes: existing?.childCategoryTreeNodes ?? []
-        });
-        parents.set(id, parent);
-        if (parent === categoryId && !leaf && id !== categoryId && !visited.has(id)) queue.push(id);
+  const fallback = categories.find(
+    (category) => category.category_id === OTHER_CAR_TRUCK_PARTS_CATEGORY_ID
+  );
+  return fallback
+    ? {
+        ...fallback,
+        classificationMode: 'OTHER_FALLBACK_REVIEWED',
+        confidence: 0.25
       }
-      for (const row of result.categories) {
-        const id = String(row.CategoryID ?? '').trim();
-        const parent = String(row.CategoryParentID ?? '').trim();
-        const leaf = String(row.LeafCategory ?? '').toLowerCase() === 'true';
-        if (id && id !== categoryId && parent === categoryId && !leaf && !visited.has(id)) queue.push(id);
-      }
-    }
-
-    for (const [id, parentId] of parents) {
-      if (!parentId || id === MOTORS_ROOT_CATEGORY_ID) continue;
-      const parent = nodes.get(parentId);
-      const child = nodes.get(id);
-      if (parent && child && !parent.childCategoryTreeNodes?.some((node) => node.category?.categoryId === id)) {
-        (parent.childCategoryTreeNodes ??= []).push(child);
-      }
-    }
-    const root = nodes.get(MOTORS_ROOT_CATEGORY_ID);
-    if (!root) throw new Error('eBay Shopping API did not return the Motors root category');
-    return {
-      categoryTreeId: '0',
-      categoryTreeVersion: version,
-      categorySubtreeNode: root
-    };
-  }
-
-  async subtree(): Promise<CategorySubtreeResponse> {
-    try {
-      const tree = await this.get(
-        `/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`
-      ) as { categoryTreeId?: string };
-      if (!tree.categoryTreeId) throw new Error('eBay category tree response was incomplete');
-      return await this.get(
-        `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(tree.categoryTreeId)}` +
-        `/get_category_subtree?category_id=${MOTORS_ROOT_CATEGORY_ID}`
-      ) as CategorySubtreeResponse;
-    } catch (error) {
-      console.warn('PARTQUILL_EBAY_TAXONOMY_OAUTH_FALLBACK', JSON.stringify({
-        reason: error instanceof Error ? error.message : 'unknown',
-        fallback: 'SHOPPING_API_APP_ID_ONLY',
-        sellerTokenUsed: false
-      }));
-      return this.shoppingSubtree();
-    }
-  }
+    : undefined;
 }
 
 export interface EbayCategorySyncController {
   stop(): Promise<void>;
 }
 
-export function startEbayCategoryTaxonomySync(config: AppConfig): EbayCategorySyncController | undefined {
+export function startEbayCategoryTaxonomySync(
+  config: AppConfig
+): EbayCategorySyncController | undefined {
   if (!config.DATABASE_URL) return undefined;
   if (!/^(1|true|yes|on)$/i.test(String(process.env.EBAY_CATEGORY_SYNC_ENABLED ?? 'false'))) {
     console.log('PARTQUILL_EBAY_CATEGORY_SYNC_DISABLED');
     return undefined;
   }
   if (config.ALLOW_EBAY_WRITES || config.EBAY_MODE !== 'mock') {
-    throw new Error('Read-only category sync requires EBAY_MODE=mock and ALLOW_EBAY_WRITES=false');
-  }
-  if (!config.EBAY_CLIENT_ID || !config.EBAY_CLIENT_SECRET) {
-    throw new Error('Read-only category sync requires eBay application credentials');
+    throw new Error(
+      'Read-only category sync requires EBAY_MODE=mock and ALLOW_EBAY_WRITES=false'
+    );
   }
 
   const pool = new Pool({
@@ -250,96 +255,188 @@ export function startEbayCategoryTaxonomySync(config: AppConfig): EbayCategorySy
     max: 2,
     idleTimeoutMillis: 30_000
   });
-  const treeClient = new ReadOnlyEbayCategoryTreeClient(config);
-  const suggestionClient = new EbayTaxonomyClient(config);
+  const treeClient = new ReadOnlyOfficialEbayCategoryClient();
   let stopped = false;
   let treeRunning = false;
   let assignmentRunning = false;
+  let leafCategoryCache: StoredLeafCategory[] = [];
 
   const refreshCounts = async (): Promise<void> => {
-    await pool.query(`
-      INSERT INTO partquill.ebay_category_sync_state(
-        sync_name,status,products_assigned,products_pending,updated_at
-      )
-      VALUES(
-        'EBAY_US_MOTORS','running',
-        (SELECT count(*) FROM partquill.ebay_category_assignments WHERE status='ASSIGNED'),
-        (SELECT count(*) FROM partquill.gm_catalog_parts p
-          WHERE NOT EXISTS (
-            SELECT 1 FROM partquill.ebay_category_assignments a
-            WHERE a.part_number=p.part_number
-          )),
-        now()
-      )
-      ON CONFLICT(sync_name) DO UPDATE SET
-        products_assigned=EXCLUDED.products_assigned,
-        products_pending=EXCLUDED.products_pending,
-        updated_at=now()
-    `);
+    await pool.query(
+      [
+        'WITH counts AS (',
+        '  SELECT',
+        "    count(*) FILTER (WHERE a.status='ASSIGNED') AS assigned,",
+        '    count(*) FILTER (WHERE',
+        "      a.part_number IS NULL OR a.status<>'ASSIGNED' OR",
+        "      a.raw_suggestion->>'classificationMode'='PENDING_RULE_REFINEMENT'",
+        '    ) AS pending',
+        '  FROM partquill.gm_catalog_parts p',
+        '  LEFT JOIN partquill.ebay_category_assignments a',
+        '    ON a.part_number=p.part_number',
+        ')',
+        'INSERT INTO partquill.ebay_category_sync_state(',
+        '  sync_name,status,products_assigned,products_pending,updated_at',
+        ')',
+        "SELECT 'EBAY_US_MOTORS',",
+        "  CASE WHEN pending=0 THEN 'completed' ELSE 'running' END,",
+        '  assigned,pending,now()',
+        'FROM counts',
+        'ON CONFLICT(sync_name) DO UPDATE SET',
+        '  status=EXCLUDED.status,',
+        '  products_assigned=EXCLUDED.products_assigned,',
+        '  products_pending=EXCLUDED.products_pending,',
+        '  updated_at=now()'
+      ].join('\n')
+    );
+  };
+
+  const ensureFallbackCoverage = async (): Promise<number> => {
+    const fallback = leafCategoryCache.find(
+      (category) => category.category_id === OTHER_CAR_TRUCK_PARTS_CATEGORY_ID
+    );
+    if (!fallback) throw new Error('eBay category 9886 fallback was not imported');
+
+    const fallbackPath = fallback.category_path.join(' › ');
+    const covered = await pool.query(
+      [
+        'WITH upserted AS (',
+        '  INSERT INTO partquill.ebay_category_assignments(',
+        '    part_number,marketplace_id,category_id,category_name,category_path,',
+        '    query,source,status,confidence,assigned_at,verified_at,raw_suggestion',
+        '  )',
+        '  SELECT',
+        '    p.part_number,$1,$2,$3,$4,',
+        "    'automotive replacement part ' || p.part_number,",
+        "    'EBAY_OFFICIAL_CATEGORY_FILE','ASSIGNED',0.25,now(),now(),",
+        '    jsonb_build_object(',
+        "      'classificationMode','PENDING_RULE_REFINEMENT',",
+        "      'taxonomySource',$5::text,",
+        "      'categoryTreeId',$6::text,",
+        "      'categoryTreeVersion',$7::text",
+        '    )',
+        '  FROM partquill.gm_catalog_parts p',
+        '  ON CONFLICT(part_number) DO UPDATE SET',
+        '    marketplace_id=EXCLUDED.marketplace_id,',
+        '    category_id=EXCLUDED.category_id,',
+        '    category_name=EXCLUDED.category_name,',
+        '    category_path=EXCLUDED.category_path,',
+        '    source=EXCLUDED.source,',
+        '    status=EXCLUDED.status,',
+        '    confidence=EXCLUDED.confidence,',
+        '    verified_at=now(),',
+        '    raw_suggestion=EXCLUDED.raw_suggestion',
+        "  WHERE partquill.ebay_category_assignments.status<>'ASSIGNED'",
+        '  RETURNING part_number',
+        ')',
+        'UPDATE partquill.gm_catalog_parts p SET',
+        '  data=jsonb_set(',
+        "    p.data,'{ebayCategory}',",
+        '    jsonb_build_object(',
+        "      'marketplaceId',$1::text,",
+        "      'categoryId',$2::text,",
+        "      'categoryName',$3::text,",
+        "      'categoryPath',$4::text,",
+        "      'source','EBAY_OFFICIAL_CATEGORY_FILE',",
+        "      'classificationMode','PENDING_RULE_REFINEMENT',",
+        "      'categoryTreeId',$6::text,",
+        "      'categoryTreeVersion',$7::text,",
+        "      'verifiedAt',now()",
+        '    ),true',
+        '  ),',
+        '  updated_at=now()',
+        'FROM upserted u',
+        'WHERE p.part_number=u.part_number'
+      ].join('\n'),
+      [
+        MARKETPLACE_ID,
+        fallback.category_id,
+        fallback.category_name,
+        fallbackPath,
+        OFFICIAL_CATEGORY_CSV_URL,
+        MOTORS_CATEGORY_TREE_ID,
+        OFFICIAL_CATEGORY_TREE_VERSION
+      ]
+    );
+    return covered.rowCount ?? 0;
   };
 
   const syncTree = async (): Promise<void> => {
     if (stopped || treeRunning) return;
     treeRunning = true;
     try {
-      await pool.query(`
-        INSERT INTO partquill.ebay_category_sync_state(sync_name,status,last_started_at,updated_at)
-        VALUES('EBAY_US_MOTORS','running',now(),now())
-        ON CONFLICT(sync_name) DO UPDATE SET
-          status='running',last_started_at=now(),updated_at=now(),error_detail=NULL
-      `);
-      const subtree = await treeClient.subtree();
-      const treeId = subtree.categoryTreeId;
-      const version = subtree.categoryTreeVersion;
-      const rows = subtree.categorySubtreeNode
-        ? flattenCategoryTree(subtree.categorySubtreeNode)
-        : [];
-      if (!treeId || !version || rows.length < 25 || !rows.some((row) => row.category_id === MOTORS_ROOT_CATEGORY_ID)) {
-        throw new Error('eBay Motors category subtree was incomplete');
-      }
+      await pool.query(
+        [
+          'INSERT INTO partquill.ebay_category_sync_state(',
+          '  sync_name,status,last_started_at,updated_at',
+          ')',
+          "VALUES('EBAY_US_MOTORS','running',now(),now())",
+          'ON CONFLICT(sync_name) DO UPDATE SET',
+          "  status='running',last_started_at=now(),updated_at=now(),error_detail=NULL"
+        ].join('\n')
+      );
+
+      const rows = await treeClient.categories();
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
         await client.query(
-          `UPDATE partquill.ebay_categories SET active=false
-           WHERE marketplace_id=$1 AND root_category_id=$2`,
+          [
+            'UPDATE partquill.ebay_categories SET active=false',
+            'WHERE marketplace_id=$1 AND root_category_id=$2'
+          ].join('\n'),
           [MARKETPLACE_ID, MOTORS_ROOT_CATEGORY_ID]
         );
         for (let offset = 0; offset < rows.length; offset += 500) {
           const batch = rows.slice(offset, offset + 500);
           await client.query(
-            `INSERT INTO partquill.ebay_categories(
-               marketplace_id,category_tree_id,category_tree_version,root_category_id,
-               category_id,parent_category_id,category_name,category_path,
-               category_level,leaf_category,active,fetched_at
-             )
-             SELECT $1,$2,$3,$4,
-               item.category_id,item.parent_category_id,item.category_name,item.category_path,
-               item.category_level,item.leaf_category,true,now()
-             FROM jsonb_to_recordset($5::jsonb) AS item(
-               category_id text,parent_category_id text,category_name text,category_path text[],
-               category_level integer,leaf_category boolean
-             )
-             ON CONFLICT(marketplace_id,category_id) DO UPDATE SET
-               category_tree_id=EXCLUDED.category_tree_id,
-               category_tree_version=EXCLUDED.category_tree_version,
-               root_category_id=EXCLUDED.root_category_id,
-               parent_category_id=EXCLUDED.parent_category_id,
-               category_name=EXCLUDED.category_name,
-               category_path=EXCLUDED.category_path,
-               category_level=EXCLUDED.category_level,
-               leaf_category=EXCLUDED.leaf_category,
-               active=true,
-               fetched_at=now()`,
-            [MARKETPLACE_ID, treeId, version, MOTORS_ROOT_CATEGORY_ID, JSON.stringify(batch)]
+            [
+              'INSERT INTO partquill.ebay_categories(',
+              '  marketplace_id,category_tree_id,category_tree_version,root_category_id,',
+              '  category_id,parent_category_id,category_name,category_path,',
+              '  category_level,leaf_category,active,fetched_at',
+              ')',
+              'SELECT $1,$2,$3,$4,',
+              '  item.category_id,item.parent_category_id,item.category_name,item.category_path,',
+              '  item.category_level,item.leaf_category,true,now()',
+              'FROM jsonb_to_recordset($5::jsonb) AS item(',
+              '  category_id text,parent_category_id text,category_name text,category_path text[],',
+              '  category_level integer,leaf_category boolean',
+              ')',
+              'ON CONFLICT(marketplace_id,category_id) DO UPDATE SET',
+              '  category_tree_id=EXCLUDED.category_tree_id,',
+              '  category_tree_version=EXCLUDED.category_tree_version,',
+              '  root_category_id=EXCLUDED.root_category_id,',
+              '  parent_category_id=EXCLUDED.parent_category_id,',
+              '  category_name=EXCLUDED.category_name,',
+              '  category_path=EXCLUDED.category_path,',
+              '  category_level=EXCLUDED.category_level,',
+              '  leaf_category=EXCLUDED.leaf_category,',
+              '  active=true,',
+              '  fetched_at=now()'
+            ].join('\n'),
+            [
+              MARKETPLACE_ID,
+              MOTORS_CATEGORY_TREE_ID,
+              OFFICIAL_CATEGORY_TREE_VERSION,
+              MOTORS_ROOT_CATEGORY_ID,
+              JSON.stringify(batch)
+            ]
           );
         }
         await client.query(
-          `UPDATE partquill.ebay_category_sync_state SET
-             status='running',category_tree_id=$2,category_tree_version=$3,
-             categories_imported=$4,last_completed_at=now(),updated_at=now(),error_detail=NULL
-           WHERE sync_name=$1`,
-          ['EBAY_US_MOTORS', treeId, version, rows.length]
+          [
+            'UPDATE partquill.ebay_category_sync_state SET',
+            "  status='running',category_tree_id=$2,category_tree_version=$3,",
+            '  categories_imported=$4,last_completed_at=now(),updated_at=now(),error_detail=NULL',
+            'WHERE sync_name=$1'
+          ].join('\n'),
+          [
+            'EBAY_US_MOTORS',
+            MOTORS_CATEGORY_TREE_ID,
+            OFFICIAL_CATEGORY_TREE_VERSION,
+            rows.length
+          ]
         );
         await client.query('COMMIT');
       } catch (error) {
@@ -348,163 +445,213 @@ export function startEbayCategoryTaxonomySync(config: AppConfig): EbayCategorySy
       } finally {
         client.release();
       }
+
+      leafCategoryCache = rows
+        .filter((category) => category.leaf_category)
+        .map((category) => ({
+          category_id: category.category_id,
+          category_name: category.category_name,
+          category_path: category.category_path
+        }));
+      const fallbackCovered = await ensureFallbackCoverage();
       await refreshCounts();
-      console.log('PARTQUILL_EBAY_MOTORS_TREE_SYNCED', JSON.stringify({
-        marketplace: MARKETPLACE_ID,
-        rootCategoryId: MOTORS_ROOT_CATEGORY_ID,
-        treeId,
-        version,
-        categories: rows.length,
-        readOnly: true
-      }));
+      console.log(
+        'PARTQUILL_EBAY_MOTORS_TREE_SYNCED',
+        JSON.stringify({
+          marketplace: MARKETPLACE_ID,
+          rootCategoryId: MOTORS_ROOT_CATEGORY_ID,
+          treeId: MOTORS_CATEGORY_TREE_ID,
+          version: OFFICIAL_CATEGORY_TREE_VERSION,
+          categories: rows.length,
+          fallbackCovered,
+          source: OFFICIAL_CATEGORY_CSV_URL,
+          requestMethod: 'GET',
+          sellerTokenUsed: false,
+          readOnly: true
+        })
+      );
     } catch (error) {
-      const detail = error instanceof Error ? error.message.slice(0, 1_000) : 'unknown taxonomy failure';
-      await pool.query(
-        `INSERT INTO partquill.ebay_category_sync_state(sync_name,status,error_detail,updated_at)
-         VALUES('EBAY_US_MOTORS','failed',$1,now())
-         ON CONFLICT(sync_name) DO UPDATE SET status='failed',error_detail=$1,updated_at=now()`,
-        [detail]
-      ).catch(() => undefined);
+      const detail =
+        error instanceof Error ? error.message.slice(0, 1_000) : 'unknown taxonomy failure';
+      await pool
+        .query(
+          [
+            'INSERT INTO partquill.ebay_category_sync_state(',
+            '  sync_name,status,error_detail,updated_at',
+            ')',
+            "VALUES('EBAY_US_MOTORS','failed',$1,now())",
+            'ON CONFLICT(sync_name) DO UPDATE SET',
+            "  status='failed',error_detail=$1,updated_at=now()"
+          ].join('\n'),
+          [detail]
+        )
+        .catch(() => undefined);
       console.error('PARTQUILL_EBAY_MOTORS_TREE_SYNC_FAILED', detail);
     } finally {
       treeRunning = false;
     }
   };
 
-  const assignBatch = async (): Promise<void> => {
-    if (stopped || assignmentRunning) return;
+  const loadLeafCategories = async (): Promise<StoredLeafCategory[]> => {
+    if (leafCategoryCache.length) return leafCategoryCache;
+    const stored = await pool.query<StoredLeafCategory>(
+      [
+        'SELECT category_id,category_name,category_path',
+        'FROM partquill.ebay_categories',
+        'WHERE marketplace_id=$1 AND root_category_id=$2',
+        '  AND active=true AND leaf_category=true'
+      ].join('\n'),
+      [MARKETPLACE_ID, MOTORS_ROOT_CATEGORY_ID]
+    );
+    leafCategoryCache = stored.rows;
+    return leafCategoryCache;
+  };
+
+  const assignBatch = async (): Promise<number> => {
+    if (stopped || assignmentRunning) return 0;
     assignmentRunning = true;
     try {
-      const pending = await pool.query<{part_number: string; data: GmCatalogPart}>(
-        `SELECT p.part_number,p.data
-         FROM partquill.gm_catalog_parts p
-         WHERE NOT EXISTS(
-           SELECT 1 FROM partquill.ebay_category_assignments a
-           WHERE a.part_number=p.part_number
-         )
-         ORDER BY p.part_number
-         LIMIT $1`,
-        [ASSIGNMENT_BATCH]
+      const categories = await loadLeafCategories();
+      if (categories.length < 500) {
+        console.log('PARTQUILL_EBAY_CATEGORY_BATCH_DEFERRED', JSON.stringify({
+          reason: 'taxonomy_not_ready',
+          readOnly: true
+        }));
+        return 0;
+      }
+
+      const pending = await pool.query<{ part_number: string; data: GmCatalogPart }>(
+        [
+          'SELECT p.part_number,p.data',
+          'FROM partquill.gm_catalog_parts p',
+          'LEFT JOIN partquill.ebay_category_assignments a',
+          '  ON a.part_number=p.part_number',
+          'WHERE a.part_number IS NULL',
+          "   OR a.status<>'ASSIGNED'",
+          "   OR a.raw_suggestion->>'classificationMode'='PENDING_RULE_REFINEMENT'",
+          '   OR NOT EXISTS(',
+          '     SELECT 1 FROM partquill.ebay_categories c',
+          '     WHERE c.marketplace_id=$1 AND c.category_id=a.category_id AND c.active=true',
+          '   )',
+          'ORDER BY',
+          "  CASE WHEN a.raw_suggestion->>'classificationMode'='PENDING_RULE_REFINEMENT'",
+          '    THEN 0 ELSE 1 END,',
+          '  a.verified_at NULLS FIRST,',
+          '  p.part_number',
+          'LIMIT $2'
+        ].join('\n'),
+        [MARKETPLACE_ID, ASSIGNMENT_BATCH]
       );
+
+      let specific = 0;
+      let fallback = 0;
       for (const row of pending.rows) {
         if (stopped) break;
         const catalog = normalizeGmCatalogPart(row.data, row.part_number);
         const intelligence = catalog ? buildCatalogListingIntelligence(catalog) : undefined;
-        const query = intelligence?.category.query || `automotive replacement part ${row.part_number}`;
-        let suggestion;
-        try {
-          suggestion = await suggestionClient.suggestCategory(query);
-        } catch (error) {
-          const candidateName = intelligence?.category.categoryName?.trim();
-          if (candidateName) {
-            const local = await pool.query<{category_id: string; category_name: string; category_path: string[]}>(
-              `SELECT category_id,category_name,category_path
-               FROM partquill.ebay_categories
-               WHERE marketplace_id=$1 AND active=true
-                 AND lower(category_name)=lower($2)
-               ORDER BY leaf_category DESC,array_length(category_path,1) DESC
-               LIMIT 1`,
-              [MARKETPLACE_ID, candidateName]
-            );
-            const matched = local.rows[0];
-            if (matched) {
-              suggestion = {
-                categoryId: matched.category_id,
-                categoryName: matched.category_name,
-                categoryPath: matched.category_path.join(' › ')
-              };
-            }
-          }
-          if (!suggestion) {
-            console.warn('PARTQUILL_EBAY_CATEGORY_LOCAL_FALLBACK', JSON.stringify({
-              partNumber: row.part_number,
-              error: error instanceof Error ? error.message : 'unknown',
-              matched: false
-            }));
-          }
-        }
-        const insideMotors = suggestion
-          ? await pool.query(
-              `SELECT 1 FROM partquill.ebay_categories
-               WHERE marketplace_id=$1 AND category_id=$2 AND active=true LIMIT 1`,
-              [MARKETPLACE_ID, suggestion.categoryId]
-            )
-          : undefined;
-        const assigned = Boolean(suggestion && insideMotors?.rowCount);
-        const status = assigned ? 'ASSIGNED' : suggestion ? 'OUTSIDE_MOTORS' : 'NO_SUGGESTION';
-        const source = assigned ? 'EBAY_TAXONOMY_API' : status;
+        const query =
+          intelligence?.category.query || 'automotive replacement part ' + row.part_number;
+        const choice = chooseLocalCategory(categories, catalog);
+        if (!choice) continue;
+        if (choice.classificationMode === 'RULE_EXACT_LEAF') specific += 1;
+        else fallback += 1;
+
+        const categoryPath = choice.category_path.join(' › ');
         await pool.query(
-          `INSERT INTO partquill.ebay_category_assignments(
-             part_number,marketplace_id,category_id,category_name,category_path,
-             query,source,status,confidence,assigned_at,verified_at,raw_suggestion
-           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now(),$10::jsonb)
-           ON CONFLICT(part_number) DO UPDATE SET
-             category_id=EXCLUDED.category_id,
-             category_name=EXCLUDED.category_name,
-             category_path=EXCLUDED.category_path,
-             query=EXCLUDED.query,
-             source=EXCLUDED.source,
-             status=EXCLUDED.status,
-             confidence=EXCLUDED.confidence,
-             verified_at=now(),
-             raw_suggestion=EXCLUDED.raw_suggestion`,
+          [
+            'INSERT INTO partquill.ebay_category_assignments(',
+            '  part_number,marketplace_id,category_id,category_name,category_path,',
+            '  query,source,status,confidence,assigned_at,verified_at,raw_suggestion',
+            ')',
+            'VALUES(',
+            "  $1,$2,$3,$4,$5,$6,'EBAY_OFFICIAL_CATEGORY_FILE','ASSIGNED',$7,",
+            '  now(),now(),$8::jsonb',
+            ')',
+            'ON CONFLICT(part_number) DO UPDATE SET',
+            '  marketplace_id=EXCLUDED.marketplace_id,',
+            '  category_id=EXCLUDED.category_id,',
+            '  category_name=EXCLUDED.category_name,',
+            '  category_path=EXCLUDED.category_path,',
+            '  query=EXCLUDED.query,',
+            '  source=EXCLUDED.source,',
+            '  status=EXCLUDED.status,',
+            '  confidence=EXCLUDED.confidence,',
+            '  verified_at=now(),',
+            '  raw_suggestion=EXCLUDED.raw_suggestion'
+          ].join('\n'),
           [
             row.part_number,
             MARKETPLACE_ID,
-            assigned ? suggestion?.categoryId : null,
-            assigned ? suggestion?.categoryName : null,
-            assigned ? suggestion?.categoryPath : null,
+            choice.category_id,
+            choice.category_name,
+            categoryPath,
             query,
-            source,
-            status,
-            assigned ? 1 : 0,
-            JSON.stringify(suggestion ?? {})
+            choice.confidence,
+            JSON.stringify({
+              classificationMode: choice.classificationMode,
+              candidateName: intelligence?.category.categoryName ?? null,
+              candidatePath: intelligence?.category.categoryPath ?? null,
+              taxonomySource: OFFICIAL_CATEGORY_CSV_URL,
+              categoryTreeId: MOTORS_CATEGORY_TREE_ID,
+              categoryTreeVersion: OFFICIAL_CATEGORY_TREE_VERSION
+            })
           ]
         );
-        if (assigned && suggestion) {
-          await pool.query(
-            `UPDATE partquill.gm_catalog_parts SET
-               data=jsonb_set(
-                 data,'{ebayCategory}',
-                 jsonb_build_object(
-                   'marketplaceId',$2::text,
-                   'categoryId',$3::text,
-                   'categoryName',$4::text,
-                   'categoryPath',$5::text,
-                   'source','EBAY_TAXONOMY_API',
-                   'verifiedAt',now()
-                 ),true
-               ),
-               updated_at=now()
-             WHERE part_number=$1`,
-            [
-              row.part_number,
-              MARKETPLACE_ID,
-              suggestion.categoryId,
-              suggestion.categoryName,
-              suggestion.categoryPath
-            ]
-          );
-        }
+
+        await pool.query(
+          [
+            'UPDATE partquill.gm_catalog_parts SET',
+            '  data=jsonb_set(',
+            "    data,'{ebayCategory}',",
+            '    jsonb_build_object(',
+            "      'marketplaceId',$2::text,",
+            "      'categoryId',$3::text,",
+            "      'categoryName',$4::text,",
+            "      'categoryPath',$5::text,",
+            "      'source','EBAY_OFFICIAL_CATEGORY_FILE',",
+            "      'classificationMode',$6::text,",
+            "      'categoryTreeId',$7::text,",
+            "      'categoryTreeVersion',$8::text,",
+            "      'verifiedAt',now()",
+            '    ),true',
+            '  ),',
+            '  updated_at=now()',
+            'WHERE part_number=$1'
+          ].join('\n'),
+          [
+            row.part_number,
+            MARKETPLACE_ID,
+            choice.category_id,
+            choice.category_name,
+            categoryPath,
+            choice.classificationMode,
+            MOTORS_CATEGORY_TREE_ID,
+            OFFICIAL_CATEGORY_TREE_VERSION
+          ]
+        );
       }
+
       await refreshCounts();
-      if (pending.rowCount) {
-        console.log('PARTQUILL_EBAY_CATEGORY_BATCH', JSON.stringify({
-          attempted: pending.rowCount,
-          readOnly: true
-        }));
+      const attempted = pending.rowCount ?? pending.rows.length;
+      if (attempted) {
+        console.log(
+          'PARTQUILL_EBAY_CATEGORY_BATCH',
+          JSON.stringify({ attempted, specific, fallback, readOnly: true })
+        );
       }
+      return attempted;
     } catch (error) {
       console.error(
         'PARTQUILL_EBAY_CATEGORY_BATCH_FAILED',
         error instanceof Error ? error.message : 'unknown'
       );
+      return 0;
     } finally {
       assignmentRunning = false;
     }
   };
 
-  void syncTree().then(assignBatch);
+  void syncTree().then(() => assignBatch());
   const treeTimer = setInterval(() => void syncTree(), TREE_REFRESH_MS);
   const assignmentTimer = setInterval(() => void assignBatch(), ASSIGNMENT_INTERVAL_MS);
   treeTimer.unref();
