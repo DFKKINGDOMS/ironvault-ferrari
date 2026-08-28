@@ -32,6 +32,7 @@ import { applyEbayCategorySuggestion, buildCatalogListingIntelligence } from '..
 import { EbayTaxonomyClient } from '../ebay/taxonomy-client.js';
 import type { EbayReferenceService } from '../ebay/reference-service.js';
 import { isBlockedReferenceImageBytes } from '../ebay/reference-image-policy.js';
+import type { CommunityImageService } from '../community/service.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -101,6 +102,7 @@ export interface AppDependencies {
   tokenVault?: TokenVault;
   imageStudio?: ImageStudioService;
   ebayReference?: EbayReferenceService;
+  communityImages?: CommunityImageService;
 }
 
 function publicStudioJob(job: StudioJobRecord) {
@@ -115,7 +117,7 @@ function publicStudioJob(job: StudioJobRecord) {
 }
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio, ebayReference } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, ebayReference, communityImages } = dependencies;
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
   const referenceAssetRoot = resolve(process.cwd(), 'data/reference-assets');
@@ -144,6 +146,11 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     config.SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS,
     config.SELLER_PREVIEW_MAX_CONCURRENCY
   );
+  const communityUploadGuard = new RequestGuard(
+    config.COMMUNITY_UPLOAD_RATE_LIMIT_MAX,
+    config.COMMUNITY_UPLOAD_RATE_LIMIT_WINDOW_MS,
+    1
+  );
   const ebayTaxonomy = config.EBAY_CLIENT_ID && config.EBAY_CLIENT_SECRET
     ? new EbayTaxonomyClient(config)
     : undefined;
@@ -152,7 +159,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
   await app.register(multipart, {
-    limits: { files: config.IMAGE_STUDIO_MAX_IMAGES, fileSize: 12 * 1024 * 1024, parts: config.IMAGE_STUDIO_MAX_IMAGES + 8 }
+    limits: { files: Math.max(config.IMAGE_STUDIO_MAX_IMAGES, config.COMMUNITY_IMAGE_MAX_IMAGES), fileSize: 12 * 1024 * 1024, parts: config.COMMUNITY_IMAGE_MAX_IMAGES + 12 }
   });
 
   app.addHook('onRequest', async (request, reply) => {
@@ -162,12 +169,17 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       || request.url.startsWith('/?')
       || request.url === '/image-studio'
       || request.url.startsWith('/image-studio?')
+      || request.url === '/community-images'
+      || request.url.startsWith('/community-images?')
       || request.url.startsWith('/assets/')
       || request.url.startsWith('/connected')
     )) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/bootstrap')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/ebay-reference/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/reference-assets/')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/community-assets/')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/community/submissions/')) return;
+    if (request.method === 'POST' && request.url === '/v1/community/submissions') return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
@@ -204,7 +216,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.8' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.16.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -220,10 +232,29 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     .header('cache-control', 'no-store')
     .type('text/html; charset=utf-8')
     .send(buildPartQuillWidgetHtml()));
+  app.get('/community-images', async (_request, reply) => reply
+    .header(
+      'content-security-policy',
+      "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    )
+    .header('referrer-policy', 'strict-origin-when-cross-origin')
+    .header('cache-control', 'no-cache')
+    .header('x-content-type-options', 'nosniff')
+    .header('x-frame-options', 'DENY')
+    .type('text/html; charset=utf-8')
+    .send(sellerIndex));
   app.get('/connected', async (_request, reply) => reply.redirect('/?connected=ebay'));
   app.get('/v1/seller-ui/bootstrap', async (_request, reply) => reply
     .header('cache-control', 'no-store')
-    .send(buildSellerUiBootstrap(config)));
+    .send({
+      ...buildSellerUiBootstrap(config),
+      communityImages: {
+        enabled: Boolean(communityImages),
+        maxImages: config.COMMUNITY_IMAGE_MAX_IMAGES,
+        automatedReviewActive: communityImages?.activated ?? false,
+        gitArchiveConnected: communityImages?.archiveActivated ?? false
+      }
+    }));
   app.post('/v1/seller-ui/command-preview', { bodyLimit: 16 * 1024 }, async (request, reply) => {
     const permit = sellerPreviewGuard.acquire(request.ip);
     try {
@@ -268,6 +299,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
                 alt: result.status === 'PRIVATE_REFERENCE_ARCHIVE'
                   ? `Permanent archived reference ${index + 1} for OEM part ${result.reference!.partNumber}`
                   : image.alt,
+                ...(image.contributorCredit ? { contributorCredit: image.contributorCredit } : {}),
                 viewUrl: image.url.startsWith('/')
                   ? image.url
                   : `/v1/seller-ui/ebay-reference/${encodeURIComponent(result.reference!.partNumber)}/image/${index}`
@@ -395,8 +427,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           maxImages: config.IMAGE_STUDIO_MAX_IMAGES,
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
+        communityImages: {
+          enabled: Boolean(communityImages),
+          maxImages: config.COMMUNITY_IMAGE_MAX_IMAGES,
+          automatedReviewActive: communityImages?.activated ?? false,
+          gitArchiveConnected: communityImages?.archiveActivated ?? false,
+          requiresHumanReview: true,
+          listingPayloadEligible: false
+        },
         sellerUi: {
-          version: '0.15.8',
+          version: '0.16.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },
@@ -552,6 +592,96 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (!imageStudio) throw new DomainError('Image Studio is unavailable', 'STUDIO_UNAVAILABLE', 503);
     const { jobId } = z.object({ jobId: z.string().uuid() }).parse(request.params);
     return reply.code(202).send({ job: publicStudioJob(await imageStudio.retry(jobId)) });
+  });
+
+  app.post('/v1/community/submissions', { bodyLimit: 110 * 1024 * 1024 }, async (request, reply) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const permit = communityUploadGuard.acquire(request.ip);
+    try {
+      const fields = new Map<string, string>();
+      const uploads: Array<{ filename: string; mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; bytes: Uint8Array }> = [];
+      let totalBytes = 0;
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
+          if (part.fieldname !== 'images') {
+            await part.toBuffer();
+            throw new DomainError('community files must use the images field', 'INVALID_COMMUNITY_IMAGE_FIELD', 400);
+          }
+          const mediaType = z.enum(['image/jpeg','image/png','image/webp']).parse(part.mimetype);
+          const bytes = await part.toBuffer();
+          totalBytes += bytes.length;
+          if (totalBytes > 100 * 1024 * 1024) throw new DomainError('the complete contribution must be 100 MB or less', 'COMMUNITY_BATCH_TOO_LARGE', 413);
+          uploads.push({ filename: part.filename || `part-image-${uploads.length + 1}`, mediaType, bytes });
+        } else fields.set(part.fieldname, String(part.value));
+      }
+      const metadata = z.object({
+        contributorCredit: z.string().min(2).max(80),
+        partNumbers: z.string().transform((value, context) => {
+          try { return z.array(z.string().min(1).max(64)).parse(JSON.parse(value)); }
+          catch { context.addIssue({ code: 'custom', message: 'partNumbers must be a JSON string array' }); return z.NEVER; }
+        }),
+        ownershipConfirmed: z.literal('true'),
+        licenseConfirmed: z.literal('true'),
+        contentRulesConfirmed: z.literal('true')
+      }).parse(Object.fromEntries(fields));
+      if (metadata.partNumbers.length !== uploads.length) throw new DomainError('every selected image must have one part number', 'COMMUNITY_PART_NUMBER_COUNT_MISMATCH', 400);
+      const created = await communityImages.createSubmission({
+        contributorCredit: metadata.contributorCredit,
+        ownershipConfirmed: true,
+        licenseConfirmed: true,
+        contentRulesConfirmed: true,
+        attestationFingerprint: `${request.ip}|${request.headers['user-agent'] ?? ''}|${metadata.contributorCredit}`,
+        files: uploads.map((file, index) => ({ ...file, partNumber: metadata.partNumbers[index]! }))
+      });
+      const { statusTokenHash: _hash, attestationFingerprint: _fingerprint, ...safeSubmission } = created.submission;
+      return reply.code(202).header('cache-control','no-store').send({
+        submission: safeSubmission,
+        statusToken: created.statusToken,
+        statusUrl: `/v1/community/submissions/${created.submission.id}`
+      });
+    } finally { permit.release(); }
+  });
+
+  app.get('/v1/community/submissions/:submissionId', async (request, reply) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { submissionId } = z.object({ submissionId: z.string().uuid() }).parse(request.params);
+    const { token } = z.object({ token: z.string().min(20).max(100) }).parse(request.query);
+    return reply.header('cache-control','no-store').send(await communityImages.getPublicSubmission(submissionId, token));
+  });
+
+  app.get('/v1/community-assets/:fileName', async (request, reply) => {
+    if (!communityImages) return reply.code(404).send({ error: { code: 'COMMUNITY_ASSET_NOT_AVAILABLE', message: 'community image is not available' } });
+    const { fileName } = referenceAssetParams.parse(request.params);
+    const asset = await communityImages.readPublishedAsset(fileName);
+    if (!asset) return reply.code(404).send({ error: { code: 'COMMUNITY_ASSET_NOT_AVAILABLE', message: 'community image is not available' } });
+    return reply.header('cache-control','public,max-age=31536000,immutable').header('x-content-type-options','nosniff').type(asset.mediaType).send(Buffer.from(asset.bytes));
+  });
+
+  app.get('/internal/community-images/queue', async (request) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(250).default(100) }).parse(request.query);
+    return { queue: await communityImages.listReviewQueue(limit) };
+  });
+
+  app.get('/internal/community-images/images/:imageId/original', async (request, reply) => {
+    const { imageId } = z.object({ imageId: z.string().uuid() }).parse(request.params);
+    const image = await store.getCommunityImage(imageId);
+    if (!image) throw new DomainError('community image not found', 'COMMUNITY_IMAGE_NOT_FOUND', 404);
+    return reply.header('cache-control','private,no-store').type(image.sourceMediaType).send(Buffer.from(image.sourceBytes));
+  });
+
+  app.post('/internal/community-images/submissions/:submissionId/approve', async (request) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { submissionId } = z.object({ submissionId: z.string().uuid() }).parse(request.params);
+    const body = z.object({ reviewer: z.string().min(1).max(120), note: z.string().max(500).default('') }).parse(request.body ?? {});
+    return { submission: await communityImages.approveSubmission(submissionId, body.reviewer, body.note) };
+  });
+
+  app.post('/internal/community-images/images/:imageId/reject', async (request) => {
+    if (!communityImages) throw new DomainError('community image contributions are unavailable', 'COMMUNITY_UNAVAILABLE', 503);
+    const { imageId } = z.object({ imageId: z.string().uuid() }).parse(request.params);
+    const body = z.object({ reviewer: z.string().min(1).max(120), note: z.string().min(1).max(500) }).parse(request.body);
+    return { image: await communityImages.rejectImage(imageId, body.reviewer, body.note) };
   });
 
   app.post('/v1/items', async (request, reply) => {

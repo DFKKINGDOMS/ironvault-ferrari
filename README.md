@@ -17,6 +17,9 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Seller-photo requirement, explicit physical-part and condition confirmations, green/amber/red fitment legend, VIN recovery entry point, and a visible “Find the correct part” buyer-assistance path.
 - Safe “Send to eBay” handoff that opens only `https://www.ebay.com/`; no account sign-in, listing payload or eBay write is performed.
 - Existing connected Image Studio preserved at `/image-studio`.
+- Free community Parts Image Wiki at `/community-images`, with up to 50 JPEG, PNG or WebP images per contribution, an exact part number for every image, owner/permission attestation, a rights-cleared archive license and public contributor credit.
+- Community originals remain quarantined in PostgreSQL. Automated screening rejects people, faces, hands, body parts, explicit or illegal material, unrelated scenes, marketplace promotional graphics, watermarks, overlays and visible part-number conflicts before a required human review.
+- Human-approved contributions use the source-preserving white-background Image Studio workflow and QA. Distinct views are archived atomically to Git as `SKU.png`, `SKU_1.png`, `SKU_2.png`, and so on, mapped back to the reference database, and never enter a seller listing-photo payload automatically.
 - Exact OEM-keyed eBay Motors visual-reference discovery through the production Browse API. Results are capped at three images, isolated from seller-owned media, cached for no more than six hours, removed before stale refresh, and never enter a listing payload. Permanent archive status is available only after separate ownership or written-permission evidence.
 - Authenticated Fastify API with strict Zod request validation.
 - Canonical payload hashing and versioned held drafts.
@@ -91,6 +94,15 @@ The seller workspace endpoints are also public and read-only:
 - `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
 - `POST /v1/seller-ui/command-preview` — builds a catalog-held, photo-first, restricted-safety, or illustrative preview; it performs no catalog or eBay request.
 - `GET /v1/seller-ui/ebay-reference/:partNumber` — checks only an exact, locally verified catalog key; unrelated categories, partial numbers, conflicting MPNs and conflicting automaker brands fail closed.
+
+The community contribution surface is public and rate limited:
+
+- `GET /community-images` — contributor upload, rights attestation and receipt/status interface.
+- `POST /v1/community/submissions` — multipart intake using `images`, a JSON `partNumbers` array, `contributorCredit`, and all three required confirmation fields.
+- `GET /v1/community/submissions/:submissionId?token=...` — receipt-protected status; the token is returned only at intake.
+- `GET /v1/community-assets/:fileName` — immutable public derivative, available only after automated screening, human approval, editing, source-comparison QA and Git archival.
+
+Review endpoints under `/internal/community-images/` require the normal PartQuill bearer credential. Approved files do not publish unless `COMMUNITY_GITHUB_TOKEN` is configured with narrowly scoped write access to the configured archive repository; they remain in `READY_FOR_ARCHIVE` and queue recovery retries them. The server-side OpenAI credential is required for automated screening and editing. Originals are never exposed by public endpoints.
 
 The connected ChatGPT proof endpoint is also public:
 

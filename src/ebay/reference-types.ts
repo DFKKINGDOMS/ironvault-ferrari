@@ -7,6 +7,7 @@ export type EbayReferenceCacheStatus =
 export interface EbayReferenceImage {
   url: string;
   alt: string;
+  contributorCredit?: string;
   contentReview?: {
     decision: 'ACCEPT_PART_ONLY' | 'REJECT' | 'QUARANTINE';
     method: 'MANUAL_EXACT_LISTING_REVIEW' | 'AUTOMATED_VISUAL_REVIEW';

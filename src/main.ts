@@ -15,6 +15,9 @@ import { PostgresStore } from './store/postgres-store.js';
 import { EbayBrowseReferenceClient } from './ebay/reference-discovery.js';
 import { EbayReferenceService } from './ebay/reference-service.js';
 import { CuratedEbayReferenceProvider } from './ebay/curated-reference.js';
+import { CommunityImageService } from './community/service.js';
+import { DisabledCommunityModerator, OpenAiCommunityModerator } from './community/moderation.js';
+import { DisabledCommunityArchive, GitHubCommunityArchive } from './community/github-archive.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -43,6 +46,21 @@ const imageStudio = new ImageStudioService(
   config.IMAGE_STUDIO_CONCURRENCY
 );
 await imageStudio.initialize();
+const communityImages = config.COMMUNITY_IMAGES_ENABLED
+  ? new CommunityImageService(
+      store,
+      config.OPENAI_API_KEY ? new OpenAiCommunityModerator(config.OPENAI_API_KEY) : new DisabledCommunityModerator(),
+      config.OPENAI_API_KEY ? new OpenAiImageEngine(config.OPENAI_API_KEY) : new DisabledImageEngine(),
+      config.COMMUNITY_GITHUB_TOKEN
+        ? new GitHubCommunityArchive(
+            config.COMMUNITY_GITHUB_REPOSITORY,
+            config.COMMUNITY_GITHUB_BRANCH,
+            config.COMMUNITY_GITHUB_TOKEN
+          )
+        : new DisabledCommunityArchive(),
+      config.COMMUNITY_IMAGE_MAX_IMAGES
+    )
+  : undefined;
 const ebayReferenceProvider = config.EBAY_REFERENCE_DISCOVERY_MODE === 'live'
   ? new EbayBrowseReferenceClient(config)
   : undefined;
@@ -65,11 +83,29 @@ const app = await buildApp({
   store,
   service,
   imageStudio,
+  ...(communityImages ? { communityImages } : {}),
   ebayReference,
   ...(tokenVault ? { tokenVault } : {})
 });
 
 await app.listen({ host: config.HOST, port: config.PORT });
+
+const recoverCommunityQueue = async () => {
+  if (!communityImages) return;
+  for (const row of await communityImages.listReviewQueue(25)) {
+    if (row.images.some((image) => ['QUARANTINED','AWAITING_AUTOMATED_REVIEW'].includes(image.status))) {
+      await communityImages.screenSubmission(row.submission.id);
+    }
+    if (row.images.some((image) => ['APPROVED_FOR_EDIT','READY_FOR_ARCHIVE'].includes(image.status))) {
+      await communityImages.processApproved(row.submission.id);
+    }
+  }
+};
+void recoverCommunityQueue().catch((error: unknown) => app.log.error({ error }, 'community image queue recovery failed'));
+const communityRecovery = setInterval(() => {
+  void recoverCommunityQueue().catch((error: unknown) => app.log.error({ error }, 'community image queue recovery failed'));
+}, 60_000);
+communityRecovery.unref();
 
 if (store instanceof PostgresStore) {
   const catalogPath = resolve('data/gm-catalog-v1.ndjson.gz');
@@ -82,6 +118,7 @@ if (store instanceof PostgresStore) {
 
 const close = async (): Promise<void> => {
   clearInterval(ebayReferenceCleanup);
+  clearInterval(communityRecovery);
   await app.close();
   if (store instanceof PostgresStore) await store.close();
 };

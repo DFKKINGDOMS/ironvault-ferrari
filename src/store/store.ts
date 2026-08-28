@@ -10,6 +10,7 @@ import type {
 } from '../domain/types.js';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
+import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
 export interface Store {
   ping?(): Promise<void>;
@@ -46,4 +47,12 @@ export interface Store {
   saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void>;
   deleteEbayReferenceCache(partNumber: string): Promise<void>;
   purgeExpiredEbayReferenceCache(at: string): Promise<number>;
+  saveCommunitySubmission(record: CommunitySubmissionRecord): Promise<void>;
+  getCommunitySubmission(id: string): Promise<CommunitySubmissionRecord | undefined>;
+  listCommunitySubmissionsForReview(limit: number): Promise<CommunitySubmissionRecord[]>;
+  saveCommunityImage(record: StoredCommunityImage): Promise<void>;
+  getCommunityImage(id: string): Promise<StoredCommunityImage | undefined>;
+  listCommunityImages(submissionId: string): Promise<StoredCommunityImage[]>;
+  listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]>;
+  getPublishedCommunityAsset(filename: string): Promise<StoredCommunityImage | undefined>;
 }

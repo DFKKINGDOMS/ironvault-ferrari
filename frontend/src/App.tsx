@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CommunityImages } from "./CommunityImages";
 
 type SellerBootstrap = {
   version: string;
@@ -10,6 +11,7 @@ type SellerBootstrap = {
   persistence: string;
   imageStudio: { mode: string; path: string };
   ebayReferenceDiscovery: { mode: "disabled" | "live"; maxImages: number; cacheHours: number; permanentArchiveRequiresRights: true };
+  communityImages: { enabled: boolean; maxImages: number; automatedReviewActive: boolean; gitArchiveConnected: boolean };
 };
 
 type EbayReferenceRecord = {
@@ -22,7 +24,7 @@ type EbayReferenceRecord = {
   title: string | null;
   categoryId: string | null;
   categoryPath: string | null;
-  images: Array<{ viewUrl: string; alt: string }>;
+  images: Array<{ viewUrl: string; alt: string; contributorCredit?: string }>;
   matchEvidence: string[];
   checkedAt: string;
   expiresAt: string | null;
@@ -167,6 +169,7 @@ type View =
   | "published"
   | "risk"
   | "evidence"
+  | "community"
   | "settings";
 
 type EditorTab =
@@ -210,6 +213,7 @@ const navGroups: Array<{ label: string; items: Array<{ id: View; label: string; 
       { id: "new", label: "Guided listing", icon: "camera" },
       { id: "research", label: "Research only", icon: "search" },
       { id: "evidence", label: "Evidence Packs", icon: "receipt" },
+      { id: "community", label: "Parts Image Wiki", icon: "camera" },
       { id: "settings", label: "Settings", icon: "settings" },
     ],
   },
@@ -343,7 +347,7 @@ function EbayReferenceGallery({ lookup, loading, partNumber }: { lookup: EbayRef
     </header>
     {matched ? <>
       <div className="ebay-reference-warning"><Icon name="shield"/><span><strong>{durable ? "Approved reference archive" : privateArchive ? "Permanent personal-use reference" : "Another seller’s listing — not your item photo"}</strong><small>{durable ? "The archived media remains outside the seller-item photo set unless separately selected and permitted." : privateArchive ? "Saved permanently by SKU and excluded from the eBay listing-photo payload." : "Temporary live reference only. These images are not downloaded, background-removed, archived or placed in the listing payload."}</small></span></div>
-      <div className="ebay-reference-grid">{reference.images.map((item, index) => <figure key={item.viewUrl}><img src={item.viewUrl} alt={item.alt} loading="lazy"/><figcaption>Reference view {index + 1} · {durable ? "rights cleared" : privateArchive ? "archived" : "live eBay"}</figcaption></figure>)}</div>
+      <div className="ebay-reference-grid">{reference.images.map((item, index) => <figure key={item.viewUrl}><img src={item.viewUrl} alt={item.alt} loading="lazy"/><figcaption><span>Reference view {index + 1} · {durable ? "rights cleared" : privateArchive ? "archived" : "live eBay"}</span>{item.contributorCredit && <small>Photo contributed by {item.contributorCredit}</small>}</figcaption></figure>)}</div>
       <div className="ebay-reference-detail"><div><strong>{reference.title}</strong><span>{reference.categoryPath ?? "eBay Motors Parts & Accessories"}</span><small>{reference.matchEvidence.join(" · ")}</small></div>{reference.sourceUrl && <a href={reference.sourceUrl} target="_blank" rel="noreferrer">View current source on eBay <Icon name="arrow"/></a>}</div>
       {!durable && <footer><span>{privateArchive ? `Permanently saved by SKU · checked ${new Date(reference.checkedAt).toLocaleString()}` : `Checked ${new Date(reference.checkedAt).toLocaleString()} · expires no later than ${reference.expiresAt ? new Date(reference.expiresAt).toLocaleString() : "six hours"}`}</span><strong>Seller-owned photo is still required</strong></footer>}
     </> : <div className="ebay-reference-empty"><Icon name={loading ? "live" : "camera"}/><div><strong>{loading ? "Checking eBay Motors for an exact catalog-consistent match…" : lookup?.status === "NO_EXACT_MATCH" ? "No exact eBay Motors match passed validation" : lookup?.status === "TEMPORARILY_UNAVAILABLE" ? "eBay reference search is temporarily unavailable" : lookup?.status === "DISCOVERY_DISABLED" ? "Live eBay reference discovery is not configured" : "No separate marketplace reference is available"}</strong><p>PartQuill keeps the GM catalog scan and highlighted callout as durable evidence. It will not substitute a loose keyword match or reuse unrelated photos.</p></div></div>}
@@ -441,7 +445,7 @@ function ActiveDraftEditor({ preview, editorTab, setEditorTab, title, setTitle, 
 }
 
 export default function Home() {
-  const [view, setView] = useState<View>("instant");
+  const [view, setView] = useState<View>(() => window.location.pathname === "/community-images" ? "community" : "instant");
   const [editorTab, setEditorTab] = useState<EditorTab>("listing");
   const [inventoryFilter, setInventoryFilter] = useState("All");
   const [search, setSearch] = useState("");
@@ -482,7 +486,12 @@ export default function Home() {
     return statusMatch && textMatch;
   }), [inventoryFilter, search]);
 
-  const navigate = (next: View) => { setView(next); setNotice(""); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const navigate = (next: View) => {
+    setView(next); setNotice("");
+    const path = next === "community" ? "/community-images" : "/";
+    if (window.location.pathname !== path) window.history.pushState({ view: next }, "", path);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const openDraft = (tab: EditorTab = "listing") => { setEditorTab(tab); navigate("drafts"); };
   const showNotice = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(""), 4200); };
   const stageInstantPhotos = (files: FileList | null) => {
@@ -603,6 +612,8 @@ export default function Home() {
   };
 
   useEffect(() => {
+    const onPopState = () => setView(window.location.pathname === "/community-images" ? "community" : "instant");
+    window.addEventListener("popstate", onPopState);
     void fetch("/v1/seller-ui/bootstrap")
       .then(async (response) => {
         if (!response.ok) throw new Error("bootstrap unavailable");
@@ -611,6 +622,7 @@ export default function Home() {
       .catch(() => setBootstrap(null));
     void buildInstantDraft("List part 58487514 on eBay for $9.99 now");
     // The approved sample is bootstrapped once; later builds are seller-initiated.
+    return () => window.removeEventListener("popstate", onPopState);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -881,6 +893,13 @@ export default function Home() {
           <SectionHeading eyebrow="Proof, not promises" title="Evidence Packs" body="Export the seller-owned chain for a return, VeRO question, recall review, chargeback or internal audit." action={<button className="primary" onClick={() => showNotice("Sample EvidencePack download prepared.")}><Icon name="receipt"/> Export selected</button>} />
           <div className="evidence-layout"><div className="pack-card"><div className="pack-cover"><span>PARTQUILL / EVIDENCE PACK</span><strong>VLT-1042</strong><small>Draft v12 · not published</small><Icon name="shield"/></div><div className="pack-sections">{[ ["Source photographs", "4 originals · SHA-256 retained"], ["Approved derivatives", "1 image · source comparison passed"], ["Identity evidence", "Brand + MPN seller-confirmed"], ["Catalog evidence", "2 exact reference checks · fitment excluded"], ["Approval ledger", "Private preflight pending"], ["Payload history", "12 immutable draft versions"] ].map(([label,value]) => <div key={label}><span>{label}</span><strong>{value}</strong><Icon name="check"/></div>)}</div></div><div className="audit-ledger"><div><span>Audit ledger</span><Badge tone="green">Append-only design</Badge></div>{[ ["04:12", "Seller confirmed physical MPN", "KW"], ["04:09", "Unsupported fitment removed", "System"], ["04:06", "Hero derivative approved", "KW"], ["04:03", "Catalog reference refreshed", "System"], ["03:58", "Draft created from part number", "KW"] ].map(([time,event,actor]) => <article key={`${time}-${event}`}><time>{time}</time><i/><div><strong>{event}</strong><span>{actor}</span></div></article>)}</div></div>
         </section>}
+
+        {view === "community" && <CommunityImages
+          enabled={bootstrap?.communityImages.enabled ?? false}
+          maxImages={bootstrap?.communityImages.maxImages ?? 50}
+          automatedReviewActive={bootstrap?.communityImages.automatedReviewActive ?? false}
+          gitArchiveConnected={bootstrap?.communityImages.gitArchiveConnected ?? false}
+        />}
 
         {view === "settings" && <section className="view">
           <SectionHeading eyebrow="Seller-owned defaults" title="Account and listing rules" body="Reuse the seller’s own choices. Never learn unsupported fitment or marketplace-derived pricing." />

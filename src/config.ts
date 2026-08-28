@@ -36,6 +36,13 @@ const schema = z
     IMAGE_STUDIO_STORAGE_DIR: z.string().default('.partquill-image-studio'),
     IMAGE_STUDIO_MAX_IMAGES: z.coerce.number().int().min(1).max(24).default(24),
     IMAGE_STUDIO_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3),
+    COMMUNITY_IMAGES_ENABLED: booleanString,
+    COMMUNITY_IMAGE_MAX_IMAGES: z.coerce.number().int().min(1).max(50).default(50),
+    COMMUNITY_UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(100).default(3),
+    COMMUNITY_UPLOAD_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(3_600_000),
+    COMMUNITY_GITHUB_REPOSITORY: z.string().default('DFKKINGDOMS/ironvault-ferrari'),
+    COMMUNITY_GITHUB_BRANCH: z.string().default('main'),
+    COMMUNITY_GITHUB_TOKEN: z.string().min(24).optional(),
     OEM_RESEARCH_MODE: z.enum(['disabled', 'private-pilot']).default('disabled'),
     OEM_DATA_RIGHTS_CONFIRMED: booleanString,
     MCP_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000).default(30),
@@ -105,6 +112,9 @@ const schema = z
           message: 'production live Image Studio requires a private pilot access token'
         });
       }
+    }
+    if (env.COMMUNITY_IMAGES_ENABLED && env.NODE_ENV === 'production' && !env.DATABASE_URL) {
+      context.addIssue({ code: 'custom', path: ['COMMUNITY_IMAGES_ENABLED'], message: 'community image intake requires PostgreSQL persistence' });
     }
   });
 

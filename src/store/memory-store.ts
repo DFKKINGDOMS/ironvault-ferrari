@@ -12,6 +12,7 @@ import type { Store } from './store.js';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
+import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -30,7 +31,52 @@ export class MemoryStore implements Store {
   private readonly acknowledgements = new Map<string, SellerAcknowledgement>();
   private readonly gmCatalog = new Map<string, GmCatalogPart>();
   private readonly ebayReferenceCache = new Map<string, EbayReferenceCacheRecord>();
+  private readonly communitySubmissions = new Map<string, CommunitySubmissionRecord>();
+  private readonly communityImages = new Map<string, StoredCommunityImage>();
   private gmCatalogComplete = false;
+
+  async saveCommunitySubmission(record: CommunitySubmissionRecord): Promise<void> {
+    this.communitySubmissions.set(record.id, clone(record));
+  }
+
+  async getCommunitySubmission(id: string): Promise<CommunitySubmissionRecord | undefined> {
+    const record = this.communitySubmissions.get(id);
+    return record ? clone(record) : undefined;
+  }
+
+  async listCommunitySubmissionsForReview(limit: number): Promise<CommunitySubmissionRecord[]> {
+    return [...this.communitySubmissions.values()]
+      .filter((record) => ['SCREENING','PENDING_HUMAN_REVIEW','PROCESSING','READY_FOR_ARCHIVE','FAILED'].includes(record.status))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, limit)
+      .map(clone);
+  }
+
+  async saveCommunityImage(record: StoredCommunityImage): Promise<void> {
+    this.communityImages.set(record.id, clone(record));
+  }
+
+  async getCommunityImage(id: string): Promise<StoredCommunityImage | undefined> {
+    const record = this.communityImages.get(id);
+    return record ? clone(record) : undefined;
+  }
+
+  async listCommunityImages(submissionId: string): Promise<StoredCommunityImage[]> {
+    return [...this.communityImages.values()].filter((record) => record.submissionId === submissionId).sort((a,b) => a.order-b.order).map(clone);
+  }
+
+  async listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]> {
+    const key = canonicalOemPartNumber(partNumber);
+    return [...this.communityImages.values()]
+      .filter((record) => record.partNumber === key && record.status === 'PUBLISHED')
+      .sort((a,b) => (a.publishedAt ?? '').localeCompare(b.publishedAt ?? '') || a.order-b.order)
+      .map((record) => ({ ...clone(record), contributorCredit: this.communitySubmissions.get(record.submissionId)?.contributorCredit ?? 'PartQuill contributor' }));
+  }
+
+  async getPublishedCommunityAsset(filename: string): Promise<StoredCommunityImage | undefined> {
+    const record = [...this.communityImages.values()].find((row) => row.status === 'PUBLISHED' && row.archiveFilename === filename);
+    return record ? clone(record) : undefined;
+  }
 
   async getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined> {
     const record = this.ebayReferenceCache.get(canonicalOemPartNumber(partNumber));

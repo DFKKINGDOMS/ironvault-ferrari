@@ -17,6 +17,7 @@ import type {
 } from '../domain/types.js';
 import type { Store } from './store.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
+import type { CommunityImageRecord, CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 
 const { Pool } = pg;
 
@@ -42,6 +43,78 @@ export class PostgresStore implements Store {
 
   async ping(): Promise<void> {
     await this.pool.query('SELECT 1');
+  }
+
+  async saveCommunitySubmission(record: CommunitySubmissionRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO partquill.community_submissions(id,status,status_token_hash,record,created_at,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,status_token_hash=EXCLUDED.status_token_hash,record=EXCLUDED.record,updated_at=EXCLUDED.updated_at`,
+      [record.id, record.status, record.statusTokenHash, record, record.createdAt, record.updatedAt]
+    );
+  }
+
+  async getCommunitySubmission(id: string): Promise<CommunitySubmissionRecord | undefined> {
+    const result = await this.pool.query<JsonRow<CommunitySubmissionRecord>>(
+      'SELECT record FROM partquill.community_submissions WHERE id=$1', [id]
+    );
+    return result.rows[0]?.record;
+  }
+
+  async listCommunitySubmissionsForReview(limit: number): Promise<CommunitySubmissionRecord[]> {
+    const result = await this.pool.query<JsonRow<CommunitySubmissionRecord>>(
+      `SELECT record FROM partquill.community_submissions
+       WHERE status = ANY($1::text[]) ORDER BY created_at ASC LIMIT $2`,
+      [['SCREENING','PENDING_HUMAN_REVIEW','PROCESSING','READY_FOR_ARCHIVE','FAILED'], limit]
+    );
+    return result.rows.map((row) => row.record);
+  }
+
+  async saveCommunityImage(record: StoredCommunityImage): Promise<void> {
+    const { sourceBytes, derivativeBytes, ...metadata } = record;
+    await this.pool.query(
+      `INSERT INTO partquill.community_images(
+         id,submission_id,part_number,status,source_sha256,visual_hash,source_bytes,derivative_bytes,archive_filename,record,created_at,updated_at
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT(id) DO UPDATE SET
+         status=EXCLUDED.status,derivative_bytes=EXCLUDED.derivative_bytes,archive_filename=EXCLUDED.archive_filename,record=EXCLUDED.record,updated_at=EXCLUDED.updated_at`,
+      [record.id,record.submissionId,record.partNumber,record.status,record.sourceSha256,record.visualHash,
+       Buffer.from(sourceBytes),derivativeBytes ? Buffer.from(derivativeBytes) : null,record.archiveFilename ?? null,metadata,record.createdAt,record.updatedAt]
+    );
+  }
+
+  async getCommunityImage(id: string): Promise<StoredCommunityImage | undefined> {
+    const result = await this.pool.query<{record: CommunityImageRecord; source_bytes: Buffer; derivative_bytes: Buffer | null}>(
+      'SELECT record,source_bytes,derivative_bytes FROM partquill.community_images WHERE id=$1', [id]
+    );
+    const row = result.rows[0];
+    return row ? { ...row.record, sourceBytes: row.source_bytes, ...(row.derivative_bytes ? { derivativeBytes: row.derivative_bytes } : {}) } : undefined;
+  }
+
+  async listCommunityImages(submissionId: string): Promise<StoredCommunityImage[]> {
+    const result = await this.pool.query<{record: CommunityImageRecord; source_bytes: Buffer; derivative_bytes: Buffer | null}>(
+      'SELECT record,source_bytes,derivative_bytes FROM partquill.community_images WHERE submission_id=$1 ORDER BY (record->>\'order\')::integer ASC', [submissionId]
+    );
+    return result.rows.map((row) => ({ ...row.record, sourceBytes: row.source_bytes, ...(row.derivative_bytes ? { derivativeBytes: row.derivative_bytes } : {}) }));
+  }
+
+  async listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]> {
+    const result = await this.pool.query<{record: CommunityImageRecord; source_bytes: Buffer; derivative_bytes: Buffer | null; contributor_credit: string}>(
+      `SELECT i.record,i.source_bytes,i.derivative_bytes,s.record->>'contributorCredit' contributor_credit
+       FROM partquill.community_images i JOIN partquill.community_submissions s ON s.id=i.submission_id
+       WHERE i.part_number=$1 AND i.status='PUBLISHED' ORDER BY i.updated_at ASC,(i.record->>'order')::integer ASC`,
+      [canonicalOemPartNumber(partNumber)]
+    );
+    return result.rows.map((row) => ({ ...row.record, contributorCredit: row.contributor_credit, sourceBytes: row.source_bytes, ...(row.derivative_bytes ? { derivativeBytes: row.derivative_bytes } : {}) }));
+  }
+
+  async getPublishedCommunityAsset(filename: string): Promise<StoredCommunityImage | undefined> {
+    const result = await this.pool.query<{record: CommunityImageRecord; source_bytes: Buffer; derivative_bytes: Buffer | null}>(
+      `SELECT record,source_bytes,derivative_bytes FROM partquill.community_images
+       WHERE archive_filename=$1 AND status='PUBLISHED' LIMIT 1`, [filename]
+    );
+    const row = result.rows[0];
+    return row ? { ...row.record, sourceBytes: row.source_bytes, ...(row.derivative_bytes ? { derivativeBytes: row.derivative_bytes } : {}) } : undefined;
   }
 
   async initializeGmCatalog(): Promise<void> {

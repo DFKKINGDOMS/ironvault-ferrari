@@ -57,6 +57,20 @@ services:
         value: "24"
       - key: IMAGE_STUDIO_CONCURRENCY
         value: "3"
+      - key: COMMUNITY_IMAGES_ENABLED
+        value: "true"
+      - key: COMMUNITY_IMAGE_MAX_IMAGES
+        value: "50"
+      - key: COMMUNITY_UPLOAD_RATE_LIMIT_MAX
+        value: "3"
+      - key: COMMUNITY_UPLOAD_RATE_LIMIT_WINDOW_MS
+        value: "3600000"
+      - key: COMMUNITY_GITHUB_REPOSITORY
+        value: DFKKINGDOMS/ironvault-ferrari
+      - key: COMMUNITY_GITHUB_BRANCH
+        value: main
+      - key: COMMUNITY_GITHUB_TOKEN
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OEM_RESEARCH_MODE
