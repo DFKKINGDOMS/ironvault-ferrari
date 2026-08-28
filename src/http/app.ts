@@ -188,7 +188,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.12.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.13.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -284,7 +284,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.12.0',
+          version: '0.13.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },
