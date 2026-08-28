@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline';
 import { createGunzip } from 'node:zlib';
 import pg from 'pg';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
+import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 import type {
   ApprovalRecord,
   AuditEvent,
@@ -185,7 +186,13 @@ export class PostgresStore implements Store {
 
   private async upsertGmCatalogBatch(records: GmCatalogPart[], client: pg.Pool | pg.PoolClient = this.pool): Promise<void> {
     if (!records.length) return;
-    const payload = records.map((record) => ({ part_number: record.partNumber, data: record }));
+    const payload = records
+      .map((record) => {
+        const partNumber = canonicalOemPartNumber(record.partNumber);
+        return partNumber ? { part_number: partNumber, data: { ...record, partNumber } } : null;
+      })
+      .filter((record): record is { part_number: string; data: GmCatalogPart } => record !== null);
+    if (!payload.length) return;
     await client.query(
       `INSERT INTO partquill.gm_catalog_parts(part_number, verification_state, data, updated_at)
        SELECT item.part_number, item.data ->> 'verificationState', item.data, now()
@@ -199,7 +206,7 @@ export class PostgresStore implements Store {
   }
 
   async lookupGmCatalogPart(partNumber: string): Promise<GmCatalogPart | undefined> {
-    const normalized = partNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const normalized = canonicalOemPartNumber(partNumber);
     const result = await this.pool.query<{ data: GmCatalogPart }>(
       'SELECT data FROM partquill.gm_catalog_parts WHERE part_number = $1',
       [normalized]

@@ -10,6 +10,7 @@ import type {
 } from '../domain/types.js';
 import type { Store } from './store.js';
 import type { GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
+import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -30,12 +31,16 @@ export class MemoryStore implements Store {
   private gmCatalogComplete = false;
 
   async importGmCatalogRecords(records: GmCatalogPart[], complete = false): Promise<void> {
-    for (const record of records) this.gmCatalog.set(record.partNumber, clone(record));
+    for (const record of records) {
+      const partNumber = canonicalOemPartNumber(record.partNumber);
+      if (!partNumber) continue;
+      this.gmCatalog.set(partNumber, clone({ ...record, partNumber }));
+    }
     this.gmCatalogComplete = complete;
   }
 
   async lookupGmCatalogPart(partNumber: string): Promise<GmCatalogPart | undefined> {
-    const record = this.gmCatalog.get(partNumber.toUpperCase().replace(/[^A-Z0-9]/g, ''));
+    const record = this.gmCatalog.get(canonicalOemPartNumber(partNumber));
     return record ? clone(record) : undefined;
   }
 

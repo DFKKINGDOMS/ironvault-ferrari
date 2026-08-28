@@ -59,7 +59,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.14.0',
+      version: '0.14.1',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       safeguards: { unknownCatalogClaimsHeld: true, sellerPhotoRequired: true, dualApproval: true }
@@ -84,7 +84,7 @@ describe('HTTP contract', () => {
   it('keeps catalog ingestion hidden behind its dedicated temporary token', async () => {
     const h = harness({ GM_IMPORT_TOKEN: 'test-gm-import-token-that-is-long-enough' });
     app = await buildApp(h);
-    const record = { partNumber: '5459066', verificationState: 'CATALOG_STATED' };
+    const record = { partNumber: '545-5055', verificationState: 'CATALOG_STATED' };
     expect((await app.inject({
       method: 'POST',
       url: '/internal/gm-catalog/import',
@@ -97,7 +97,10 @@ describe('HTTP contract', () => {
       payload: { records: [record], complete: true }
     });
     expect(accepted.statusCode).toBe(200);
-    expect(await h.store.lookupGmCatalogPart('5459066')).toMatchObject(record);
+    expect(await h.store.lookupGmCatalogPart('545 5055')).toMatchObject({
+      ...record,
+      partNumber: '5455055'
+    });
     expect(await h.store.getGmCatalogStatus()).toMatchObject({ status: 'completed', availableParts: 1 });
   });
 

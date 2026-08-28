@@ -70,7 +70,7 @@ const imageSchema = z.object({
 
 const gmCatalogImportSchema = z.object({
   records: z.array(z.object({
-    partNumber: z.string().regex(/^[A-Z0-9]+$/),
+    partNumber: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9\s./-]*$/),
     verificationState: z.string().min(1)
   }).passthrough()).min(1).max(1000),
   complete: z.boolean().default(false)
@@ -189,7 +189,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.14.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.14.1' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -286,7 +286,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.14.0',
+          version: '0.14.1',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },
