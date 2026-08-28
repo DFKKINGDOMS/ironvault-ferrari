@@ -46,7 +46,9 @@
         "height": 29,
         "left": 1969,
         "top": 2164,
-        "width": 368
+        "width": 368,
+        "image_width": 2550,
+        "image_height": 3300
       },
       "evidenceContext": "0 1959 ELEMENT cleaner Bendix 1 576443 1959 ELEMENT cleaner Moraine 1 5459066 1960 thru 1962 ELEMENT cleaner Bendix 1 534094 1960 thru 1962 ELEMENT clea",
       "layoutLine": "1959.2... 266 ee eee ee ew ~~ ~~)©6 ELEMENT, cleaner (Moraine) .... 1 5459066........",

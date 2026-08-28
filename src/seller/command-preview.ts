@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
+import { buildCatalogListingIntelligence, type CatalogListingIntelligence } from '../catalog/listing-intelligence.js';
 import type { AppConfig } from '../config.js';
 
 export const listingCommandRequestSchema = z.object({
@@ -38,7 +39,7 @@ export interface ListingCommandIntent {
 }
 
 export interface SellerCommandPreview {
-  schemaVersion: '2026-08-27';
+  schemaVersion: '2026-08-28';
   status: CommandPreviewStatus;
   command: string;
   intent: ListingCommandIntent;
@@ -49,6 +50,7 @@ export interface SellerCommandPreview {
     sku: string | null;
     description: string;
     category: string | null;
+    categoryId: string | null;
     aspects: Record<string, string>;
     handlingTime: '1 business day';
     returns: '30 days · buyer-paid';
@@ -80,14 +82,19 @@ export interface SellerCommandPreview {
       kind: 'catalog-row' | 'diagram';
       pageId: number;
       label: string;
-      sourceUrl: string | null;
+      viewUrl: string;
       imageRef: string | null;
       imageBlobKey: string | null;
       callout: string | null;
       confidence: number | null;
       exactPartDepiction: boolean;
+      primary: boolean;
+      evidenceBox: Record<string, unknown> | null;
+      displayRotationDegrees: number | null;
+      relationshipState: string;
     }>;
   };
+  intelligence: CatalogListingIntelligence | null;
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
   recovery: {
@@ -107,7 +114,7 @@ export interface SellerCommandPreview {
     publicEbayWrite: 'DISABLED';
     ebayHandoffUrl: 'https://www.ebay.com/';
   };
-  noExternalRequestMade: true;
+  noExternalRequestMade: boolean;
   fingerprint: string;
 }
 
@@ -308,33 +315,48 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
     kind: 'catalog-row' as const,
     pageId: application.sourcePageId,
     label: `${application.catalogTitle ?? 'GM catalog'} · Group ${application.catalogGroup ?? 'not decoded'}`,
-    sourceUrl: application.sourceUrl,
+    viewUrl: `/v1/gm-catalog/pages/${application.sourcePageId}/image`,
     imageRef: application.imageRef,
     imageBlobKey: application.imageBlobKey,
     callout: null,
     confidence: application.confidence,
-    exactPartDepiction: true
+    exactPartDepiction: true,
+    primary: false,
+    evidenceBox: application.evidenceBox,
+    displayRotationDegrees: null,
+    relationshipState: 'catalog_stated_row'
   }));
   const diagramReferences = catalog.diagrams.map((diagram) => ({
     kind: 'diagram' as const,
     pageId: diagram.pageId,
     label: diagram.title ?? `GM illustration · Group ${diagram.catalogGroup ?? 'not decoded'}`,
-    sourceUrl: diagram.sourceUrl,
+    viewUrl: `/v1/gm-catalog/pages/${diagram.pageId}/image`,
     imageRef: diagram.imageRef,
     imageBlobKey: diagram.imageBlobKey,
     callout: diagram.calloutLabel,
     confidence: diagram.confidence,
-    exactPartDepiction: diagram.exactPartDepiction
+    exactPartDepiction: diagram.exactPartDepiction,
+    primary: diagram.isPrimary,
+    evidenceBox: diagram.evidenceBox,
+    displayRotationDegrees: diagram.displayRotationDegrees,
+    relationshipState: diagram.relationshipState
   }));
-  return [...rowReferences, ...diagramReferences];
+  return [...diagramReferences, ...rowReferences];
 }
 
-export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalogPart): SellerCommandPreview {
+export function buildSellerCommandPreview(
+  command: string,
+  gmCatalog?: GmCatalogPart,
+  suppliedIntelligence?: CatalogListingIntelligence
+): SellerCommandPreview {
   const intent = parseListingCommand(command);
   const isSafetyReview = intent.route === 'SAFETY_REVIEW';
   const isPhotoFirst = intent.route === 'PHOTO_FIRST';
   const isIllustrativeFixture = intent.partNumber === '58487514' && !isSafetyReview;
   const catalogMatch = !isSafetyReview && !isPhotoFirst && !isIllustrativeFixture ? gmCatalog : undefined;
+  const intelligence = catalogMatch
+    ? suppliedIntelligence ?? buildCatalogListingIntelligence(catalogMatch)
+    : null;
   const omittedFitment = intent.fitmentMode === 'DO_NOT_PUBLISH';
   const status: CommandPreviewStatus = isSafetyReview
     ? 'SAFETY_REVIEW_REQUIRED'
@@ -433,6 +455,15 @@ export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalog
       message: 'GM scan evidence was found. Review the catalog-stated application and derived model expansion before publishing compatibility.',
       blocking: true
     });
+    if (intelligence?.category.state !== 'EBAY_TAXONOMY_VERIFIED') {
+      issues.push({
+        code: 'EBAY_CATEGORY_VERIFICATION_REQUIRED',
+        message: intelligence?.category.categoryName
+          ? `${intelligence.category.categoryName} is a PartQuill category candidate and must be verified against the current eBay taxonomy.`
+          : 'The current eBay leaf category must be resolved before publication.',
+        blocking: true
+      });
+    }
   } else if (!isIllustrativeFixture) {
     issues.push({
       code: 'CATALOG_LOOKUP_REQUIRED',
@@ -470,7 +501,7 @@ export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalog
       : {};
 
   const previewWithoutFingerprint = {
-    schemaVersion: '2026-08-27' as const,
+    schemaVersion: '2026-08-28' as const,
     status,
     command,
     intent,
@@ -482,7 +513,10 @@ export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalog
       description: catalogMatch
         ? `${catalogMatch.description ?? catalogMatch.productType ?? 'General Motors part'}, part ${catalogMatch.partNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
         : buildDescription(intent, identity.productType),
-      category: isIllustrativeFixture ? 'Air & Fuel Delivery › Filters' : null,
+      category: isIllustrativeFixture
+        ? 'Air & Fuel Delivery › Filters'
+        : intelligence?.category.categoryPath ?? intelligence?.category.categoryName ?? null,
+      categoryId: intelligence?.category.categoryId ?? null,
       aspects,
       handlingTime: '1 business day' as const,
       returns: '30 days · buyer-paid' as const,
@@ -549,6 +583,7 @@ export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalog
       analysisState: 'NOT_UPLOADED' as const,
       catalogReferences: catalogMatch ? catalogReferences(catalogMatch) : []
     },
+    intelligence,
     confirmations: [
       {
         id: 'part-in-hand',
@@ -604,7 +639,7 @@ export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalog
       publicEbayWrite: 'DISABLED' as const,
       ebayHandoffUrl: 'https://www.ebay.com/' as const
     },
-    noExternalRequestMade: true as const
+    noExternalRequestMade: intelligence?.category.source !== 'EBAY_TAXONOMY_API'
   };
   const fingerprint = createHash('sha256').update(JSON.stringify(previewWithoutFingerprint)).digest('hex');
   return { ...previewWithoutFingerprint, fingerprint };
@@ -612,7 +647,7 @@ export function buildSellerCommandPreview(command: string, gmCatalog?: GmCatalog
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.11.0',
+    version: '0.12.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {

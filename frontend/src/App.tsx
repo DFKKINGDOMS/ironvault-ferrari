@@ -11,6 +11,58 @@ type SellerBootstrap = {
   imageStudio: { mode: string; path: string };
 };
 
+type EvidenceBox = {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  image_width?: number;
+  image_height?: number;
+  rotation_degrees?: number;
+};
+
+type CatalogReference = {
+  kind: "catalog-row" | "diagram";
+  pageId: number;
+  label: string;
+  viewUrl: string;
+  imageRef: string | null;
+  imageBlobKey: string | null;
+  callout: string | null;
+  confidence: number | null;
+  exactPartDepiction: boolean;
+  primary: boolean;
+  evidenceBox: EvidenceBox | null;
+  displayRotationDegrees: number | null;
+  relationshipState: string;
+};
+
+type ListingIntelligence = {
+  category: {
+    state: "EBAY_TAXONOMY_VERIFIED" | "RULE_DERIVED_REQUIRES_EBAY_VERIFICATION" | "NOT_CLASSIFIED";
+    source: "EBAY_TAXONOMY_API" | "PARTQUILL_CLASSIFIER" | "NONE";
+    categoryId: string | null;
+    categoryName: string | null;
+    categoryPath: string | null;
+    query: string;
+    confidence: number;
+    basis: string[];
+  };
+  shipping: {
+    state: "ESTIMATED_REQUIRES_CONFIRMATION" | "MEASUREMENT_REQUIRED";
+    profileId: string | null;
+    packageType: "BOX" | "MAILER" | "TUBE" | "FREIGHT" | null;
+    estimatedItemWeightLb: { min: number; max: number; suggested: number } | null;
+    suggestedPackageIn: { length: number; width: number; height: number } | null;
+    dimensionalWeightLb: number | null;
+    estimatedBillableWeightLb: number | null;
+    dimDivisor: 139;
+    confidence: number;
+    basis: string[];
+    confirmationRequired: true;
+  };
+};
+
 type SellerPreview = {
   status: "ILLUSTRATIVE_SAMPLE" | "HELD" | "PHOTO_REQUIRED" | "SAFETY_REVIEW_REQUIRED";
   intent: {
@@ -31,6 +83,7 @@ type SellerPreview = {
     sku: string | null;
     description: string;
     category: string | null;
+    categoryId: string | null;
     aspects: Record<string, string>;
     handlingTime: string;
     returns: string;
@@ -58,18 +111,9 @@ type SellerPreview = {
     minimumPhotos: number;
     requiredViews: Array<{ id: string; label: string; detail: string; required: boolean }>;
     analysisState: "NOT_UPLOADED";
-    catalogReferences: Array<{
-      kind: "catalog-row" | "diagram";
-      pageId: number;
-      label: string;
-      sourceUrl: string | null;
-      imageRef: string | null;
-      imageBlobKey: string | null;
-      callout: string | null;
-      confidence: number | null;
-      exactPartDepiction: boolean;
-    }>;
+    catalogReferences: CatalogReference[];
   };
+  intelligence: ListingIntelligence | null;
   confirmations: Array<{ id: string; label: string; detail: string }>;
   issues: Array<{ code: string; message: string; blocking: boolean }>;
   recovery: { label: string; enabled: boolean; privacyNote: string };
@@ -80,7 +124,7 @@ type SellerPreview = {
     requirements: string[];
   };
   gates: { privatePreflight: "SIMULATION_AVAILABLE" | "HELD"; publicEbayWrite: "DISABLED"; ebayHandoffUrl: string };
-  noExternalRequestMade: true;
+  noExternalRequestMade: boolean;
   fingerprint: string;
 };
 
@@ -238,6 +282,81 @@ function EvidenceMeters() {
   return <div className="evidence-meters">{evidenceMeters.map((item) => <article key={item.label}><div><span>{item.label}</span><Badge tone={item.tone}>{item.state}</Badge></div><i><b className={`meter-${item.tone}`} style={{ width: `${item.value}%` }} /></i><small>{item.detail}</small></article>)}</div>;
 }
 
+function calloutStyle(reference: CatalogReference) {
+  const box = reference.evidenceBox;
+  const imageWidth = Number(box?.image_width);
+  const imageHeight = Number(box?.image_height);
+  const left = Number(box?.left);
+  const top = Number(box?.top);
+  const width = Number(box?.width);
+  const height = Number(box?.height);
+  if (![imageWidth, imageHeight, left, top, width, height].every(Number.isFinite) || imageWidth <= 0 || imageHeight <= 0) return undefined;
+  const padX = Math.max(width * 0.8, imageWidth * 0.008);
+  const padY = Math.max(height * 1.4, imageHeight * 0.008);
+  const ringLeft = Math.max(0, left - padX);
+  const ringTop = Math.max(0, top - padY);
+  const ringWidth = Math.min(imageWidth - ringLeft, width + padX * 2);
+  const ringHeight = Math.min(imageHeight - ringTop, height + padY * 2);
+  return {
+    left: `${(ringLeft / imageWidth) * 100}%`,
+    top: `${(ringTop / imageHeight) * 100}%`,
+    width: `${Math.max(2.6, (ringWidth / imageWidth) * 100)}%`,
+    height: `${Math.max(3.8, (ringHeight / imageHeight) * 100)}%`
+  };
+}
+
+function CatalogEvidenceViewer({ references }: { references: CatalogReference[] }) {
+  const initialIndex = Math.max(0, references.findIndex((reference) => reference.primary));
+  const [activeIndex, setActiveIndex] = useState(initialIndex);
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setActiveIndex(Math.max(0, references.findIndex((reference) => reference.primary)));
+    setImageFailed(false);
+  }, [references]);
+  if (!references.length) return null;
+  const reference = references[Math.min(activeIndex, references.length - 1)] ?? references[0];
+  if (!reference) return null;
+  const overlay = calloutStyle(reference);
+  return <section className="catalog-evidence-viewer" id="catalog-evidence-viewer">
+    <header>
+      <div><span>PARTQUILL FIRST-PARTY CATALOG EVIDENCE</span><h3>{reference.kind === "diagram" ? "Highlighted schematic callout" : "Highlighted catalog row"}</h3><p>No browser link or runtime dependency on GMPartsWiki. The scan is served through PartQuill.</p></div>
+      <Badge tone={reference.exactPartDepiction ? "green" : "amber"}>{reference.exactPartDepiction ? "Direct catalog row" : "Related diagram — review"}</Badge>
+    </header>
+    <div className="catalog-evidence-layout">
+      <nav aria-label="Catalog evidence pages">
+        {references.slice(0, 12).map((item, index) => <button className={index === activeIndex ? "active" : ""} onClick={() => { setActiveIndex(index); setImageFailed(false); }} key={`${item.kind}-${item.pageId}-${item.callout ?? index}`}>
+          <span>{item.kind === "diagram" ? "Diagram" : "Catalog row"} · page {item.pageId}</span>
+          <strong>{item.callout ?? item.label}</strong>
+          <small>{item.primary ? "Primary evidence" : item.exactPartDepiction ? "Part-number row" : "Related group evidence"}</small>
+        </button>)}
+      </nav>
+      <div className="catalog-scan-stage">
+        {!imageFailed ? <div className="catalog-scan-canvas">
+          <img src={reference.viewUrl} alt={`${reference.kind === "diagram" ? "GM schematic" : "GM catalog row"} page ${reference.pageId}`} onError={() => setImageFailed(true)}/>
+          {overlay && <span className="evidence-callout-ring" style={overlay}><b>{reference.callout ?? "PART ROW"}</b></span>}
+        </div> : <div className="catalog-scan-missing"><Icon name="alert"/><strong>First-party scan migration pending</strong><p>The evidence record and callout coordinates are retained, but this page image has not yet reached PartQuill media storage.</p></div>}
+        <footer><div><strong>Page {reference.pageId}</strong><span>{reference.label}</span></div><div><Badge tone="red">Red ring = OCR callout location</Badge><Badge tone="slate">Confidence {Math.round((reference.confidence ?? 0) * 100)}%</Badge></div></footer>
+      </div>
+    </div>
+  </section>;
+}
+
+function CatalogIntelligenceCard({ intelligence }: { intelligence: ListingIntelligence | null }) {
+  if (!intelligence) return null;
+  const categoryVerified = intelligence.category.state === "EBAY_TAXONOMY_VERIFIED";
+  const shipping = intelligence.shipping;
+  const dimensions = shipping.suggestedPackageIn;
+  const weight = shipping.estimatedItemWeightLb;
+  return <section className="catalog-intelligence-card">
+    <header><div><span>LISTING INTELLIGENCE</span><h3>Category and calculated-shipping setup</h3><p>Catalog facts, machine-derived candidates and seller measurements remain separate.</p></div><Badge tone={categoryVerified ? "green" : "amber"}>{categoryVerified ? "eBay taxonomy verified" : "Seller review required"}</Badge></header>
+    <div className="catalog-intelligence-grid">
+      <article><div><Icon name="inventory"/><span><small>eBay category</small><strong>{intelligence.category.categoryName ?? "Category not classified"}</strong></span></div><p>{intelligence.category.categoryPath ?? "PartQuill needs a more specific item identity before proposing a category."}</p><dl><div><dt>Category ID</dt><dd>{intelligence.category.categoryId ?? "Pending eBay Taxonomy API"}</dd></div><div><dt>Source</dt><dd>{categoryVerified ? "Current eBay taxonomy" : "PartQuill product-family classifier"}</dd></div></dl></article>
+      <article><div><Icon name="truck"/><span><small>Calculated shipping</small><strong>{shipping.state === "MEASUREMENT_REQUIRED" ? "Measure item and packed box" : `${shipping.packageType} profile · estimate only`}</strong></span></div>{dimensions && weight ? <><p>Suggested starting package: <b>{dimensions.length} × {dimensions.width} × {dimensions.height} in</b>. Estimated item weight: <b>{weight.min}–{weight.max} lb</b> ({weight.suggested} lb working value).</p><dl><div><dt>DIM weight</dt><dd>{shipping.dimensionalWeightLb} lb · divisor {shipping.dimDivisor}</dd></div><div><dt>Estimated billable</dt><dd>{shipping.estimatedBillableWeightLb} lb</dd></div></dl></> : <p>No safe package estimate is available from the catalog text. Weight and all three packed dimensions are required.</p>}</article>
+    </div>
+    <div className="intelligence-warning"><Icon name="alert"/><span><strong>Never publish estimated dimensions as measured facts.</strong> We can prefill calculated shipping, but the seller must weigh the packed item and confirm length, width and height before eBay submission.</span></div>
+  </section>;
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("instant");
   const [editorTab, setEditorTab] = useState<EditorTab>("listing");
@@ -338,7 +457,9 @@ export default function Home() {
           ? "No part number is required. PartQuill switched this draft to the photo-first path."
           : preview.status === "SAFETY_REVIEW_REQUIRED"
             ? "Potential restraint item detected. Listing assembly is held for label, eligibility and safety evidence."
-            : "Command understood. Unsupported identity and fitment claims are held until a unique authorized catalog match exists.");
+            : preview.identity.state === "CATALOG_STATED"
+              ? "GM catalog evidence loaded with first-party scan references, fitment rows, category intelligence and a held shipping estimate."
+              : "Command understood. Unsupported identity and fitment claims are held until a unique authorized catalog match exists.");
     } catch (error) {
       setInstantPreview(null);
       setInstantBuilt(false);
@@ -365,6 +486,8 @@ export default function Home() {
   const instantSafety = instantPreview?.status === "SAFETY_REVIEW_REQUIRED";
   const instantCatalogRoute = instantPreview?.intent.route === "CATALOG_ASSISTED";
   const instantCatalogMatch = instantPreview?.identity.state === "CATALOG_STATED";
+  const primaryCatalogReference = instantPreview?.media.catalogReferences.find((reference) => reference.primary)
+    ?? instantPreview?.media.catalogReferences[0];
   const instantHeld = Boolean(instantPreview && !instantSample);
   const instantReady = Boolean(
     instantPartConfirmed
@@ -491,11 +614,11 @@ export default function Home() {
               <div className="instant-draft-main">
                 <div className="instant-product-card">
                   <div className="instant-media">
-                    <div className={`catalog-image-candidate ${instantPhotoFirst ? "photo-first" : ""} ${instantSafety ? "safety" : ""}`}><span>{instantSafety ? "RESTRICTED ITEM · EVIDENCE INTAKE" : instantPhotoFirst ? "PHOTO-FIRST ITEM INTAKE" : "MEDIA REVIEW · PLACEHOLDER ONLY"}</span><Icon name={instantSafety ? "shield" : instantPhotoFirst ? "camera" : "box"}/><strong>{instantItemLabel}</strong><small>{instantPreview?.media.sourceDetail ?? "A seller-owned item photo is required."}</small></div>
+                    {instantCatalogMatch && primaryCatalogReference ? <button className="catalog-image-candidate catalog-scan-thumb" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span>PARTQUILL CATALOG SCAN · FIRST PARTY</span><img src={primaryCatalogReference.viewUrl} alt={`Catalog evidence page ${primaryCatalogReference.pageId}`}/><strong>{primaryCatalogReference.callout ?? `Catalog page ${primaryCatalogReference.pageId}`}</strong><small>Open the full scan with its colored callout highlight.</small></button> : <div className={`catalog-image-candidate ${instantPhotoFirst ? "photo-first" : ""} ${instantSafety ? "safety" : ""}`}><span>{instantSafety ? "RESTRICTED ITEM · EVIDENCE INTAKE" : instantPhotoFirst ? "PHOTO-FIRST ITEM INTAKE" : "MEDIA REVIEW · PLACEHOLDER ONLY"}</span><Icon name={instantSafety ? "shield" : instantPhotoFirst ? "camera" : "box"}/><strong>{instantItemLabel}</strong><small>{instantPreview?.media.sourceDetail ?? "A seller-owned item photo is required."}</small></div>}
                     <div className="instant-thumbs">{(instantPreview?.media.requiredViews ?? [ { id: "hero", label: "Hero", detail: "Whole item", required: true }, { id: "label", label: "Label", detail: "Readable markings", required: false } ]).slice(0, 4).map((view) => <button key={view.id} onClick={() => showNotice(`${view.label}: ${view.detail}`)}><Icon name={view.id.includes("label") || view.id.includes("oem") ? "search" : "camera"}/><span>{view.label}</span></button>)}</div>
                     {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo) => <figure key={`${photo.name}-${photo.url.length}`}><img src={photo.url} alt="Seller-selected local preview"/><figcaption>{photo.name}</figcaption></figure>)}</div>}
                     <div className="media-source"><Icon name="alert"/><span><strong>{instantPreview?.media.sourceLabel ?? "Seller-owned item photo required"}</strong><small>No grey placeholder can enter the eBay payload.</small></span></div>
-                    {(instantPreview?.media.catalogReferences.length ?? 0) > 0 && <div className="catalog-evidence-links"><div><Icon name="search"/><span><strong>Catalog scan evidence</strong><small>{instantPreview?.media.catalogReferences.length} row and diagram references attached</small></span></div>{instantPreview?.media.catalogReferences.slice(0, 8).map((reference) => reference.sourceUrl ? <a href={reference.sourceUrl} target="_blank" rel="noreferrer" key={`${reference.kind}-${reference.pageId}-${reference.callout ?? "row"}`}><span><strong>{reference.kind === "diagram" ? `Diagram page ${reference.pageId}` : `Catalog row page ${reference.pageId}`}</strong><small>{reference.callout ? `Callout: ${reference.callout}` : reference.label}</small></span><Badge tone="amber">{reference.exactPartDepiction ? "Direct row" : "Related diagram"}</Badge></a> : <div className="catalog-evidence-static" key={`${reference.kind}-${reference.pageId}-${reference.callout ?? "row"}`}><span><strong>{reference.kind === "diagram" ? `Diagram page ${reference.pageId}` : `Catalog row page ${reference.pageId}`}</strong><small>{reference.callout ?? reference.label}</small></span></div>)}</div>}
+                    {(instantPreview?.media.catalogReferences.length ?? 0) > 0 && <button className="catalog-evidence-jump" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Icon name="search"/><span><strong>Open highlighted catalog evidence</strong><small>{instantPreview?.media.catalogReferences.length} first-party row and diagram references</small></span><Icon name="arrow"/></button>}
                     <label className="media-add-button"><Icon name="camera"/> {instantSafety ? "Add label + item photos" : instantPhotoFirst ? "Add item photos to continue" : "Add seller-owned item photo"}<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => stageInstantPhotos(event.target.files)}/></label>
                     <p className="local-photo-note"><Icon name="shield"/> Private pilot: selected images stay in this browser preview. Photo analysis and durable upload are not connected yet.</p>
                   </div>
@@ -525,9 +648,12 @@ export default function Home() {
                       <label><span>Condition</span><input value={instantCondition} readOnly/><Badge tone="amber">{instantCondition === "Not specified" ? "Selection required" : "Confirm actual item"}</Badge></label>
                       <label><span>Custom SKU</span><input value={instantPreview?.listing.sku ?? "Pending identity"} readOnly/><Badge tone={instantHeld ? "amber" : "green"}>{instantHeld ? "Reservation only" : "Generated"}</Badge></label>
                     </div>
-                    <div className="catalog-prefill"><div><span>{instantPreview?.identity.sourceLabel}</span><Badge tone={instantSample ? "amber" : instantSafety ? "red" : "orange"}>{instantSample ? "Illustrative fixture" : instantSafety ? "Safety hold" : instantPhotoFirst ? "Photo intake" : instantCatalogMatch ? "Catalog stated" : "Held"}</Badge></div><dl><div><dt>Brand</dt><dd>{instantPreview?.identity.brand ?? "Not verified"}</dd></div><div><dt>MPN / OE number</dt><dd>{instantPreview?.identity.manufacturerPartNumber ?? (instantPhotoFirst ? "Optional — add if found" : "Required for review")}</dd></div><div><dt>Product type</dt><dd>{instantPreview?.identity.productType ?? "Not verified"}</dd></div><div><dt>Supersessions</dt><dd>Included only when verified</dd></div><div><dt>eBay category</dt><dd>{instantPreview?.listing.category ?? (instantSafety ? "Blocked during policy review" : instantPhotoFirst ? "After photo identification" : instantCatalogMatch ? "Awaiting eBay category mapping" : "Held until identity resolves")}</dd></div><div><dt>Required aspects</dt><dd>{Object.keys(instantPreview?.listing.aspects ?? {}).length ? `${Object.keys(instantPreview?.listing.aspects ?? {}).length} currently supported` : "After category is verified"}</dd></div></dl></div>
+                    <div className="catalog-prefill"><div><span>{instantPreview?.identity.sourceLabel}</span><Badge tone={instantSample ? "amber" : instantSafety ? "red" : "orange"}>{instantSample ? "Illustrative fixture" : instantSafety ? "Safety hold" : instantPhotoFirst ? "Photo intake" : instantCatalogMatch ? "Catalog stated" : "Held"}</Badge></div><dl><div><dt>Brand</dt><dd>{instantPreview?.identity.brand ?? "Not verified"}</dd></div><div><dt>MPN / OE number</dt><dd>{instantPreview?.identity.manufacturerPartNumber ?? (instantPhotoFirst ? "Optional — add if found" : "Required for review")}</dd></div><div><dt>Product type</dt><dd>{instantPreview?.identity.productType ?? "Not verified"}</dd></div><div><dt>Supersessions</dt><dd>Included only when verified</dd></div><div><dt>eBay category</dt><dd>{instantPreview?.listing.category ? `${instantPreview.listing.category}${instantPreview.listing.categoryId ? ` · ID ${instantPreview.listing.categoryId}` : " · verification pending"}` : (instantSafety ? "Blocked during policy review" : instantPhotoFirst ? "After photo identification" : instantCatalogMatch ? "Awaiting eBay category mapping" : "Held until identity resolves")}</dd></div><div><dt>Required aspects</dt><dd>{Object.keys(instantPreview?.listing.aspects ?? {}).length ? `${Object.keys(instantPreview?.listing.aspects ?? {}).length} currently supported` : "After category is verified"}</dd></div></dl></div>
                   </div>
                 </div>
+
+                <CatalogEvidenceViewer references={instantPreview?.media.catalogReferences ?? []}/>
+                <CatalogIntelligenceCard intelligence={instantPreview?.intelligence ?? null}/>
 
                 {instantCatalogRoute ? <div className="instant-fitment-card">
                   <div className="fitment-prefill-title"><div><span className="traffic-light amber"/><span><strong>Full compatibility inspector</strong><small>Catalog-stated and catalog-derived rows remain visibly attributed until publication review.</small></span></div><Badge tone="amber">{instantPreview?.fitment.totalApplications ?? 0} {instantCatalogMatch ? "catalog rows" : "unverified rows"}</Badge></div>
@@ -546,7 +672,7 @@ export default function Home() {
 
               <aside className="instant-submit-panel">
                 <div className={`instant-score ${instantSafety ? "safety" : instantPhotoFirst ? "photo-first" : ""}`}><div><span>Listing status</span><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo facts complete" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photo intake" : "Action required"}</Badge></div><strong>{instantReady ? "Ready for simulated preflight" : instantStatusHeading}</strong><p>{instantReady ? "Next: private preflight binds the exact demo payload before final approval." : instantStatusCopy}</p></div>
-                <div className="autofill-summary"><span>Automatically prefilled</span>{[ ["Price", instantPrice ? `$${instantPrice}` : "Required", instantPrice ? "green" : "amber"], ["Quantity", instantQuantity, "green"], ["Condition", instantCondition, instantCondition === "Not specified" ? "amber" : "green"], ["Listing format", instantPreview?.listing.format ?? "Buy It Now · GTC", "green"], ["Shipping", instantShipping, instantSafety ? "amber" : "green"], ["Handling", instantPreview?.listing.handlingTime ?? "1 business day", "green"], ["Returns", instantPreview?.listing.returns ?? "30 days · buyer-paid", "green"], ["Media", instantPhotos.length ? `${instantPhotos.length} staged locally` : `${instantPreview?.media.minimumPhotos ?? 1} required`, "amber"], ["International", instantSafety ? "Disabled for airbag route" : "Held until origin", "amber"] ].map(([label,value,tone]) => <div key={label}><Icon name={tone === "green" ? "check" : "alert"}/><span><strong>{label}</strong><small>{value}</small></span></div>)}</div>
+                <div className="autofill-summary"><span>Automatically prefilled</span>{[ ["Price", instantPrice ? `$${instantPrice}` : "Required", instantPrice ? "green" : "amber"], ["Quantity", instantQuantity, "green"], ["Condition", instantCondition, instantCondition === "Not specified" ? "amber" : "green"], ["Listing format", instantPreview?.listing.format ?? "Buy It Now · GTC", "green"], ["eBay category", instantPreview?.listing.categoryId ? `${instantPreview.listing.category} · ${instantPreview.listing.categoryId}` : instantPreview?.intelligence?.category.categoryName ? `${instantPreview.intelligence.category.categoryName} · verify` : "Pending", instantPreview?.listing.categoryId ? "green" : "amber"], ["Shipping", instantPreview?.intelligence?.shipping.estimatedBillableWeightLb ? `Calculated · est. ${instantPreview.intelligence.shipping.estimatedBillableWeightLb} lb billable` : instantShipping, "amber"], ["Handling", instantPreview?.listing.handlingTime ?? "1 business day", "green"], ["Returns", instantPreview?.listing.returns ?? "30 days · buyer-paid", "green"], ["Media", instantPhotos.length ? `${instantPhotos.length} staged locally` : `${instantPreview?.media.minimumPhotos ?? 1} required`, "amber"], ["International", instantSafety ? "Disabled for airbag route" : "Held until origin", "amber"] ].map(([label,value,tone]) => <div key={label}><Icon name={tone === "green" ? "check" : "alert"}/><span><strong>{label}</strong><small>{value}</small></span></div>)}</div>
                 <div className="smallest-confirmations"><span>{instantSafety ? "Seller confirmations do not replace policy evidence" : instantPhotoFirst ? "Confirm the physical item after adding photos" : "Only confirm what the catalog cannot know"}</span><label className={instantPartConfirmed ? "confirmed" : ""}><input type="checkbox" checked={instantPartConfirmed} onChange={(event) => setInstantPartConfirmed(event.target.checked)}/><span><strong>{instantPreview?.confirmations[0]?.label ?? "This is the exact part I have in hand"}</strong><small>{instantPreview?.confirmations[0]?.detail}</small></span></label><label className={instantConditionConfirmed ? "confirmed" : ""}><input type="checkbox" disabled={instantCondition === "Not specified"} checked={instantConditionConfirmed} onChange={(event) => setInstantConditionConfirmed(event.target.checked)}/><span><strong>{instantPreview?.confirmations[1]?.label ?? `Condition = ${instantCondition}`}</strong><small>{instantPreview?.confirmations[1]?.detail} Open the full editor to change it.</small></span></label></div>
                 <div className={`instant-submit-state ${instantReady ? "ready" : "held"}`}><Icon name={instantReady ? "check" : "alert"}/><span><strong>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Submit disabled — restricted-item review incomplete" : instantPhotoFirst ? "Submit disabled — photos and identification incomplete" : instantCatalogMatch ? "Held — review catalog fitment and add seller photo" : instantHeld ? "Held — unique catalog identity required" : instantDirty ? "Payload changed — rebuild the command" : "Held — two seller facts remain"}</strong><small>{instantReady ? "Gate 1 validates this exact fingerprint; Gate 2 is separate. Actual eBay writes remain disabled." : "Nothing has been sent to eBay."}</small></span></div>
                 <button className="primary full" disabled={!instantReady} onClick={() => navigate("review")}>Review simulated private preflight <Icon name="arrow"/></button>

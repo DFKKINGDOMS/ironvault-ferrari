@@ -26,16 +26,46 @@ def json_value(value: str | None):
         return value
 
 
+def load_page_dimensions(database_dir: Path | None) -> dict[int, tuple[int, int]]:
+    dimensions: dict[int, tuple[int, int]] = {}
+    if not database_dir:
+        return dimensions
+    for database in sorted(database_dir.glob("*.sqlite")):
+        try:
+            source = sqlite3.connect(database)
+            for page_id, width, height in source.execute(
+                "SELECT page_id, image_width, image_height FROM pages WHERE image_width IS NOT NULL AND image_height IS NOT NULL"
+            ):
+                dimensions[int(page_id)] = (int(width), int(height))
+            source.close()
+        except sqlite3.Error:
+            continue
+    return dimensions
+
+
+def evidence_box(value: str | None, page_id: int, dimensions: dict[int, tuple[int, int]]):
+    box = json_value(value)
+    if not isinstance(box, dict):
+        return box
+    width, height = dimensions.get(page_id, (0, 0))
+    if width and height:
+        box.setdefault("image_width", width)
+        box.setdefault("image_height", height)
+    return box
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--smoke-output", type=Path)
     parser.add_argument("--smoke-part", default="5459066")
+    parser.add_argument("--page-database-dir", type=Path)
     args = parser.parse_args()
 
     db = sqlite3.connect(args.source)
     db.row_factory = sqlite3.Row
+    page_dimensions = load_page_dimensions(args.page_database_dir)
 
     profiles = {
         row["global_catalog_key"]: dict(row)
@@ -108,7 +138,7 @@ def main() -> None:
                 "sourceUrl": source.get("source_url"),
                 "imageRef": row["image_ref"],
                 "imageBlobKey": row["image_blob_key"],
-                "evidenceBox": json_value(row["evidence_bbox_json"]),
+                "evidenceBox": evidence_box(row["evidence_bbox_json"], row["source_page_id"], page_dimensions),
                 "evidenceContext": source.get("evidence_context"),
                 "layoutLine": source.get("layout_line_text"),
                 "crossReference": source.get("layout_cross_reference"),
@@ -153,7 +183,7 @@ def main() -> None:
                 "imageRef": row["image_ref"],
                 "imageBlobKey": row["image_blob_key"],
                 "displayRotationDegrees": row["display_rotation_degrees"],
-                "evidenceBox": json_value(row["evidence_bbox_json"]),
+                "evidenceBox": evidence_box(row["evidence_bbox_json"], row["diagram_page_id"], page_dimensions),
                 "relationshipState": row["relationship_state"],
                 "linkMethod": row["link_method"],
                 "confidence": row["link_confidence"],

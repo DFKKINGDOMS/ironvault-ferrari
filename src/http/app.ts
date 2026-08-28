@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import cors from '@fastify/cors';
@@ -27,9 +27,12 @@ import { resolveCatalogImage } from '../catalog/image-proxy.js';
 import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema, parseListingCommand } from '../seller/command-preview.js';
 import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
+import { applyEbayCategorySuggestion, buildCatalogListingIntelligence } from '../catalog/listing-intelligence.js';
+import { EbayTaxonomyClient } from '../ebay/taxonomy-client.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
+const gmPageParams = z.object({ pageId: z.coerce.number().int().min(1).max(9_999_999) });
 const evidenceSchema = z.object({
   field: z.string().min(1),
   value: z.unknown(),
@@ -127,6 +130,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     config.SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS,
     config.SELLER_PREVIEW_MAX_CONCURRENCY
   );
+  const ebayTaxonomy = config.EBAY_CLIENT_ID && config.EBAY_CLIENT_SECRET
+    ? new EbayTaxonomyClient(config)
+    : undefined;
   await app.register(cors, {
     origin: config.CORS_ORIGINS.split(',').map((origin) => origin.trim()),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -150,6 +156,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
+    if (request.method === 'GET' && request.url.startsWith('/v1/gm-catalog/pages/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
       request.url.startsWith('/v1/image-studio/') &&
@@ -181,7 +188,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.11.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.12.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -209,13 +216,49 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       const gmCatalog = intent.partNumber
         ? await store.lookupGmCatalogPart?.(intent.partNumber)
         : undefined;
+      let intelligence = gmCatalog ? buildCatalogListingIntelligence(gmCatalog) : undefined;
+      if (gmCatalog && intelligence && ebayTaxonomy) {
+        try {
+          const suggestion = await ebayTaxonomy.suggestCategory(intelligence.category.query);
+          if (suggestion) intelligence = applyEbayCategorySuggestion(intelligence, suggestion);
+        } catch (error) {
+          request.log.warn({ error }, 'eBay category suggestion unavailable; using held PartQuill candidate');
+        }
+      }
       return reply
         .header('cache-control', 'no-store')
         .header('x-content-type-options', 'nosniff')
-        .send({ preview: buildSellerCommandPreview(command, gmCatalog) });
+        .send({ preview: buildSellerCommandPreview(command, gmCatalog, intelligence) });
     } finally {
       permit.release();
     }
+  });
+  app.get('/v1/gm-catalog/pages/:pageId/image', async (request, reply) => {
+    const { pageId } = gmPageParams.parse(request.params);
+    const pageFolder = String(pageId).padStart(6, '0');
+    const localPath = resolve(config.GM_CATALOG_SCAN_DIR, pageFolder, 'full_page.png');
+    if (existsSync(localPath)) {
+      return reply
+        .header('cache-control', 'public, max-age=86400, immutable')
+        .header('x-content-type-options', 'nosniff')
+        .type('image/png')
+        .send(createReadStream(localPath));
+    }
+    if (config.GM_CATALOG_MEDIA_BASE_URL) {
+      const base = config.GM_CATALOG_MEDIA_BASE_URL.replace(/\/$/, '');
+      const upstream = await fetch(`${base}/${pageFolder}/full_page.png`, { signal: AbortSignal.timeout(10_000) });
+      if (upstream.ok) {
+        const contentType = upstream.headers.get('content-type');
+        if (contentType?.startsWith('image/')) {
+          return reply
+            .header('cache-control', 'public, max-age=86400')
+            .header('x-content-type-options', 'nosniff')
+            .type(contentType)
+            .send(Buffer.from(await upstream.arrayBuffer()));
+        }
+      }
+    }
+    return reply.code(404).send({ error: { code: 'CATALOG_SCAN_NOT_AVAILABLE', message: 'catalog scan is not available in PartQuill media storage' } });
   });
   app.post('/internal/gm-catalog/import', { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
     const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
@@ -241,7 +284,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.11.0',
+          version: '0.12.0',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },

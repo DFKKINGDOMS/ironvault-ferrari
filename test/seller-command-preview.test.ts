@@ -61,10 +61,21 @@ describe('one-command seller preview', () => {
       '1959 Oldsmobile Super 88'
     ]));
     expect(preview.media.catalogReferences).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'catalog-row', pageId: 2166, exactPartDepiction: true }),
-      expect.objectContaining({ kind: 'diagram', pageId: 2145, callout: 'FRONT ELEMENT' })
+      expect.objectContaining({ kind: 'catalog-row', pageId: 2166, exactPartDepiction: true, viewUrl: '/v1/gm-catalog/pages/2166/image' }),
+      expect.objectContaining({ kind: 'diagram', pageId: 2145, callout: 'FRONT ELEMENT', primary: true })
     ]));
+    expect(preview.intelligence).toMatchObject({
+      category: { state: 'RULE_DERIVED_REQUIRES_EBAY_VERIFICATION', categoryName: 'Air Filters' },
+      shipping: {
+        state: 'ESTIMATED_REQUIRES_CONFIRMATION',
+        suggestedPackageIn: { length: 8, width: 8, height: 4 },
+        dimensionalWeightLb: 2,
+        estimatedBillableWeightLb: 2
+      }
+    });
+    expect(JSON.stringify(preview)).not.toContain('gmpartswiki.com');
     expect(preview.issues.map((issue) => issue.code)).toContain('CATALOG_EVIDENCE_REVIEW_REQUIRED');
+    expect(preview.issues.map((issue) => issue.code)).toContain('EBAY_CATEGORY_VERIFICATION_REQUIRED');
     expect(preview.issues.map((issue) => issue.code)).not.toContain('CATALOG_LOOKUP_REQUIRED');
   });
 

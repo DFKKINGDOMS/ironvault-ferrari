@@ -59,7 +59,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.11.0',
+      version: '0.12.0',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       safeguards: { unknownCatalogClaimsHeld: true, sellerPhotoRequired: true, dualApproval: true }
@@ -140,5 +140,14 @@ describe('HTTP contract', () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('image/png');
     expect(response.headers['cache-control']).toContain('public');
+  });
+
+  it('serves archived GM scans only through the first-party PartQuill route', async () => {
+    app = await buildApp(harness());
+    const response = await app.inject({ method: 'GET', url: '/v1/gm-catalog/pages/2145/image' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('image/png');
+    expect(response.headers.location).toBeUndefined();
+    expect(response.rawPayload.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   });
 });

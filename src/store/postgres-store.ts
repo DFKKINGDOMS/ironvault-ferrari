@@ -20,7 +20,7 @@ const { Pool } = pg;
 
 type JsonRow<T> = { record: T };
 
-const GM_DATASET_ID = 'gm-catalog-v1-6ba75d1f58226fcb';
+const GM_DATASET_ID = 'gm-catalog-v2-4a3a765e158bcc93';
 
 export class PostgresStore implements Store {
   private readonly pool: pg.Pool;

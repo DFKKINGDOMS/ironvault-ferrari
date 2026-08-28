@@ -11,6 +11,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     HOST: '127.0.0.1',
     PARTQUILL_API_KEY: 'test-api-key-that-is-long-enough',
     OAUTH_STATE_SECRET: 'test-oauth-secret-that-is-long-enough',
+    GM_CATALOG_SCAN_DIR: 'data/gm-scans/pages',
     PILOT_EPHEMERAL_MODE: false,
     EBAY_ENV: 'sandbox',
     EBAY_MODE: 'mock',

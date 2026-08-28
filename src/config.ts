@@ -15,6 +15,8 @@ const schema = z
     OAUTH_STATE_SECRET: z.string().min(24).default('development-only-oauth-state-change-me'),
     DATABASE_URL: z.string().optional(),
     GM_IMPORT_TOKEN: z.string().min(32).optional(),
+    GM_CATALOG_SCAN_DIR: z.string().default('data/gm-scans/pages'),
+    GM_CATALOG_MEDIA_BASE_URL: z.string().url().optional(),
     PILOT_EPHEMERAL_MODE: booleanString,
     EBAY_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
     EBAY_MODE: z.enum(['mock', 'live']).default('mock'),
