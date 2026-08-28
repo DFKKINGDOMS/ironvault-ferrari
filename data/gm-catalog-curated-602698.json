@@ -1,0 +1,57 @@
+{
+  "partNumber": "602698",
+  "manufacturer": "General Motors",
+  "divisions": [
+    "Chevrolet"
+  ],
+  "productType": "Steering knuckle with nut",
+  "description": "KNUCKLE, steering (with nut)",
+  "catalogGroup": "6.020",
+  "verificationState": "catalog_stated",
+  "rollup": {
+    "occurrenceCount": 1,
+    "pageCount": 1,
+    "catalogStatedOccurrences": 1,
+    "firstPageId": 224011,
+    "lastPageId": 224011,
+    "representativePageId": 224011,
+    "representativeImageRef": null,
+    "bestLayoutConfidence": 0.99
+  },
+  "applications": [
+    {
+      "claimId": 602698,
+      "manufacturer": "General Motors",
+      "division": "Chevrolet",
+      "catalogTitle": "Chevrolet master parts catalog",
+      "catalogGroup": "6.020",
+      "partName": "KNUCKLE",
+      "description": "KNUCKLE, steering (with nut)",
+      "groupHeading": "Steering knuckle; printed illustrations 157 and 164",
+      "componentFamily": "Steering knuckle",
+      "supplier": null,
+      "applicationText": "1937-1941",
+      "yearStart": 1937,
+      "yearEnd": 1941,
+      "modelScope": "S, T, V, W, Y series",
+      "equipmentQualifier": "With bushing; lower bolt holes are 1/2 inch diameter; for 596565",
+      "exclusion": "COE and heavy-duty applications",
+      "position": null,
+      "quantity": "2",
+      "sourcePageId": 224011,
+      "sourceUrl": null,
+      "imageRef": null,
+      "imageBlobKey": null,
+      "evidenceBox": null,
+      "evidenceContext": "11 | 602698 | 6.020 | KNUCKLE, Steering (with nut) | Ill. p. 157, 164 | $5.35 | With bushing; lower bolt holes are 1/2 inch diameter; for 596565 | 1937-41 | S, T, V, W, Y (except COE & heavy duty) | 2",
+      "layoutLine": "602698 KNUCKLE, Steering (with nut); 1937-41 S, T, V, W, Y except COE and heavy duty; quantity 2",
+      "crossReference": "for 596565",
+      "relationMethod": "user_supplied_catalog_row_transcription",
+      "confidence": 0.99,
+      "verificationState": "catalog_stated",
+      "modelExpansionState": "catalog_scope_stated",
+      "models": []
+    }
+  ],
+  "diagrams": []
+}
