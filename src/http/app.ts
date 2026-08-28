@@ -204,7 +204,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.6' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.15.7' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -265,7 +265,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
             reference: {
               ...result.reference,
               images: result.reference.images.map((image, index) => ({
-                alt: image.alt,
+                alt: result.status === 'PRIVATE_REFERENCE_ARCHIVE'
+                  ? `Permanent archived reference ${index + 1} for OEM part ${result.reference!.partNumber}`
+                  : image.alt,
                 viewUrl: image.url.startsWith('/')
                   ? image.url
                   : `/v1/seller-ui/ebay-reference/${encodeURIComponent(result.reference!.partNumber)}/image/${index}`
@@ -394,7 +396,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           storage: config.IMAGE_STUDIO_STORAGE_DIR
         },
         sellerUi: {
-          version: '0.15.6',
+          version: '0.15.7',
           commandPreview: true,
           publicEbayWritesDisabled: true
         },
