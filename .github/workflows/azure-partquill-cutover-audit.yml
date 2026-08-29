@@ -1,0 +1,185 @@
+name: Audit PartQuill Azure cutover readiness
+
+on:
+  push:
+    branches:
+      - partquill-azure-container-app
+    paths:
+      - .github/workflows/azure-partquill-cutover-audit.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RESOURCE_GROUP: rg-partquill-platform-westus3
+      CONTAINER_APP: ca-partquill-web-westus3
+      STORAGE_ACCOUNT: pqdata50230827
+      STORAGE_CONTAINER: partquill-gm-catalog
+      DATASET_ID: gm-exact-100001-235000-aa4d30ab-v1
+      EXPECTED_PARTS: "894592"
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Audit live Azure app, data, storage, and DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cutover-audit
+
+          az resource list \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '[].{name:name,type:type,location:location}' \
+            --output json > cutover-audit/resources.json
+
+          az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --output json > cutover-audit/container-app.json
+
+          jq '{
+            name,
+            location,
+            provisioningState:.properties.provisioningState,
+            fqdn:.properties.configuration.ingress.fqdn,
+            customDomains:(.properties.configuration.ingress.customDomains // []),
+            traffic:(.properties.configuration.ingress.traffic // []),
+            latestRevision:.properties.latestRevisionName,
+            latestReadyRevision:.properties.latestReadyRevisionName,
+            replicas:{
+              min:.properties.template.scale.minReplicas,
+              max:.properties.template.scale.maxReplicas
+            },
+            safetyEnv:[
+              .properties.template.containers[0].env[]
+              | select(.name == "ALLOW_EBAY_WRITES"
+                or .name == "EBAY_MODE"
+                or .name == "MIGRATION_GITHUB_OIDC_ENABLED"
+                or .name == "PARTQUILL_AI_PROVIDER"
+                or .name == "IMAGE_STUDIO_MODE")
+              | {name,value,secretRef}
+            ]
+          }' cutover-audit/container-app.json > cutover-audit/container-app-summary.json
+
+          FQDN=$(jq -er '.fqdn' cutover-audit/container-app-summary.json)
+          AZURE_URL="https://$FQDN"
+
+          curl --fail-with-body --silent --show-error \
+            --retry 6 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            "$AZURE_URL/health" > cutover-audit/health.json
+          curl --fail-with-body --silent --show-error \
+            --retry 6 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            "$AZURE_URL/ready" > cutover-audit/ready.json
+          curl --fail-with-body --silent --show-error \
+            --retry 6 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            --header 'content-type: application/json' \
+            --data '{"command":"I have GM part 10110988 for sale"}' \
+            "$AZURE_URL/v1/seller-ui/command-preview" \
+            > cutover-audit/part-10110988.json
+
+          jq -e --arg dataset "$DATASET_ID" --argjson expected "$EXPECTED_PARTS" \
+            '.gmCatalog.datasetId == $dataset
+             and .gmCatalog.status == "completed"
+             and .gmCatalog.importedParts >= $expected
+             and .gmCatalog.availableParts >= $expected
+             and .ebay.writesEnabled == false
+             and .persistence == "postgres"
+             and .sellerUi.version == "0.19.0"
+             and .imageStudio.provider == "disabled"' \
+            cutover-audit/ready.json >/dev/null
+          jq -e '.. | strings | select(contains("HOSE PORTED PURGE SOL"))' \
+            cutover-audit/part-10110988.json >/dev/null
+
+          jq -e '
+            ([.safetyEnv[] | select(.name == "ALLOW_EBAY_WRITES" and .value == "false")] | length) == 1
+            and ([.safetyEnv[] | select(.name == "MIGRATION_GITHUB_OIDC_ENABLED" and .value == "false")] | length) == 1
+            and ([.safetyEnv[] | select(.name == "PARTQUILL_AI_PROVIDER" and .value == "disabled")] | length) == 1
+          ' cutover-audit/container-app-summary.json >/dev/null
+
+          KEY=$(az storage account keys list \
+            --resource-group "$RESOURCE_GROUP" \
+            --account-name "$STORAGE_ACCOUNT" \
+            --query '[0].value' \
+            --output tsv)
+          echo "::add-mask::$KEY"
+          for blob in \
+            certified/PartQuill_GM_Exact_Catalog_100001_235000.ndjson.gz \
+            certified/PartQuill_GM_Exact_Catalog_100001_235000_Audit.json \
+            certified/SHA256SUMS.txt
+          do
+            az storage blob show \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$blob" \
+              --query '{name:name,bytes:properties.contentLength,lastModified:properties.lastModified}' \
+              --output json
+          done | jq -s '.' > cutover-audit/certified-blobs.json
+
+          test "$(jq -r '.[] | select(.name | endswith(".ndjson.gz")) | .bytes' cutover-audit/certified-blobs.json)" = "102796781"
+          test "$(jq -r '.[] | select(.name | endswith("_Audit.json")) | .bytes' cutover-audit/certified-blobs.json)" = "19580"
+          test "$(jq -r '.[] | select(.name | endswith("SHA256SUMS.txt")) | .bytes' cutover-audit/certified-blobs.json)" = "247"
+
+          az network dns zone list \
+            --query '[].{name:name,resourceGroup:resourceGroup,nameServers:nameServers}' \
+            --output json > cutover-audit/azure-dns-zones.json
+          {
+            echo "partquill.com A"
+            dig +short A partquill.com || true
+            echo "partquill.com CNAME"
+            dig +short CNAME partquill.com || true
+            echo "www.partquill.com A"
+            dig +short A www.partquill.com || true
+            echo "www.partquill.com CNAME"
+            dig +short CNAME www.partquill.com || true
+            echo "partquill.com NS"
+            dig +short NS partquill.com || true
+          } > cutover-audit/public-dns.txt
+
+          CURRENT_STATUS=$(curl --silent --show-error \
+            --connect-timeout 10 --max-time 60 \
+            --output cutover-audit/current-domain-ready.json \
+            --write-out '%{http_code}' \
+            https://partquill.com/ready || true)
+
+          jq -n \
+            --arg azureUrl "$AZURE_URL" \
+            --arg currentDomainStatus "$CURRENT_STATUS" \
+            --arg dataset "$(jq -r '.gmCatalog.datasetId' cutover-audit/ready.json)" \
+            --arg importedParts "$(jq -r '.gmCatalog.importedParts' cutover-audit/ready.json)" \
+            --arg availableParts "$(jq -r '.gmCatalog.availableParts' cutover-audit/ready.json)" \
+            --arg probePart "10110988" \
+            --arg probeDescription "HOSE PORTED PURGE SOL" \
+            '{
+              result:"AZURE_CUTOVER_AUDIT_PASSED",
+              azureUrl:$azureUrl,
+              currentDomainStatus:$currentDomainStatus,
+              dataset:$dataset,
+              importedParts:($importedParts|tonumber),
+              availableParts:($availableParts|tonumber),
+              probePart:$probePart,
+              probeDescription:$probeDescription
+            }' | tee cutover-audit/summary.json
+
+          cat cutover-audit/container-app-summary.json
+          cat cutover-audit/certified-blobs.json
+          cat cutover-audit/public-dns.txt
+
+      - name: Upload cutover audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-azure-cutover-audit
+          path: cutover-audit/
+          if-no-files-found: warn
+          retention-days: 14
