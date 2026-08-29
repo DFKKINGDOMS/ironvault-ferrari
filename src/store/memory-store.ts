@@ -14,9 +14,20 @@ import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 import { mergeGmCatalogParts } from '../catalog/gm-catalog-merge.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
+import type {
+  VintageGmCatalogMatch,
+  VintageGmCatalogMatchPool,
+  VintageGmDatasetStatus,
+  VintageGmImportOptions,
+  VintageGmInventoryRecord
+} from '../vintage-gm/types.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+interface MemoryVintageGmDataset extends Omit<VintageGmDatasetStatus, 'datasetId'> {
+  datasetId: string;
 }
 
 export class MemoryStore implements Store {
@@ -31,6 +42,8 @@ export class MemoryStore implements Store {
   private readonly oauthNonces = new Map<string, { sellerId: string; expiresAt: string; consumedAt?: string }>();
   private readonly acknowledgements = new Map<string, SellerAcknowledgement>();
   private readonly gmCatalog = new Map<string, GmCatalogPart>();
+  private readonly vintageGmInventory = new Map<string, { datasetId: string; record: VintageGmInventoryRecord }>();
+  private readonly vintageGmDatasets = new Map<string, MemoryVintageGmDataset>();
   private readonly ebayReferenceCache = new Map<string, EbayReferenceCacheRecord>();
   private readonly communitySubmissions = new Map<string, CommunitySubmissionRecord>();
   private readonly communityImages = new Map<string, StoredCommunityImage>();
@@ -149,6 +162,132 @@ export class MemoryStore implements Store {
       availableParts: partNumbers.length,
       lastPartNumber: partNumbers.at(-1) ?? null
     };
+  }
+
+  async importVintageGmRecords(
+    records: VintageGmInventoryRecord[],
+    options: VintageGmImportOptions
+  ): Promise<VintageGmDatasetStatus> {
+    const current = this.vintageGmDatasets.get(options.datasetId);
+    if (current && (
+      current.sourceSha256 !== options.sourceSha256
+      || current.sourceFileName !== options.sourceFileName
+      || current.expectedGmRows !== options.expectedGmRows
+      || current.sourceTotalRows !== options.sourceTotalRows
+    )) throw new Error('Vintage GM dataset metadata does not match the existing import');
+
+    for (const record of records) {
+      this.vintageGmInventory.set(`${options.datasetId}:${record.sourceRow}`, {
+        datasetId: options.datasetId,
+        record: clone(record)
+      });
+    }
+    const datasetRecords = [...this.vintageGmInventory.values()]
+      .filter((entry) => entry.datasetId === options.datasetId)
+      .map((entry) => entry.record);
+    if (options.complete && datasetRecords.length !== options.expectedGmRows) {
+      throw new Error(`Vintage GM import is incomplete: expected ${options.expectedGmRows}, found ${datasetRecords.length}`);
+    }
+    const timestamp = new Date().toISOString();
+    if (options.complete) {
+      for (const [datasetId, dataset] of this.vintageGmDatasets) {
+        this.vintageGmDatasets.set(datasetId, { ...dataset, active: false });
+      }
+    }
+    const partNumbers = new Set(datasetRecords.flatMap((record) => record.partNumber ? [record.partNumber] : []));
+    const next: MemoryVintageGmDataset = {
+      datasetId: options.datasetId,
+      status: options.complete ? 'completed' : 'running',
+      active: options.complete ?? false,
+      sourceSha256: options.sourceSha256,
+      sourceFileName: options.sourceFileName,
+      sourceTotalRows: options.sourceTotalRows,
+      expectedGmRows: options.expectedGmRows,
+      importedRows: datasetRecords.length,
+      normalizedRows: datasetRecords.filter((record) => record.normalizationState === 'NORMALIZED_EXACT_KEY').length,
+      rejectedRows: datasetRecords.filter((record) => record.normalizationState !== 'NORMALIZED_EXACT_KEY').length,
+      distinctPartNumbers: partNumbers.size,
+      catalogKeyMatches: [...partNumbers].filter((partNumber) => this.gmCatalog.has(partNumber)).length,
+      completedAt: options.complete ? timestamp : null,
+      updatedAt: timestamp
+    };
+    this.vintageGmDatasets.set(options.datasetId, next);
+    return clone(next);
+  }
+
+  async getVintageGmStatus(): Promise<VintageGmDatasetStatus> {
+    const datasets = [...this.vintageGmDatasets.values()]
+      .sort((left, right) => Number(right.active) - Number(left.active)
+        || (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+    return datasets[0] ? clone(datasets[0]) : {
+      datasetId: null,
+      status: 'not_started',
+      active: false,
+      sourceSha256: null,
+      sourceFileName: null,
+      sourceTotalRows: 0,
+      expectedGmRows: 0,
+      importedRows: 0,
+      normalizedRows: 0,
+      rejectedRows: 0,
+      distinctPartNumbers: 0,
+      catalogKeyMatches: 0,
+      completedAt: null,
+      updatedAt: null
+    };
+  }
+
+  async listVintageGmCatalogMatches(limit: number): Promise<VintageGmCatalogMatchPool> {
+    const dataset = [...this.vintageGmDatasets.values()]
+      .filter((candidate) => candidate.active && candidate.status === 'completed')
+      .sort((left, right) => (right.completedAt ?? '').localeCompare(left.completedAt ?? ''))[0];
+    if (!dataset) return { dataset: await this.getVintageGmStatus(), matches: [] };
+
+    const grouped = new Map<string, VintageGmInventoryRecord[]>();
+    for (const entry of this.vintageGmInventory.values()) {
+      const record = entry.record;
+      if (entry.datasetId !== dataset.datasetId || !record.partNumber || record.quantity <= 0) continue;
+      const group = grouped.get(record.partNumber) ?? [];
+      group.push(record);
+      grouped.set(record.partNumber, group);
+    }
+    const matches: VintageGmCatalogMatch[] = [];
+    for (const [partNumber, records] of grouped) {
+      const catalog = this.gmCatalog.get(partNumber);
+      if (!catalog) continue;
+      const numericMinRecord = (field: 'sourcePrice' | 'sourceWeight') =>
+        [...records].sort((left, right) => Number(left[field]) - Number(right[field]))[0]?.[field] ?? '0';
+      const numericMaxRecord = (field: 'sourcePrice' | 'sourceWeight') =>
+        [...records].sort((left, right) => Number(right[field]) - Number(left[field]))[0]?.[field] ?? '0';
+      const first = [...records].sort((left, right) => left.sourceRow - right.sourceRow)[0]!;
+      matches.push({
+        inventory: {
+          partNumber,
+          productName: first.productName,
+          sku: first.sku,
+          brands: [...new Set(records.map((record) => record.brand))].sort(),
+          descriptions: [...new Set(records.map((record) => record.description).filter(Boolean))],
+          quantity: records.reduce((total, record) => total + record.quantity, 0),
+          sourcePriceMin: numericMinRecord('sourcePrice'),
+          sourcePriceMax: numericMaxRecord('sourcePrice'),
+          sourceWeightMin: numericMinRecord('sourceWeight'),
+          sourceWeightMax: numericMaxRecord('sourceWeight'),
+          sourceRows: records.map((record) => record.sourceRow).sort((left, right) => left - right),
+          recordCount: records.length
+        },
+        catalog: clone(catalog)
+      });
+    }
+    const evidenceRank = (match: VintageGmCatalogMatch) => {
+      if (match.catalog.identityEvidence?.method === 'gmpartswiki_exact_part_link') return 0;
+      if (match.catalog.verificationState === 'catalog_stated') return 1;
+      return 2;
+    };
+    matches.sort((left, right) => evidenceRank(left) - evidenceRank(right)
+      || left.inventory.quantity - right.inventory.quantity
+      || right.catalog.rollup.pageCount - left.catalog.rollup.pageCount
+      || left.inventory.partNumber.localeCompare(right.inventory.partNumber));
+    return { dataset: clone(dataset), matches: matches.slice(0, Math.max(1, limit)) };
   }
 
   async createItem(item: ItemRecord): Promise<void> {

@@ -40,6 +40,12 @@ import {
   verifyGithubMigrationOidcToken
 } from '../security/github-migration-oidc.js';
 import { loadAzureCatalogScan } from '../catalog/azure-blob-media.js';
+import {
+  buildVintageGmShortlist,
+  isVintageGmShortlistCommand,
+  vintageGmShortlistRequestedCount
+} from '../vintage-gm/shortlist.js';
+import { VINTAGE_GM_BRANDS, type VintageGmInventoryRecord } from '../vintage-gm/types.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -98,6 +104,41 @@ const gmCatalogImportSchema = z.object({
     partNumber: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9\s./-]*$/),
     verificationState: z.string().min(1)
   }).passthrough()).min(1).max(1000),
+  complete: z.boolean().default(false)
+});
+const vintageDecimalSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d{1,4})?$/);
+const vintageGmInventoryRecordSchema = z.object({
+  sourceRow: z.number().int().min(2).max(5_000_000),
+  productName: z.string().max(240),
+  sku: z.string().max(96),
+  partNumber: z.string().regex(/^[A-Z0-9]+$/).max(64).nullable(),
+  brand: z.enum(VINTAGE_GM_BRANDS),
+  description: z.string().max(1_000),
+  quantity: z.number().int().min(0).max(100_000_000),
+  sourcePrice: vintageDecimalSchema,
+  sourceWeight: vintageDecimalSchema,
+  normalizationState: z.enum([
+    'NORMALIZED_EXACT_KEY',
+    'REJECTED_SCIENTIFIC_NOTATION',
+    'REJECTED_EMPTY_SKU',
+    'REJECTED_NO_DIGIT'
+  ]),
+  normalizationIssue: z.string().max(240).nullable()
+}).superRefine((record, context) => {
+  if (record.normalizationState === 'NORMALIZED_EXACT_KEY' && !record.partNumber) {
+    context.addIssue({ code: 'custom', path: ['partNumber'], message: 'normalized rows require a part number' });
+  }
+  if (record.normalizationState !== 'NORMALIZED_EXACT_KEY' && record.partNumber) {
+    context.addIssue({ code: 'custom', path: ['partNumber'], message: 'rejected rows cannot carry a normalized part number' });
+  }
+});
+const vintageGmImportSchema = z.object({
+  datasetId: z.string().trim().min(3).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  sourceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  sourceFileName: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._ -]*\.csv$/i),
+  sourceTotalRows: z.number().int().min(0).max(5_000_000),
+  expectedGmRows: z.number().int().min(1).max(1_000_000),
+  records: z.array(vintageGmInventoryRecordSchema).min(1).max(1000),
   complete: z.boolean().default(false)
 });
 const migrationTableParams = z.object({ table: z.enum(MIGRATION_TABLE_NAMES) });
@@ -207,6 +248,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'POST' && request.url === '/v1/community/submissions') return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
+    if (request.method === 'POST' && request.url === '/internal/vintage-gm/import') return;
     if (request.url.startsWith('/internal/migration/')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
@@ -242,7 +284,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.19.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.20.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -340,6 +382,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const permit = sellerPreviewGuard.acquire(request.ip);
     try {
       const { command } = listingCommandRequestSchema.parse(request.body);
+      if (isVintageGmShortlistCommand(command)) {
+        const requested = vintageGmShortlistRequestedCount(command);
+        const pool = store.listVintageGmCatalogMatches
+          ? await store.listVintageGmCatalogMatches(Math.min(2_500, Math.max(250, requested * 50)))
+          : { dataset: null, matches: [] };
+        return reply
+          .header('cache-control', 'no-store')
+          .header('x-content-type-options', 'nosniff')
+          .send({ shortlist: buildVintageGmShortlist(command, pool) });
+      }
       const intent = parseListingCommand(command);
       const rawGmCatalog = intent.partNumber
         ? await store.lookupGmCatalogPart?.(intent.partNumber)
@@ -506,6 +558,32 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     await store.importGmCatalogRecords(records as unknown as GmCatalogPart[], { datasetId, complete });
     return reply.header('cache-control', 'no-store').send({ datasetId: datasetId ?? null, imported: records.length, complete });
   });
+  app.post('/internal/vintage-gm/import', { bodyLimit: 16 * 1024 * 1024 }, async (request, reply) => {
+    const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const authorized = secureTokenMatches(supplied, config.GM_IMPORT_TOKEN)
+      || (config.MIGRATION_GITHUB_OIDC_ENABLED && await verifyGithubMigrationOidcToken(supplied));
+    if (!authorized || !store.importVintageGmRecords) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
+    }
+    const payload = vintageGmImportSchema.parse(request.body);
+    const status = await store.importVintageGmRecords(
+      payload.records as VintageGmInventoryRecord[],
+      {
+        datasetId: payload.datasetId,
+        sourceSha256: payload.sourceSha256,
+        sourceFileName: payload.sourceFileName,
+        sourceTotalRows: payload.sourceTotalRows,
+        expectedGmRows: payload.expectedGmRows,
+        complete: payload.complete
+      }
+    );
+    return reply.header('cache-control', 'no-store').send({
+      datasetId: payload.datasetId,
+      imported: payload.records.length,
+      complete: payload.complete,
+      status
+    });
+  });
   const migrationAuthorized = async (authorization: string | undefined) => {
     const token = authorization?.replace(/^Bearer\s+/i, '');
     if (secureTokenMatches(token, config.MIGRATION_TRANSFER_TOKEN)) return true;
@@ -569,7 +647,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
-      const gmCatalog = await store.getGmCatalogStatus?.();
+      const [gmCatalog, vintageGm] = await Promise.all([
+        store.getGmCatalogStatus?.(),
+        store.getVintageGmStatus?.()
+      ]);
       return {
         ready: true,
         ebay: { environment: config.EBAY_ENV, mode: config.EBAY_MODE, writesEnabled: config.ALLOW_EBAY_WRITES },
@@ -599,8 +680,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.19.0',
+          version: '0.20.0',
           commandPreview: true,
+          vintageGmShortlist: true,
           publicEbayWritesDisabled: true
         },
         gmCatalog: gmCatalog ?? {
@@ -609,6 +691,23 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           importedParts: 0,
           availableParts: 0,
           lastPartNumber: null
+        },
+        vintageGmCrosswalk: vintageGm ? {
+          status: vintageGm.status,
+          active: vintageGm.active,
+          importedRows: vintageGm.importedRows,
+          normalizedRows: vintageGm.normalizedRows,
+          rejectedRows: vintageGm.rejectedRows,
+          distinctPartNumbers: vintageGm.distinctPartNumbers,
+          catalogKeyMatches: vintageGm.catalogKeyMatches
+        } : {
+          status: 'not_started',
+          active: false,
+          importedRows: 0,
+          normalizedRows: 0,
+          rejectedRows: 0,
+          distinctPartNumbers: 0,
+          catalogKeyMatches: 0
         },
         oemResearch: {
           mode: config.OEM_RESEARCH_MODE,

@@ -9,6 +9,8 @@ export const MIGRATION_TABLE_NAMES = [
   'seller_acknowledgements',
   'gm_catalog_parts',
   'gm_catalog_imports',
+  'vintage_gm_imports',
+  'vintage_gm_inventory',
   'ebay_reference_cache',
   'community_submissions',
   'community_images',

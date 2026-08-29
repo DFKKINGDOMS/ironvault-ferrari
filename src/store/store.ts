@@ -12,6 +12,12 @@ import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 import type {
+  VintageGmCatalogMatchPool,
+  VintageGmDatasetStatus,
+  VintageGmImportOptions,
+  VintageGmInventoryRecord
+} from '../vintage-gm/types.js';
+import type {
   MigrationExportPage,
   MigrationImportResult,
   MigrationManifest,
@@ -55,6 +61,9 @@ export interface Store {
   lookupGmCatalogPart?(partNumber: string): Promise<GmCatalogPart | undefined>;
   getGmCatalogStatus?(): Promise<GmCatalogStatus>;
   importGmCatalogRecords?(records: GmCatalogPart[], options?: GmCatalogImportOptions): Promise<void>;
+  importVintageGmRecords?(records: VintageGmInventoryRecord[], options: VintageGmImportOptions): Promise<VintageGmDatasetStatus>;
+  getVintageGmStatus?(): Promise<VintageGmDatasetStatus>;
+  listVintageGmCatalogMatches?(limit: number): Promise<VintageGmCatalogMatchPool>;
   getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined>;
   saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void>;
   deleteEbayReferenceCache(partNumber: string): Promise<void>;

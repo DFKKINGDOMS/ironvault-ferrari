@@ -8,6 +8,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 
 - Command-first React seller workspace at `/`, with the approved Understand → Resolve → Map → Protect → Assemble → Review flow.
 - Public, rate-limited `POST /v1/seller-ui/command-preview` parser for part number or seller description, price, quantity, condition, shipping and no-fitment instructions.
+- Vintage GM discovery in the same command box: requests such as `Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence` join the active private Vintage feed to exact OEM catalog keys, rank low source stock first, exclude restraint-system candidates, and return held seller-review drafts only. Source scarcity is never presented as eBay-market rarity or value.
 - The GM brake/booster repair-kit rule maps to the current official eBay Motors `Brake Boosters` leaf (`174021`) instead of generic `9886`; a stored generic fallback cannot outrank the exact product-family rule.
 - GMPartsWiki-backed item identity uses `General Motors` as the catalog brand, defaults the editable relationship to genuine, and selects one compatible vehicle make deterministically from application evidence for a qualified `Fits` title phrase.
 - Four publication-gated item specifics are pinned and cannot be renamed or removed: Brand, Manufacturer Part Number, OE/OEM Part Number, and California Prop 65 Warning.
@@ -104,7 +105,7 @@ Health endpoints are public:
 The seller workspace endpoints are also public and read-only:
 
 - `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
-- `POST /v1/seller-ui/command-preview` — builds a catalog-held, photo-first, restricted-safety, or illustrative preview; it performs no catalog or eBay request.
+- `POST /v1/seller-ui/command-preview` — builds a catalog-held, photo-first, restricted-safety, illustrative, or Vintage GM shortlist response; it performs no eBay write.
 - `GET /v1/seller-ui/ebay-reference/:partNumber` — checks only an exact, locally verified catalog key; unrelated categories, partial numbers, conflicting MPNs and conflicting automaker brands fail closed.
 
 The community contribution surface is public and rate limited:

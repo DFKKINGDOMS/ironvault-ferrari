@@ -1,9 +1,15 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/http/app.js';
 import { harness, validPayload } from './helpers.js';
 import { registerCatalogImage } from '../src/catalog/image-proxy.js';
 import type { Store } from '../src/store/store.js';
+import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
+
+const gm5459066 = JSON.parse(
+  readFileSync(new URL('../data/gm-catalog-smoke-5459066.json', import.meta.url), 'utf8')
+) as GmCatalogPart;
 
 let app: FastifyInstance | undefined;
 afterEach(async () => {
@@ -61,7 +67,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.19.0',
+      version: '0.20.0',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       defaults: {
@@ -157,6 +163,78 @@ describe('HTTP contract', () => {
       status: 'completed',
       availableParts: 1
     });
+  });
+
+  it('imports the private Vintage GM crosswalk and returns held exact-evidence candidates without an eBay write', async () => {
+    const h = harness({
+      GM_IMPORT_TOKEN: 'test-gm-import-token-that-is-long-enough',
+      ALLOW_EBAY_WRITES: false
+    });
+    await h.store.importGmCatalogRecords([gm5459066], { datasetId: 'gm-http-test', complete: true });
+    const stageOffer = vi.spyOn(h.gateway, 'stageOffer');
+    const publish = vi.spyOn(h.gateway, 'publish');
+    app = await buildApp(h);
+    const payload = {
+      datasetId: 'vintage-gm-http-test-v1',
+      sourceSha256: 'c'.repeat(64),
+      sourceFileName: 'Products_Vintage_Full_Original.csv',
+      sourceTotalRows: 788_581,
+      expectedGmRows: 1,
+      records: [{
+        sourceRow: 378,
+        productName: '2585-5459066',
+        sku: '5459066',
+        partNumber: '5459066',
+        brand: 'GM NA',
+        description: 'ELEMENT CLEANER MORAINE',
+        quantity: 1,
+        sourcePrice: '9.2375',
+        sourceWeight: '0.9',
+        normalizationState: 'NORMALIZED_EXACT_KEY',
+        normalizationIssue: null
+      }],
+      complete: true
+    };
+    expect((await app.inject({
+      method: 'POST',
+      url: '/internal/vintage-gm/import',
+      payload
+    })).statusCode).toBe(404);
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/internal/vintage-gm/import',
+      headers: { authorization: 'Bearer test-gm-import-token-that-is-long-enough' },
+      payload
+    });
+    expect(imported.statusCode).toBe(200);
+    expect(imported.json().status).toMatchObject({
+      active: true,
+      importedRows: 1,
+      normalizedRows: 1,
+      catalogKeyMatches: 1
+    });
+
+    const shortlist = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence' }
+    });
+    expect(shortlist.statusCode).toBe(200);
+    expect(shortlist.json().shortlist).toMatchObject({
+      kind: 'VINTAGE_GM_SHORTLIST',
+      status: 'PARTIAL',
+      requestedCount: 10,
+      returnedCount: 1,
+      candidates: [expect.objectContaining({
+        partNumber: '5459066',
+        listing: expect.objectContaining({ state: 'DRAFT_CANDIDATE_REVIEW_REQUIRED' })
+      })],
+      ranking: { marketRarityClaimed: false, ebayMarketDataUsed: false },
+      gates: { publicEbayWrite: 'DISABLED' },
+      noExternalRequestMade: true
+    });
+    expect(stageOffer).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('keeps migration transfer endpoints disabled unless the temporary token and store adapter are present', async () => {

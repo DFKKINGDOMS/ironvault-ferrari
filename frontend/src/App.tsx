@@ -223,7 +223,7 @@ type SellerPreview = {
   intelligence: ListingIntelligence | null;
   tariff: TariffIntelligence | null;
   mapping: {
-    state: "CURATED_EXACT" | "CATALOG_STATED_EXACT" | "OCR_CANDIDATE_HELD" | "PART_NUMBER_MISMATCH" | "NOT_FOUND";
+    state: "CURATED_EXACT" | "CATALOG_LINKED_EXACT" | "CATALOG_STATED_EXACT" | "OCR_CANDIDATE_HELD" | "PART_NUMBER_MISMATCH" | "NOT_FOUND";
     requestedPartNumber: string | null;
     returnedPartNumber: string | null;
     exactKeyMatch: boolean;
@@ -256,6 +256,88 @@ type SellerPreview = {
   gates: { privatePreflight: "SIMULATION_AVAILABLE" | "HELD"; publicEbayWrite: "DISABLED"; ebayHandoffUrl: string };
   noExternalRequestMade: boolean;
   fingerprint: string;
+};
+
+type VintageGmShortlistCandidate = {
+  rank: number;
+  partNumber: string;
+  inventory: {
+    brands: string[];
+    description: string;
+    alternateDescriptions: string[];
+    quantity: number;
+    sourcePriceMin: string;
+    sourcePriceMax: string;
+    sourceWeightMin: string;
+    sourceWeightMax: string;
+    sourceRows: number[];
+    recordCount: number;
+    scarcityBand: "ONE_IN_SOURCE" | "LOW_SOURCE_STOCK" | "AVAILABLE_SOURCE_STOCK";
+  };
+  catalog: {
+    manufacturer: string;
+    productType: string;
+    description: string;
+    divisions: string[];
+    catalogGroup: string | null;
+    mappingState: "CURATED_EXACT" | "CATALOG_LINKED_EXACT" | "CATALOG_STATED_EXACT";
+    sourcePages: number[];
+    occurrenceCount: number;
+    pageCount: number;
+    applicationCount: number;
+    evidenceViewUrl: string | null;
+    category: {
+      state: "EBAY_TAXONOMY_VERIFIED" | "EBAY_OFFICIAL_LEAF_REQUIRES_REVIEW" | "RULE_DERIVED_REQUIRES_EBAY_VERIFICATION" | "NOT_CLASSIFIED";
+      categoryId: string | null;
+      categoryName: string | null;
+      categoryPath: string | null;
+    };
+  };
+  listing: {
+    state: "DRAFT_CANDIDATE_REVIEW_REQUIRED";
+    suggestedTitle: string;
+    reviewCommand: string;
+    reviewRequirements: string[];
+  };
+};
+
+type VintageGmShortlist = {
+  schemaVersion: "2026-08-29";
+  kind: "VINTAGE_GM_SHORTLIST";
+  status: "READY" | "PARTIAL" | "DATA_NOT_LOADED" | "NO_EXACT_MATCHES";
+  command: string;
+  requestedCount: number;
+  returnedCount: number;
+  dataset: {
+    datasetId: string | null;
+    status: "not_started" | "running" | "completed" | "failed";
+    active: boolean;
+    sourceSha256: string | null;
+    sourceFileName: string | null;
+    sourceTotalRows: number;
+    expectedGmRows: number;
+    importedRows: number;
+    normalizedRows: number;
+    rejectedRows: number;
+    distinctPartNumbers: number;
+    catalogKeyMatches: number;
+    completedAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  candidates: VintageGmShortlistCandidate[];
+  ranking: {
+    label: string;
+    marketRarityClaimed: false;
+    ebayMarketDataUsed: false;
+    explanation: string;
+  };
+  gates: {
+    actualItemPhotoRequired: true;
+    conditionConfirmationRequired: true;
+    categoryReviewRequired: true;
+    publicEbayWrite: "DISABLED";
+  };
+  noExternalRequestMade: true;
 };
 
 type View =
@@ -1219,6 +1301,63 @@ function ActiveDraftEditor({
   </section>;
 }
 
+function VintageGmShortlistPanel({
+  shortlist,
+  onReview,
+  onReset
+}: {
+  shortlist: VintageGmShortlist;
+  onReview: (candidate: VintageGmShortlistCandidate) => void;
+  onReset: () => void;
+}) {
+  const sourcePrice = (candidate: VintageGmShortlistCandidate) => candidate.inventory.sourcePriceMin === candidate.inventory.sourcePriceMax
+    ? `$${candidate.inventory.sourcePriceMin}`
+    : `$${candidate.inventory.sourcePriceMin}–$${candidate.inventory.sourcePriceMax}`;
+  const scarcityLabel = (candidate: VintageGmShortlistCandidate) => candidate.inventory.scarcityBand === "ONE_IN_SOURCE"
+    ? "1 in source"
+    : candidate.inventory.scarcityBand === "LOW_SOURCE_STOCK"
+      ? "Low source stock"
+      : "In source stock";
+  const evidenceLabel = (candidate: VintageGmShortlistCandidate) => candidate.catalog.mappingState === "CURATED_EXACT"
+    ? "Curated exact"
+    : candidate.catalog.mappingState === "CATALOG_LINKED_EXACT"
+      ? "Exact GMPartsWiki link"
+      : "Catalog-stated exact";
+  const hasCandidates = shortlist.candidates.length > 0;
+
+  return <section className="vintage-shortlist" aria-label="Vintage GM catalog shortlist">
+    <header className="vintage-shortlist-head">
+      <div><span>VINTAGE GM · EXACT CATALOG CROSSWALK</span><h2>{hasCandidates ? `${shortlist.returnedCount} parts ready for draft review` : "Vintage GM crosswalk is not ready"}</h2><p>{hasCandidates ? "Every candidate is in the active Vintage inventory and has seller-safe exact GM catalog evidence." : shortlist.status === "DATA_NOT_LOADED" ? "The Vintage GM dataset has not been activated in this PartQuill environment yet." : "No seller-safe exact matches met this request."}</p></div>
+      <div><Badge tone={shortlist.status === "READY" ? "green" : hasCandidates ? "amber" : "red"}>{shortlist.status === "READY" ? "Exact shortlist ready" : shortlist.status.replaceAll("_", " ")}</Badge><button className="text-button" onClick={onReset}>Start over</button></div>
+    </header>
+
+    {shortlist.dataset && <div className="vintage-dataset-strip">
+      <article><span>Active source</span><strong>{shortlist.dataset.sourceFileName ?? "Unavailable"}</strong><small>{shortlist.dataset.importedRows.toLocaleString()} strict-GM rows preserved</small></article>
+      <article><span>Normalized keys</span><strong>{shortlist.dataset.normalizedRows.toLocaleString()}</strong><small>{shortlist.dataset.rejectedRows.toLocaleString()} malformed row{shortlist.dataset.rejectedRows === 1 ? "" : "s"} held, never guessed</small></article>
+      <article><span>Catalog key joins</span><strong>{shortlist.dataset.catalogKeyMatches.toLocaleString()}</strong><small>Exact normalized part-number intersection</small></article>
+      <article><span>Source fingerprint</span><strong>{shortlist.dataset.sourceSha256?.slice(0, 12) ?? "Unavailable"}…</strong><small>Active dataset {shortlist.dataset.datasetId}</small></article>
+    </div>}
+
+    <div className="vintage-ranking-note"><Icon name="shield"/><div><strong>{shortlist.ranking.label}</strong><p>{shortlist.ranking.explanation}</p></div><span>No eBay market data · no public write</span></div>
+
+    {hasCandidates ? <div className="vintage-candidate-grid">{shortlist.candidates.map((candidate) => <article className="vintage-candidate" key={candidate.partNumber}>
+      <div className="vintage-candidate-rank"><b>{String(candidate.rank).padStart(2, "0")}</b><Badge tone={candidate.inventory.scarcityBand === "ONE_IN_SOURCE" ? "orange" : "amber"}>{scarcityLabel(candidate)}</Badge></div>
+      <div className="vintage-candidate-title"><span>GM PART {candidate.partNumber}</span><h3>{candidate.catalog.description}</h3><p>{candidate.inventory.description}</p></div>
+      <dl className="vintage-candidate-facts">
+        <div><dt>Vintage stock</dt><dd>{candidate.inventory.quantity.toLocaleString()}</dd></div>
+        <div><dt>Vintage source price</dt><dd>{sourcePrice(candidate)}</dd></div>
+        <div><dt>GM evidence</dt><dd>{evidenceLabel(candidate)}</dd></div>
+        <div><dt>Source pages</dt><dd>{candidate.catalog.sourcePages.length}</dd></div>
+      </dl>
+      <div className="vintage-catalog-proof"><span><i/><strong>{candidate.catalog.manufacturer}</strong><small>{candidate.catalog.divisions.length ? candidate.catalog.divisions.join(" · ") : "GM division not bounded"}{candidate.catalog.catalogGroup ? ` · Group ${candidate.catalog.catalogGroup}` : ""}</small></span><span><i/><strong>{candidate.catalog.category.categoryName ?? "Category review required"}</strong><small>{candidate.catalog.category.categoryId ? `Official leaf ${candidate.catalog.category.categoryId}` : "No category ID enters a draft until reviewed"}</small></span></div>
+      <div className="vintage-candidate-actions"><button className="primary" onClick={() => onReview(candidate)}>Review held draft <Icon name="arrow"/></button>{candidate.catalog.evidenceViewUrl && <a href={candidate.catalog.evidenceViewUrl} target="_blank" rel="noreferrer"><Icon name="search"/> Open catalog page</a>}</div>
+      <p className="vintage-candidate-hold"><Icon name="camera"/> Actual-item photos, condition, usable quantity and seller price still require confirmation.</p>
+    </article>)}</div> : <div className="vintage-shortlist-empty"><Icon name="inventory"/><h3>No trustworthy shortlist returned</h3><p>PartQuill did not substitute OCR candidates or invent catalog matches. Activate a completed Vintage GM import, then run the request again.</p></div>}
+
+    <footer className="vintage-shortlist-footer"><strong>What “can list” means here</strong><span>In stock in the Vintage source</span><span>Exact GM catalog evidence</span><span>Not a restraint-system candidate</span><span>Held draft only</span><b>eBay writes disabled</b></footer>
+  </section>;
+}
+
 export default function Home() {
   const [view, setView] = useState<View>(() => window.location.pathname === "/community-images" ? "community" : "instant");
   const [editorTab, setEditorTab] = useState<EditorTab>("listing");
@@ -1246,6 +1385,7 @@ export default function Home() {
   const [instantPartConfirmed, setInstantPartConfirmed] = useState(false);
   const [instantConditionConfirmed, setInstantConditionConfirmed] = useState(false);
   const [instantPreview, setInstantPreview] = useState<SellerPreview | null>(null);
+  const [instantShortlist, setInstantShortlist] = useState<VintageGmShortlist | null>(null);
   const [instantLoading, setInstantLoading] = useState(false);
   const [instantDirty, setInstantDirty] = useState(false);
   const [bootstrap, setBootstrap] = useState<SellerBootstrap | null>(null);
@@ -1391,9 +1531,29 @@ export default function Home() {
         body: JSON.stringify({ command })
       });
       if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
-      const payload = await response.json() as { preview: SellerPreview };
+      const payload = await response.json() as { preview?: SellerPreview; shortlist?: VintageGmShortlist };
+      if (payload.shortlist) {
+        setEbayReference(null);
+        setEbayReferenceLoading(false);
+        setInstantPreview(null);
+        setInstantShortlist(payload.shortlist);
+        setInstantPartConfirmed(false);
+        setInstantConditionConfirmed(false);
+        setInstantDirty(false);
+        setInstantPhotos([]);
+        setFoundPartNumber("");
+        setInstantBuilt(true);
+        showNotice(payload.shortlist.status === "READY"
+          ? `${payload.shortlist.returnedCount} exact Vintage GM candidates found. Every one remains a held draft until seller review.`
+          : payload.shortlist.status === "PARTIAL"
+            ? `${payload.shortlist.returnedCount} trustworthy candidates found; PartQuill did not pad the set with weaker matches.`
+            : "No Vintage GM shortlist is active yet. Nothing was guessed or sent externally.");
+        return;
+      }
+      if (!payload.preview) throw new Error("The backend returned neither a listing preview nor a Vintage GM shortlist.");
       const preview = payload.preview;
       setEbayReference(null);
+      setInstantShortlist(null);
       setInstantPreview(preview);
       setInstantPrice(preview.intent.price ?? "");
       setInstantCondition(preview.intent.condition);
@@ -1442,11 +1602,18 @@ export default function Home() {
               : "Command understood. Unsupported identity and fitment claims are held until a unique authorized catalog match exists.");
     } catch (error) {
       setInstantPreview(null);
+      setInstantShortlist(null);
       setInstantBuilt(false);
       showNotice(error instanceof Error ? error.message : "The command preview could not be built.");
     } finally {
       setInstantLoading(false);
     }
+  };
+  const reviewVintageCandidate = (candidate: VintageGmShortlistCandidate) => {
+    setInstantCommand(candidate.listing.reviewCommand);
+    setInstantShortlist(null);
+    void buildInstantDraft(candidate.listing.reviewCommand);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const openInventoryDraft = async (row: (typeof inventoryRows)[number]) => {
     if (row.status === "Blocked") {
@@ -1595,7 +1762,16 @@ export default function Home() {
               <button disabled={instantLoading} onClick={() => void buildInstantDraft()}>{instantLoading ? "Building safely…" : "Build my listing"} <Icon name={instantLoading ? "more" : "arrow"}/></button>
             </div>
             <div className="command-tools"><div><button onClick={() => navigate("new")}><Icon name="camera"/> Add item photos</button><button onClick={() => showNotice("Barcode and label scanning remain supporting evidence; they cannot establish fitment alone.")}><Icon name="search"/> Scan a label</button><button onClick={() => navigate("settings")}><Icon name="settings"/> Seller defaults</button></div><span>Press Enter to build · Shift + Enter for a new line</span></div>
-            {instantBuilt && <div className="command-extracted" aria-label="Extracted listing intent">
+            {instantBuilt && (instantShortlist ? <div className="command-extracted" aria-label="Extracted Vintage GM shortlist intent">
+              <span>PartQuill heard</span>
+              <b className="route-green">Find {instantShortlist.requestedCount} Vintage GM parts</b>
+              <b>Join exact GM catalog keys</b>
+              <b>Rank low source stock first</b>
+              <b>Channel eBay held drafts</b>
+              <b>{instantShortlist.returnedCount} trustworthy matches</b>
+              <b>No market-rarity claim</b>
+              <b>No external request</b>
+            </div> : <div className="command-extracted" aria-label="Extracted listing intent">
               <span>PartQuill heard</span>
               {instantPreview?.intent.partNumber
                 ? <b>MPN {instantPreview.intent.partNumber}</b>
@@ -1609,16 +1785,16 @@ export default function Home() {
               <b>{instantFitmentMode}</b>
               <b>{instantPreview?.noExternalRequestMade ? "No external request" : "Checking"}</b>
               <button onClick={() => navigate("new")}>Use fields instead <Icon name="arrow"/></button>
-            </div>}
-            <div className="command-examples"><span>Try:</span>{["List part 58487514 for $9.99", "List a used black dashboard for $49.99", "List a 1990 Corvette airbag for $49.99"].map((example) => <button key={example} onClick={() => { setInstantCommand(example); setInstantBuilt(false); setInstantPreview(null); }}>{example}</button>)}</div>
+            </div>)}
+            <div className="command-examples"><span>Try:</span>{["Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence", "List part 58487514 for $9.99", "List a used black dashboard for $49.99", "List a 1990 Corvette airbag for $49.99"].map((example) => <button key={example} onClick={() => { setInstantCommand(example); setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); }}>{example}</button>)}</div>
           </div>
 
-          <div className="builder-rail" aria-label="Automatic listing build stages">
+          {!instantShortlist && <div className="builder-rail" aria-label="Automatic listing build stages">
             {instantStages.map(([number,label,copy,complete]) => <div key={number} className={instantBuilt && complete ? "complete" : ""}><b>{number}</b><span><strong>{label}</strong><small>{copy}</small></span><Icon name={instantBuilt && complete ? "check" : "more"}/></div>)}
-          </div>
+          </div>}
 
-          {!instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your prefilled review will appear here.</h2><p>Run the command above to see the complete approval experience.</p></div> : <>
-            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
+          {instantShortlist ? <VintageGmShortlistPanel shortlist={instantShortlist} onReview={reviewVintageCandidate} onReset={() => { setInstantBuilt(false); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : !instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your prefilled review will appear here.</h2><p>Run the command above to see the complete approval experience.</p></div> : <>
+            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
 
             <div className="instant-draft-grid">
               <div className="instant-draft-main">

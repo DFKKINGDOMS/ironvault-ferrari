@@ -827,7 +827,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.19.0',
+    version: '0.20.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {

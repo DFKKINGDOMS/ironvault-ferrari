@@ -19,6 +19,13 @@ import type {
 import type { EbayLeafCategory, Store } from './store.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunityImageRecord, CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
+import type {
+  VintageGmCatalogMatch,
+  VintageGmCatalogMatchPool,
+  VintageGmDatasetStatus,
+  VintageGmImportOptions,
+  VintageGmInventoryRecord
+} from '../vintage-gm/types.js';
 import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
 import {
   MIGRATION_TABLE_NAMES,
@@ -45,6 +52,8 @@ const migrationTables: Record<MigrationTableName, { qualifiedName: string; order
   seller_acknowledgements: { qualifiedName: 'public.seller_acknowledgements', orderBy: 'seller_id, acknowledgement_type' },
   gm_catalog_parts: { qualifiedName: 'partquill.gm_catalog_parts', orderBy: 'part_number' },
   gm_catalog_imports: { qualifiedName: 'partquill.gm_catalog_imports', orderBy: 'dataset_id' },
+  vintage_gm_imports: { qualifiedName: 'partquill.vintage_gm_imports', orderBy: 'dataset_id' },
+  vintage_gm_inventory: { qualifiedName: 'partquill.vintage_gm_inventory', orderBy: 'dataset_id, source_row' },
   ebay_reference_cache: { qualifiedName: 'partquill.ebay_reference_cache', orderBy: 'part_number' },
   community_submissions: { qualifiedName: 'partquill.community_submissions', orderBy: 'id' },
   community_images: { qualifiedName: 'partquill.community_images', orderBy: 'id' },
@@ -453,6 +462,295 @@ export class PostgresStore implements Store {
       availableParts: Number(available.rows[0]?.count ?? 0),
       lastPartNumber: row?.last_part_number ?? null
     };
+  }
+
+  async importVintageGmRecords(
+    records: VintageGmInventoryRecord[],
+    options: VintageGmImportOptions
+  ): Promise<VintageGmDatasetStatus> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const importState = await client.query(
+        `INSERT INTO partquill.vintage_gm_imports(
+           dataset_id,source_sha256,source_file_name,source_total_rows,expected_gm_rows,status,active,updated_at
+         ) VALUES($1,$2,$3,$4,$5,'running',false,now())
+         ON CONFLICT(dataset_id) DO UPDATE SET
+           status='running',updated_at=now(),error_detail=NULL
+         WHERE partquill.vintage_gm_imports.source_sha256=EXCLUDED.source_sha256
+           AND partquill.vintage_gm_imports.source_file_name=EXCLUDED.source_file_name
+           AND partquill.vintage_gm_imports.source_total_rows=EXCLUDED.source_total_rows
+           AND partquill.vintage_gm_imports.expected_gm_rows=EXCLUDED.expected_gm_rows
+         RETURNING dataset_id`,
+        [
+          options.datasetId,
+          options.sourceSha256,
+          options.sourceFileName,
+          options.sourceTotalRows,
+          options.expectedGmRows
+        ]
+      );
+      if (importState.rowCount !== 1) {
+        throw new Error('Vintage GM dataset metadata does not match the existing import');
+      }
+      if (records.length) {
+        await client.query(
+          `INSERT INTO partquill.vintage_gm_inventory(
+             dataset_id,source_row,product_name,sku,part_number,brand,description,quantity,
+             source_price,source_weight,normalization_state,normalization_issue,imported_at
+           )
+           SELECT $1,item."sourceRow",item."productName",item.sku,item."partNumber",item.brand,
+             item.description,item.quantity,item."sourcePrice"::numeric,item."sourceWeight"::numeric,
+             item."normalizationState",item."normalizationIssue",now()
+           FROM jsonb_to_recordset($2::jsonb) AS item(
+             "sourceRow" integer,
+             "productName" text,
+             sku text,
+             "partNumber" text,
+             brand text,
+             description text,
+             quantity integer,
+             "sourcePrice" text,
+             "sourceWeight" text,
+             "normalizationState" text,
+             "normalizationIssue" text
+           )
+           ON CONFLICT(dataset_id,source_row) DO UPDATE SET
+             product_name=EXCLUDED.product_name,
+             sku=EXCLUDED.sku,
+             part_number=EXCLUDED.part_number,
+             brand=EXCLUDED.brand,
+             description=EXCLUDED.description,
+             quantity=EXCLUDED.quantity,
+             source_price=EXCLUDED.source_price,
+             source_weight=EXCLUDED.source_weight,
+             normalization_state=EXCLUDED.normalization_state,
+             normalization_issue=EXCLUDED.normalization_issue,
+             imported_at=now()`,
+          [options.datasetId, JSON.stringify(records)]
+        );
+      }
+      const statistics = await client.query<{
+        imported_rows: number;
+        normalized_rows: number;
+        rejected_rows: number;
+        distinct_part_numbers: number;
+        catalog_key_matches: number;
+      }>(
+        `SELECT
+           count(*)::integer AS imported_rows,
+           count(*) FILTER (WHERE inventory.normalization_state='NORMALIZED_EXACT_KEY')::integer AS normalized_rows,
+           count(*) FILTER (WHERE inventory.normalization_state<>'NORMALIZED_EXACT_KEY')::integer AS rejected_rows,
+           count(DISTINCT inventory.part_number) FILTER (WHERE inventory.part_number IS NOT NULL)::integer AS distinct_part_numbers,
+           count(DISTINCT inventory.part_number) FILTER (WHERE catalog.part_number IS NOT NULL)::integer AS catalog_key_matches
+         FROM partquill.vintage_gm_inventory AS inventory
+         LEFT JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
+         WHERE inventory.dataset_id=$1`,
+        [options.datasetId]
+      );
+      const stats = statistics.rows[0];
+      if (!stats) throw new Error('Vintage GM import statistics were unavailable');
+      if (options.complete && stats.imported_rows !== options.expectedGmRows) {
+        throw new Error(`Vintage GM import is incomplete: expected ${options.expectedGmRows}, found ${stats.imported_rows}`);
+      }
+      if (options.complete) {
+        await client.query(
+          'UPDATE partquill.vintage_gm_imports SET active=false,updated_at=now() WHERE active=true AND dataset_id<>$1',
+          [options.datasetId]
+        );
+      }
+      await client.query(
+        `UPDATE partquill.vintage_gm_imports SET
+           imported_rows=$2,
+           normalized_rows=$3,
+           rejected_rows=$4,
+           distinct_part_numbers=$5,
+           catalog_key_matches=$6,
+           status=$7,
+           active=$8,
+           completed_at=CASE WHEN $8 THEN now() ELSE completed_at END,
+           updated_at=now(),
+           error_detail=NULL
+         WHERE dataset_id=$1`,
+        [
+          options.datasetId,
+          stats.imported_rows,
+          stats.normalized_rows,
+          stats.rejected_rows,
+          stats.distinct_part_numbers,
+          stats.catalog_key_matches,
+          options.complete ? 'completed' : 'running',
+          options.complete ?? false
+        ]
+      );
+      await client.query('COMMIT');
+      return await this.getVintageGmStatus();
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getVintageGmStatus(): Promise<VintageGmDatasetStatus> {
+    const result = await this.pool.query<{
+      dataset_id: string;
+      status: VintageGmDatasetStatus['status'];
+      active: boolean;
+      source_sha256: string;
+      source_file_name: string;
+      source_total_rows: number;
+      expected_gm_rows: number;
+      imported_rows: number;
+      normalized_rows: number;
+      rejected_rows: number;
+      distinct_part_numbers: number;
+      catalog_key_matches: number;
+      completed_at: Date | string | null;
+      updated_at: Date | string;
+    }>(
+      `SELECT dataset_id,status,active,source_sha256,source_file_name,source_total_rows,
+         expected_gm_rows,imported_rows,normalized_rows,rejected_rows,distinct_part_numbers,
+         catalog_key_matches,completed_at,updated_at
+       FROM partquill.vintage_gm_imports
+       ORDER BY active DESC,updated_at DESC
+       LIMIT 1`
+    );
+    const row = result.rows[0];
+    if (!row) return {
+      datasetId: null,
+      status: 'not_started',
+      active: false,
+      sourceSha256: null,
+      sourceFileName: null,
+      sourceTotalRows: 0,
+      expectedGmRows: 0,
+      importedRows: 0,
+      normalizedRows: 0,
+      rejectedRows: 0,
+      distinctPartNumbers: 0,
+      catalogKeyMatches: 0,
+      completedAt: null,
+      updatedAt: null
+    };
+    const iso = (value: Date | string | null) => value
+      ? (value instanceof Date ? value : new Date(value)).toISOString()
+      : null;
+    return {
+      datasetId: row.dataset_id,
+      status: row.status,
+      active: row.active,
+      sourceSha256: row.source_sha256,
+      sourceFileName: row.source_file_name,
+      sourceTotalRows: row.source_total_rows,
+      expectedGmRows: row.expected_gm_rows,
+      importedRows: row.imported_rows,
+      normalizedRows: row.normalized_rows,
+      rejectedRows: row.rejected_rows,
+      distinctPartNumbers: row.distinct_part_numbers,
+      catalogKeyMatches: row.catalog_key_matches,
+      completedAt: iso(row.completed_at),
+      updatedAt: iso(row.updated_at)
+    };
+  }
+
+  async listVintageGmCatalogMatches(limit: number): Promise<VintageGmCatalogMatchPool> {
+    const dataset = await this.getVintageGmStatus();
+    if (!dataset.datasetId || !dataset.active || dataset.status !== 'completed') {
+      return { dataset, matches: [] };
+    }
+    const result = await this.pool.query<{
+      part_number: string;
+      product_name: string;
+      sku: string;
+      brands: string[];
+      descriptions: string[];
+      quantity: number;
+      source_price_min: string;
+      source_price_max: string;
+      source_weight_min: string;
+      source_weight_max: string;
+      source_rows: number[];
+      record_count: number;
+      catalog_data: GmCatalogPart;
+    }>(
+      `WITH grouped_inventory AS (
+         SELECT
+           inventory.part_number,
+           min(inventory.product_name) AS product_name,
+           min(inventory.sku) AS sku,
+           array_agg(DISTINCT inventory.brand ORDER BY inventory.brand) AS brands,
+           array_agg(DISTINCT inventory.description ORDER BY inventory.description)
+             FILTER (WHERE inventory.description<>'') AS descriptions,
+           sum(inventory.quantity)::integer AS quantity,
+           min(inventory.source_price)::text AS source_price_min,
+           max(inventory.source_price)::text AS source_price_max,
+           min(inventory.source_weight)::text AS source_weight_min,
+           max(inventory.source_weight)::text AS source_weight_max,
+           array_agg(inventory.source_row ORDER BY inventory.source_row) AS source_rows,
+           count(*)::integer AS record_count
+         FROM partquill.vintage_gm_inventory AS inventory
+         WHERE inventory.dataset_id=$1
+           AND inventory.part_number IS NOT NULL
+           AND inventory.quantity>0
+         GROUP BY inventory.part_number
+       )
+       SELECT
+         inventory.part_number,inventory.product_name,inventory.sku,inventory.brands,
+         coalesce(inventory.descriptions,ARRAY[]::text[]) AS descriptions,
+         inventory.quantity,inventory.source_price_min,inventory.source_price_max,
+         inventory.source_weight_min,inventory.source_weight_max,inventory.source_rows,
+         inventory.record_count,catalog.data AS catalog_data
+       FROM grouped_inventory AS inventory
+       JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
+       WHERE
+         inventory.part_number IN ('5455054','5455055')
+         OR (
+           catalog.data #>> '{identityEvidence,method}'='gmpartswiki_exact_part_link'
+           AND lower(coalesce(catalog.data #>> '{identityEvidence,verificationState}',''))='catalog_stated'
+           AND jsonb_array_length(coalesce(catalog.data #> '{identityEvidence,sourcePages}','[]'::jsonb))>0
+         )
+         OR (
+           catalog.verification_state='catalog_stated'
+           AND (
+             coalesce((catalog.data #>> '{rollup,catalogStatedOccurrences}')::integer,0)>0
+             OR jsonb_path_exists(
+               catalog.data,
+               '$.applications[*] ? (@.verificationState == "catalog_stated" && @.confidence >= 0.8 && @.sourcePageId > 0)'
+             )
+           )
+         )
+       ORDER BY
+         CASE
+           WHEN inventory.part_number IN ('5455054','5455055') THEN 0
+           WHEN catalog.data #>> '{identityEvidence,method}'='gmpartswiki_exact_part_link' THEN 0
+           ELSE 1
+         END,
+         inventory.quantity ASC,
+         coalesce((catalog.data #>> '{rollup,pageCount}')::integer,0) DESC,
+         inventory.part_number ASC
+       LIMIT $2`,
+      [dataset.datasetId, Math.min(Math.max(limit, 1), 2_500)]
+    );
+    const matches: VintageGmCatalogMatch[] = result.rows.map((row) => ({
+      inventory: {
+        partNumber: row.part_number,
+        productName: row.product_name,
+        sku: row.sku,
+        brands: row.brands,
+        descriptions: row.descriptions,
+        quantity: row.quantity,
+        sourcePriceMin: row.source_price_min,
+        sourcePriceMax: row.source_price_max,
+        sourceWeightMin: row.source_weight_min,
+        sourceWeightMax: row.source_weight_max,
+        sourceRows: row.source_rows,
+        recordCount: row.record_count
+      },
+      catalog: row.catalog_data
+    }));
+    return { dataset, matches };
   }
 
   async createItem(item: ItemRecord): Promise<void> {
