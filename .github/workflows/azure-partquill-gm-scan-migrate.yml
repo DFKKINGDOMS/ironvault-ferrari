@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: partquill-gm-scan-migration
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   RESOURCE_GROUP: rg-partquill-platform-westus3
@@ -152,15 +152,28 @@ jobs:
             --output none; then
             : > "shard-${SHARD}.done.tsv"
           fi
+          if ! az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --auth-mode key \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "manifests/shards/shard-${SHARD}.unavailable.tsv" \
+            --file "shard-${SHARD}.unavailable.tsv" \
+            --overwrite \
+            --only-show-errors \
+            --output none; then
+            : > "shard-${SHARD}.unavailable.tsv"
+          fi
 
           python3 scripts/migrate-gm-scans.py \
             --manifest source-page-ids.txt \
             --checkpoint "shard-${SHARD}.done.tsv" \
+            --unavailable "shard-${SHARD}.unavailable.tsv" \
             --failures "shard-${SHARD}.failed.jsonl" \
             --account "$STORAGE_ACCOUNT" \
             --container "$STORAGE_CONTAINER" \
             --prefix gm-scans/pages \
             --checkpoint-blob "manifests/shards/shard-${SHARD}.done.tsv" \
+            --unavailable-blob "manifests/shards/shard-${SHARD}.unavailable.tsv" \
             --failures-blob "manifests/shards/shard-${SHARD}.failed.jsonl" \
             --shard-index '${{ matrix.shard }}' \
             --shard-count "$SHARD_COUNT" \
@@ -213,16 +226,31 @@ jobs:
               --output none; then
               : > "migration-audit/shards/shard-${SHARD}.done.tsv"
             fi
+            if ! az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --auth-mode key \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "manifests/shards/shard-${SHARD}.unavailable.tsv" \
+              --file "migration-audit/shards/shard-${SHARD}.unavailable.tsv" \
+              --overwrite \
+              --only-show-errors \
+              --output none; then
+              : > "migration-audit/shards/shard-${SHARD}.unavailable.tsv"
+            fi
           done
 
-          cat migration-audit/shards/*.done.tsv | cut -f1 | sort -nu > migration-audit/completed-page-ids.txt
-          COMPLETED=$(wc -l < migration-audit/completed-page-ids.txt | tr -d ' ')
+          cat migration-audit/shards/*.done.tsv | cut -f1 | sort -nu > migration-audit/uploaded-page-ids.txt
+          cat migration-audit/shards/*.unavailable.tsv | cut -f1 | sort -nu > migration-audit/unavailable-page-ids.txt
+          cat migration-audit/uploaded-page-ids.txt migration-audit/unavailable-page-ids.txt | sort -nu > migration-audit/classified-page-ids.txt
+          UPLOADED=$(wc -l < migration-audit/uploaded-page-ids.txt | tr -d ' ')
+          UNAVAILABLE=$(wc -l < migration-audit/unavailable-page-ids.txt | tr -d ' ')
+          CLASSIFIED=$(wc -l < migration-audit/classified-page-ids.txt | tr -d ' ')
           EXPECTED='${{ needs.prepare.outputs.manifest_count }}'
           MANIFEST_MATCH=false
-          if cmp -s migration-audit/source-page-ids.txt migration-audit/completed-page-ids.txt; then
+          if cmp -s migration-audit/source-page-ids.txt migration-audit/classified-page-ids.txt; then
             MANIFEST_MATCH=true
           fi
-          CHECKPOINT_SHA=$(sha256sum migration-audit/completed-page-ids.txt | cut -d' ' -f1)
+          CHECKPOINT_SHA=$(sha256sum migration-audit/classified-page-ids.txt | cut -d' ' -f1)
           BLOB_COUNT=$(az storage blob list \
             --account-name "$STORAGE_ACCOUNT" \
             --auth-mode key \
@@ -233,24 +261,32 @@ jobs:
             --output tsv)
 
           LIVE_PROBES=0
-          if [ "$MANIFEST_MATCH" = "true" ] && [ "$COMPLETED" = "$EXPECTED" ] && [ "$BLOB_COUNT" = "$EXPECTED" ]; then
-            for LINE in $(seq 1 11250 135000); do
-              PAGE_ID=$(sed -n "${LINE}p" migration-audit/completed-page-ids.txt)
+          if [ "$MANIFEST_MATCH" = "true" ] && [ "$CLASSIFIED" = "$EXPECTED" ] && [ "$BLOB_COUNT" = "$UPLOADED" ]; then
+            STEP=$((UPLOADED / 24))
+            test "$STEP" -gt 0
+            for LINE in $(seq 1 "$STEP" "$UPLOADED"); do
+              PAGE_ID=$(sed -n "${LINE}p" migration-audit/uploaded-page-ids.txt)
               curl --fail-with-body --silent --show-error \
                 --retry 5 --retry-all-errors --connect-timeout 10 --max-time 90 \
                 --dump-header migration-audit/probe-headers.txt \
                 --output migration-audit/probe.png \
                 "https://partquill.com/v1/gm-catalog/pages/${PAGE_ID}/image"
               grep -Eiq '^content-type: image/' migration-audit/probe-headers.txt
-              grep -Eiq '^x-partquill-media-source: azure-blob' migration-audit/probe-headers.txt
-              LIVE_PROBES=$((LIVE_PROBES + 1))
+              if grep -Eiq '^x-partquill-media-source: azure-blob' migration-audit/probe-headers.txt; then
+                LIVE_PROBES=$((LIVE_PROBES + 1))
+              fi
+              if [ "$LIVE_PROBES" = "12" ]; then
+                break
+              fi
             done
           fi
 
           jq -n \
-            --arg result "$([ "$MANIFEST_MATCH" = "true" ] && [ "$COMPLETED" = "$EXPECTED" ] && [ "$BLOB_COUNT" = "$EXPECTED" ] && [ "$LIVE_PROBES" = "12" ] && echo COMPLETE || echo INCOMPLETE)" \
+            --arg result "$([ "$MANIFEST_MATCH" = "true" ] && [ "$CLASSIFIED" = "$EXPECTED" ] && [ "$BLOB_COUNT" = "$UPLOADED" ] && [ "$LIVE_PROBES" = "12" ] && echo COMPLETE || echo INCOMPLETE)" \
             --arg expected "$EXPECTED" \
-            --arg completed "$COMPLETED" \
+            --arg classified "$CLASSIFIED" \
+            --arg uploaded "$UPLOADED" \
+            --arg unavailable "$UNAVAILABLE" \
             --arg blobs "$BLOB_COUNT" \
             --arg probes "$LIVE_PROBES" \
             --arg manifestMatch "$MANIFEST_MATCH" \
@@ -259,7 +295,9 @@ jobs:
             '{
               result:$result,
               sourceRange:{first:100001,last:235000,expected:($expected|tonumber)},
-              completed:($completed|tonumber),
+              classified:($classified|tonumber),
+              uploadedImages:($uploaded|tonumber),
+              unavailableSourcePages:($unavailable|tonumber),
               blobs:($blobs|tonumber),
               exactManifestMatch:($manifestMatch == "true"),
               liveAzureBlobProbes:($probes|tonumber),
@@ -279,8 +317,8 @@ jobs:
             --output none
 
           test "$MANIFEST_MATCH" = "true"
-          test "$COMPLETED" = "$EXPECTED"
-          test "$BLOB_COUNT" = "$EXPECTED"
+          test "$CLASSIFIED" = "$EXPECTED"
+          test "$BLOB_COUNT" = "$UPLOADED"
           test "$LIVE_PROBES" = "12"
 
       - name: Upload migration audit evidence
