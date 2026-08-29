@@ -60,15 +60,15 @@ jobs:
             | grep -E '^(BEGIN;|COMMIT;|CREATE TABLE|COPY |INSERT INTO|TRUNCATE |SET )' \
             | head -n 200 > gm-validation/sql-structure.txt
           gzip -dc gm-validation/catalog.sql.gz \
-            | grep -m 5 -F '10110988' > gm-validation/part-10110988.txt
+            | grep -m 5 -F '10110988' > gm-validation/part-10110988.txt || true
           set -o pipefail
 
           copy_rows=$(gzip -dc gm-validation/catalog.sql.gz | awk '
-            /^COPY .*gm_catalog_parts.* FROM stdin;$/ { inside=1; next }
-            inside && $0 == "\\." { print count+0; found=1; exit }
+            /^COPY .*gm_catalog_parts.* FROM stdin;$/ { inside=1; found=1; next }
+            inside && $0 == "\\." { inside=0; next }
             inside { count++ }
-            END { if (!found) print 0 }
-          ' | head -n 1)
+            END { if (found) print count+0; else print 0 }
+          ')
           insert_rows=$(gzip -dc gm-validation/catalog.sql.gz | grep -c '^INSERT INTO .*gm_catalog_parts' || true)
           part_hits=$(wc -l < gm-validation/part-10110988.txt)
 
