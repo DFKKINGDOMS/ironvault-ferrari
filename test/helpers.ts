@@ -12,6 +12,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     PARTQUILL_API_KEY: 'test-api-key-that-is-long-enough',
     OAUTH_STATE_SECRET: 'test-oauth-secret-that-is-long-enough',
     DATABASE_AUTH_MODE: 'password',
+    MIGRATION_GITHUB_OIDC_ENABLED: false,
     GM_CATALOG_SCAN_DIR: 'data/gm-scans/pages',
     PILOT_EPHEMERAL_MODE: false,
     EBAY_ENV: 'sandbox',
