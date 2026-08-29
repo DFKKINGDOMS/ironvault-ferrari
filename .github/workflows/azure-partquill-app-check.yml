@@ -1,0 +1,52 @@
+name: Check PartQuill Azure app
+
+on:
+  push:
+    branches:
+      - partquill-azure-container-app
+    paths:
+      - .github/workflows/azure-partquill-app-check.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+      - name: Inspect Azure app
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          APP="ca-partquill-web-westus3"
+          az containerapp show --resource-group "$RG" --name "$APP" --query "{provisioningState:properties.provisioningState,runningStatus:properties.runningStatus,latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,fqdn:properties.configuration.ingress.fqdn,image:properties.template.containers[0].image,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas}" --output json | tee app-state.json
+          FQDN=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.fqdn -o tsv)
+          HEALTH=$(curl --max-time 20 -sS -o health.json -w '%{http_code}' "https://$FQDN/health" || true)
+          READY=$(curl --max-time 20 -sS -o ready.json -w '%{http_code}' "https://$FQDN/ready" || true)
+          echo "health_status=$HEALTH" | tee health-status.txt
+          echo "ready_status=$READY" | tee ready-status.txt
+          echo "health_body=$(tr -d '\n' < health.json 2>/dev/null || true)"
+          echo "ready_body=$(tr -d '\n' < ready.json 2>/dev/null || true)"
+      - name: Upload app check
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-partquill-app-check
+          path: |
+            app-state.json
+            health-status.txt
+            ready-status.txt
+            health.json
+            ready.json
+          if-no-files-found: ignore
+          retention-days: 7
