@@ -1,0 +1,77 @@
+name: Inspect PartQuill Azure storage
+
+on:
+  push:
+    branches:
+      - partquill-azure-container-app
+    paths:
+      - .github/workflows/azure-partquill-storage-inventory.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Inventory storage without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          ACCOUNT="pqdata50230827"
+          KEY=$(az storage account keys list \
+            --resource-group "$RG" \
+            --account-name "$ACCOUNT" \
+            --query '[0].value' \
+            --output tsv)
+          echo "::add-mask::$KEY"
+
+          mkdir -p storage-inventory
+          az storage container list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --query '[].name' \
+            --output json > storage-inventory/containers.json
+
+          jq -r '.[]' storage-inventory/containers.json | while read -r container; do
+            safe_name=$(printf '%s' "$container" | tr -c 'A-Za-z0-9._-' '_')
+            az storage blob list \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$container" \
+              --num-results 5000 \
+              --query '[].{name:name,bytes:properties.contentLength,lastModified:properties.lastModified}' \
+              --output json > "storage-inventory/blobs-${safe_name}.json"
+          done
+
+          az storage share list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --query '[].{name:name,quota:properties.quota}' \
+            --output json > storage-inventory/file-shares.json
+
+          jq -n \
+            --arg account "$ACCOUNT" \
+            --argjson containers "$(cat storage-inventory/containers.json)" \
+            '{account:$account,containers:$containers}' \
+            | tee storage-inventory/summary.json
+
+      - name: Upload storage inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-storage-inventory
+          path: storage-inventory/
+          if-no-files-found: warn
+          retention-days: 7
