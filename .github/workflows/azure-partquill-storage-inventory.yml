@@ -44,6 +44,63 @@ jobs:
             --query '[].name' \
             --output json > storage-inventory/containers.json
 
+          MEDIA_CONTAINER="partquill-gm-scans"
+          mkdir -p storage-inventory/media-shards
+          printf 'shard\tuploaded\tunavailable\tclassified\n' > storage-inventory/media-shards.tsv
+          for INDEX in $(seq 0 11); do
+            SHARD=$(printf '%02d' "$INDEX")
+            DONE_FILE="storage-inventory/media-shards/shard-${SHARD}.done.tsv"
+            UNAVAILABLE_FILE="storage-inventory/media-shards/shard-${SHARD}.unavailable.tsv"
+            if ! az storage blob download \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "manifests/shards/shard-${SHARD}.done.tsv" \
+              --file "$DONE_FILE" \
+              --overwrite \
+              --only-show-errors \
+              --output none; then
+              : > "$DONE_FILE"
+            fi
+            if ! az storage blob download \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "manifests/shards/shard-${SHARD}.unavailable.tsv" \
+              --file "$UNAVAILABLE_FILE" \
+              --overwrite \
+              --only-show-errors \
+              --output none; then
+              : > "$UNAVAILABLE_FILE"
+            fi
+            UPLOADED=$(wc -l < "$DONE_FILE" | tr -d ' ')
+            UNAVAILABLE=$(wc -l < "$UNAVAILABLE_FILE" | tr -d ' ')
+            printf '%s\t%s\t%s\t%s\n' \
+              "$SHARD" "$UPLOADED" "$UNAVAILABLE" "$((UPLOADED + UNAVAILABLE))" \
+              >> storage-inventory/media-shards.tsv
+          done
+
+          BLOB_COUNT=$(az storage blob list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix gm-scans/pages/ \
+            --num-results '*' \
+            --query "length([?ends_with(name, '/full_page.png')])" \
+            --output tsv)
+          UPLOADED=$(awk 'NR > 1 { total += $2 } END { print total + 0 }' storage-inventory/media-shards.tsv)
+          UNAVAILABLE=$(awk 'NR > 1 { total += $3 } END { print total + 0 }' storage-inventory/media-shards.tsv)
+          CLASSIFIED=$((UPLOADED + UNAVAILABLE))
+          jq -n \
+            --argjson expected 135000 \
+            --argjson uploaded "$UPLOADED" \
+            --argjson unavailable "$UNAVAILABLE" \
+            --argjson classified "$CLASSIFIED" \
+            --argjson blobs "$BLOB_COUNT" \
+            '{expected:$expected,uploaded:$uploaded,unavailable:$unavailable,classified:$classified,blobs:$blobs}' \
+            | tee storage-inventory/media-progress.json
+          column -t -s $'\t' storage-inventory/media-shards.tsv
+
           jq -r '.[]' storage-inventory/containers.json | while read -r container; do
             safe_name=$(printf '%s' "$container" | tr -c 'A-Za-z0-9._-' '_')
             az storage blob list \
@@ -64,7 +121,8 @@ jobs:
           jq -n \
             --arg account "$ACCOUNT" \
             --argjson containers "$(cat storage-inventory/containers.json)" \
-            '{account:$account,containers:$containers}' \
+            --argjson media "$(cat storage-inventory/media-progress.json)" \
+            '{account:$account,containers:$containers,media:$media}' \
             | tee storage-inventory/summary.json
           for inventory in storage-inventory/blobs-*.json storage-inventory/file-shares.json; do
             echo "--- $inventory"
