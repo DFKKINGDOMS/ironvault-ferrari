@@ -66,6 +66,10 @@ jobs:
             --argjson containers "$(cat storage-inventory/containers.json)" \
             '{account:$account,containers:$containers}' \
             | tee storage-inventory/summary.json
+          for inventory in storage-inventory/blobs-*.json storage-inventory/file-shares.json; do
+            echo "--- $inventory"
+            jq . "$inventory"
+          done
 
       - name: Upload storage inventory
         if: always()
