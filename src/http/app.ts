@@ -478,7 +478,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
   app.post('/internal/gm-catalog/import', { bodyLimit: 16 * 1024 * 1024 }, async (request, reply) => {
     const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
-    if (!secureTokenMatches(supplied, config.GM_IMPORT_TOKEN) || !store.importGmCatalogRecords) {
+    const authorized = secureTokenMatches(supplied, config.GM_IMPORT_TOKEN)
+      || (config.MIGRATION_GITHUB_OIDC_ENABLED && await verifyGithubMigrationOidcToken(supplied));
+    if (!authorized || !store.importGmCatalogRecords) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
     }
     const { datasetId, records, complete } = gmCatalogImportSchema.parse(request.body);
