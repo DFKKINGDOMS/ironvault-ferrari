@@ -11,6 +11,12 @@ import type {
 import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
+import type {
+  MigrationExportPage,
+  MigrationImportResult,
+  MigrationManifest,
+  MigrationTableName
+} from './migration-transfer.js';
 
 export interface EbayLeafCategory {
   categoryId: string;
@@ -63,4 +69,8 @@ export interface Store {
   listPublishedCommunityImages(partNumber: string): Promise<StoredCommunityImage[]>;
   getPublishedCommunityAsset(filename: string): Promise<StoredCommunityImage | undefined>;
   listEbayLeafCategories?(query?: string, limit?: number): Promise<EbayLeafCategory[]>;
+  getMigrationManifest?(): Promise<MigrationManifest>;
+  exportMigrationTable?(table: MigrationTableName, offset: number, limit: number): Promise<MigrationExportPage>;
+  resetMigrationTarget?(): Promise<void>;
+  importMigrationRows?(table: MigrationTableName, rows: Record<string, unknown>[]): Promise<MigrationImportResult>;
 }

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/http/app.js';
 import { harness, validPayload } from './helpers.js';
 import { registerCatalogImage } from '../src/catalog/image-proxy.js';
+import type { Store } from '../src/store/store.js';
 
 let app: FastifyInstance | undefined;
 afterEach(async () => {
@@ -155,6 +156,47 @@ describe('HTTP contract', () => {
       status: 'completed',
       availableParts: 1
     });
+  });
+
+  it('keeps migration transfer endpoints disabled unless the temporary token and store adapter are present', async () => {
+    const h = harness({ MIGRATION_TRANSFER_TOKEN: 'test-migration-transfer-token-long-enough' });
+    const migrationStore = h.store as typeof h.store & {
+      getMigrationManifest: NonNullable<Store['getMigrationManifest']>;
+      exportMigrationTable: NonNullable<Store['exportMigrationTable']>;
+      resetMigrationTarget: NonNullable<Store['resetMigrationTarget']>;
+      importMigrationRows: NonNullable<Store['importMigrationRows']>;
+    };
+    migrationStore.getMigrationManifest = async () => ({
+      version: 1,
+      generatedAt: '2026-08-29T00:00:00.000Z',
+      excludedTables: ['seller_connections', 'oauth_nonces', 'partquill_migrations'],
+      tables: [{ table: 'items', rows: 1, bytes: 256 }]
+    });
+    migrationStore.exportMigrationTable = async (table, offset) => ({
+      table,
+      offset,
+      nextOffset: null,
+      rows: [{ id: '00000000-0000-0000-0000-000000000001' }]
+    });
+    migrationStore.resetMigrationTarget = async () => undefined;
+    migrationStore.importMigrationRows = async (table, rows) => ({ table, imported: rows.length, totalRows: rows.length });
+    app = await buildApp(h);
+
+    expect((await app.inject({ method: 'GET', url: '/internal/migration/manifest' })).statusCode).toBe(404);
+    const headers = { authorization: 'Bearer test-migration-transfer-token-long-enough' };
+    expect((await app.inject({ method: 'GET', url: '/internal/migration/manifest', headers })).json()).toMatchObject({
+      version: 1,
+      tables: [{ table: 'items', rows: 1 }]
+    });
+    expect((await app.inject({ method: 'GET', url: '/internal/migration/export/items?offset=0&limit=250', headers })).json())
+      .toMatchObject({ table: 'items', rows: [{ id: '00000000-0000-0000-0000-000000000001' }] });
+    expect((await app.inject({ method: 'POST', url: '/internal/migration/reset', headers })).json()).toEqual({ reset: true });
+    expect((await app.inject({
+      method: 'POST',
+      url: '/internal/migration/import/items',
+      headers,
+      payload: { rows: [{ id: '00000000-0000-0000-0000-000000000001' }] }
+    })).json()).toMatchObject({ table: 'items', imported: 1, totalRows: 1 });
   });
 
   it('serves recovered first-party GM catalog scans from PartQuill storage', async () => {

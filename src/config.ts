@@ -16,6 +16,7 @@ const schema = z
     DATABASE_URL: z.string().optional(),
     DATABASE_AUTH_MODE: z.enum(['password', 'azure-managed-identity']).default('password'),
     GM_IMPORT_TOKEN: z.string().min(32).optional(),
+    MIGRATION_TRANSFER_TOKEN: z.string().min(32).optional(),
     GM_CATALOG_SCAN_DIR: z.string().default('data/gm-scans/pages'),
     GM_CATALOG_MEDIA_BASE_URL: z.string().url().optional(),
     PILOT_EPHEMERAL_MODE: booleanString,
