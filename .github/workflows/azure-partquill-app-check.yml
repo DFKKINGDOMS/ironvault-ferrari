@@ -30,6 +30,9 @@ jobs:
           RG="rg-partquill-platform-westus3"
           APP="ca-partquill-web-westus3"
           az containerapp show --resource-group "$RG" --name "$APP" --query "{provisioningState:properties.provisioningState,runningStatus:properties.runningStatus,latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,fqdn:properties.configuration.ingress.fqdn,image:properties.template.containers[0].image,minReplicas:properties.template.scale.minReplicas,maxReplicas:properties.template.scale.maxReplicas}" --output json | tee app-state.json
+          az containerapp revision list --resource-group "$RG" --name "$APP" --query "[].{name:name,active:properties.active,healthState:properties.healthState,provisioningState:properties.provisioningState,replicas:properties.replicas,trafficWeight:properties.trafficWeight}" --output json | tee revisions.json
+          az containerapp logs show --resource-group "$RG" --name "$APP" --type system --tail 100 2>&1 | tee system-logs.txt || true
+          az containerapp logs show --resource-group "$RG" --name "$APP" --type console --tail 100 2>&1 | tee console-logs.txt || true
           FQDN=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.fqdn -o tsv)
           HEALTH=$(curl --max-time 20 -sS -o health.json -w '%{http_code}' "https://$FQDN/health" || true)
           READY=$(curl --max-time 20 -sS -o ready.json -w '%{http_code}' "https://$FQDN/ready" || true)
@@ -48,5 +51,8 @@ jobs:
             ready-status.txt
             health.json
             ready.json
+            revisions.json
+            system-logs.txt
+            console-logs.txt
           if-no-files-found: ignore
           retention-days: 7
