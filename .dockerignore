@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+.partquill-image-studio
+coverage
+dist
+node_modules
+npm-debug.log*
+scripts/__pycache__
+*.pyc
+*.zip
