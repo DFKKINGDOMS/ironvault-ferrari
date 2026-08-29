@@ -35,6 +35,7 @@ import { isBlockedReferenceImageBytes } from '../ebay/reference-image-policy.js'
 import type { CommunityImageService } from '../community/service.js';
 import { EbayVeroProfileService } from '../ebay/vero-profile-service.js';
 import { MIGRATION_TABLE_NAMES } from '../store/migration-transfer.js';
+import { verifyGithubMigrationOidcToken } from '../security/github-migration-oidc.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -484,21 +485,22 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     await store.importGmCatalogRecords(records as unknown as GmCatalogPart[], { datasetId, complete });
     return reply.header('cache-control', 'no-store').send({ datasetId: datasetId ?? null, imported: records.length, complete });
   });
-  const migrationAuthorized = (authorization: string | undefined) => secureTokenMatches(
-    authorization?.replace(/^Bearer\s+/i, ''),
-    config.MIGRATION_TRANSFER_TOKEN
-  );
+  const migrationAuthorized = async (authorization: string | undefined) => {
+    const token = authorization?.replace(/^Bearer\s+/i, '');
+    if (secureTokenMatches(token, config.MIGRATION_TRANSFER_TOKEN)) return true;
+    return config.MIGRATION_GITHUB_OIDC_ENABLED && verifyGithubMigrationOidcToken(token);
+  };
   const migrationUnavailable = (reply: { code: (status: number) => { send: (payload: unknown) => unknown } }) =>
     reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
 
   app.get('/internal/migration/manifest', async (request, reply) => {
-    if (!migrationAuthorized(request.headers.authorization) || !store.getMigrationManifest) {
+    if (!(await migrationAuthorized(request.headers.authorization)) || !store.getMigrationManifest) {
       return migrationUnavailable(reply);
     }
     return reply.header('cache-control', 'no-store').send(await store.getMigrationManifest());
   });
   app.get('/internal/migration/export/:table', async (request, reply) => {
-    if (!migrationAuthorized(request.headers.authorization) || !store.exportMigrationTable) {
+    if (!(await migrationAuthorized(request.headers.authorization)) || !store.exportMigrationTable) {
       return migrationUnavailable(reply);
     }
     const { table } = migrationTableParams.parse(request.params);
@@ -506,14 +508,14 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.header('cache-control', 'no-store').send(await store.exportMigrationTable(table, offset, limit));
   });
   app.post('/internal/migration/reset', async (request, reply) => {
-    if (!migrationAuthorized(request.headers.authorization) || !store.resetMigrationTarget) {
+    if (!(await migrationAuthorized(request.headers.authorization)) || !store.resetMigrationTarget) {
       return migrationUnavailable(reply);
     }
     await store.resetMigrationTarget();
     return reply.header('cache-control', 'no-store').send({ reset: true });
   });
   app.post('/internal/migration/import/:table', { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
-    if (!migrationAuthorized(request.headers.authorization) || !store.importMigrationRows) {
+    if (!(await migrationAuthorized(request.headers.authorization)) || !store.importMigrationRows) {
       return migrationUnavailable(reply);
     }
     const { table } = migrationTableParams.parse(request.params);
