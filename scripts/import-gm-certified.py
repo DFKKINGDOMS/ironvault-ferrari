@@ -39,6 +39,7 @@ class AuthorizationProvider:
     def __init__(self) -> None:
         self.token = ""
         self.refresh_at = 0.0
+        self.claims_logged = False
 
     def get(self) -> str:
         if STATIC_TOKEN:
@@ -71,6 +72,27 @@ class AuthorizationProvider:
             encoded_payload += "=" * (-len(encoded_payload) % 4)
             claims = json.loads(base64.urlsafe_b64decode(encoded_payload))
             expires_in = max(60, int(claims.get("exp", 0)) - int(time.time()) - 60)
+            if not self.claims_logged:
+                safe_claims = {
+                    key: claims.get(key)
+                    for key in (
+                        "aud",
+                        "event_name",
+                        "iss",
+                        "job_workflow_ref",
+                        "ref",
+                        "repository",
+                        "repository_id",
+                        "repository_owner_id",
+                        "sub",
+                        "workflow_ref",
+                    )
+                }
+                print(
+                    f"OIDC_CLAIMS {json.dumps(safe_claims, sort_keys=True)}",
+                    flush=True,
+                )
+                self.claims_logged = True
         except (ValueError, TypeError, json.JSONDecodeError):
             expires_in = 180
         self.token = token
@@ -127,7 +149,7 @@ def post_batch(records: list[dict], complete: bool, batch_number: int, imported:
             return
         except urllib.error.HTTPError as error:
             detail = error.read(1000).decode("utf-8", "replace")
-            if error.code not in {408, 425, 429, 500, 502, 503, 504}:
+            if error.code not in {404, 408, 425, 429, 500, 502, 503, 504}:
                 fail(f"batch {batch_number} rejected with HTTP {error.code}: {detail}")
             last_error = f"HTTP {error.code}: {detail}"
         except (urllib.error.URLError, TimeoutError, RuntimeError) as error:

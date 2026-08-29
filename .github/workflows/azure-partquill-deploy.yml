@@ -6,6 +6,8 @@ on:
       - partquill-azure-container-app
     paths:
       - .github/workflows/azure-partquill-deploy.yml
+      - .github/workflows/azure-partquill-gm-catalog-import.yml
+      - scripts/import-gm-certified.py
       - Dockerfile
       - package.json
       - package-lock.json
@@ -148,3 +150,4 @@ jobs:
           path: azure-partquill-deploy.txt
           if-no-files-found: ignore
           retention-days: 14
+
