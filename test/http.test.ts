@@ -8,6 +8,7 @@ import type { Store } from '../src/store/store.js';
 let app: FastifyInstance | undefined;
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await app?.close();
 });
 
@@ -205,7 +206,37 @@ describe('HTTP contract', () => {
     const scan = await app.inject({ method: 'GET', url: '/v1/gm-catalog/pages/6761/image' });
     expect(scan.statusCode).toBe(200);
     expect(scan.headers['content-type']).toContain('image/png');
+    expect(scan.headers['x-partquill-media-source']).toBe('local');
     expect(scan.rawPayload.byteLength).toBe(125_382);
+  });
+
+  it('serves migrated GM scans from private Azure Blob storage', async () => {
+    vi.stubEnv('IDENTITY_ENDPOINT', 'http://identity.local/token');
+    vi.stubEnv('IDENTITY_HEADER', 'identity-secret');
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith('http://identity.local/token')) {
+        return new Response(JSON.stringify({ access_token: 'storage-token', expires_on: Math.floor(Date.now() / 1000) + 3600 }), {
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      expect(url).toBe('https://pqdata50230827.blob.core.windows.net/partquill-gm-scans/gm-scans/pages/138446/full_page.png');
+      return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
+        headers: { 'content-type': 'application/octet-stream' }
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    app = await buildApp(harness({
+      GM_CATALOG_SCAN_DIR: '/definitely-not-present',
+      AZURE_STORAGE_ACCOUNT_NAME: 'pqdata50230827',
+      GM_CATALOG_MEDIA_CONTAINER: 'partquill-gm-scans'
+    }));
+
+    const response = await app.inject({ method: 'GET', url: '/v1/gm-catalog/pages/138446/image' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('image/png');
+    expect(response.headers['x-partquill-media-source']).toBe('azure-blob');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('creates a held draft and exposes an exception-first queue', async () => {

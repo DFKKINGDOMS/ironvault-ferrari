@@ -36,6 +36,7 @@ import type { CommunityImageService } from '../community/service.js';
 import { EbayVeroProfileService } from '../ebay/vero-profile-service.js';
 import { MIGRATION_TABLE_NAMES } from '../store/migration-transfer.js';
 import { verifyGithubMigrationOidcToken } from '../security/github-migration-oidc.js';
+import { loadAzureCatalogScan } from '../catalog/azure-blob-media.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -456,9 +457,23 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (existsSync(localPath)) {
       return reply
         .header('cache-control', 'public, max-age=86400, immutable')
+        .header('x-partquill-media-source', 'local')
         .header('x-content-type-options', 'nosniff')
         .type('image/png')
         .send(createReadStream(localPath));
+    }
+    try {
+      const azureScan = await loadAzureCatalogScan(config, pageFolder);
+      if (azureScan) {
+        return reply
+          .header('cache-control', 'public, max-age=86400, immutable')
+          .header('x-partquill-media-source', 'azure-blob')
+          .header('x-content-type-options', 'nosniff')
+          .type(azureScan.contentType)
+          .send(azureScan.bytes);
+      }
+    } catch (error) {
+      request.log.warn({ error, pageId }, 'Azure catalog scan retrieval failed');
     }
     if (config.GM_CATALOG_MEDIA_BASE_URL) {
       const base = config.GM_CATALOG_MEDIA_BASE_URL.replace(/\/$/, '');
@@ -468,6 +483,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         if (contentType?.startsWith('image/')) {
           return reply
             .header('cache-control', 'public, max-age=86400')
+            .header('x-partquill-media-source', 'media-base-url')
             .header('x-content-type-options', 'nosniff')
             .type(contentType)
             .send(Buffer.from(await upstream.arrayBuffer()));

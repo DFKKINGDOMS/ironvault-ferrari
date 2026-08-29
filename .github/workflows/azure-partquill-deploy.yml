@@ -46,6 +46,8 @@ jobs:
           PRIVATE_ENV="cae-partquill-private-westus3"
           APP="ca-partquill-web-westus3"
           PG="pg-partquill-5023-0827"
+          STORAGE_ACCOUNT="pqdata50230827"
+          MEDIA_CONTAINER="partquill-gm-scans"
           ACR="partquill50230827"
           ACR_SERVER="partquill50230827.azurecr.io"
           IMAGE_TAG="azure-${GITHUB_SHA}"
@@ -77,6 +79,25 @@ jobs:
             az postgres flexible-server microsoft-entra-admin create               --resource-group "$RG"               --server-name "$PG"               --display-name "$APP"               --object-id "$PRINCIPAL_ID"               --type ServicePrincipal               --output none
           fi
 
+          STORAGE_ID=$(az storage account show --resource-group "$RG" --name "$STORAGE_ACCOUNT" --query id -o tsv)
+          if [ "$(az role assignment list --scope "$STORAGE_ID" --role "Storage Blob Data Reader" --query "[?principalId=='$PRINCIPAL_ID'] | length(@)" -o tsv)" = "0" ]; then
+            az role assignment create \
+              --assignee-object-id "$PRINCIPAL_ID" \
+              --assignee-principal-type ServicePrincipal \
+              --scope "$STORAGE_ID" \
+              --role "Storage Blob Data Reader" \
+              --output none
+          fi
+
+          STORAGE_KEY=$(az storage account keys list --resource-group "$RG" --account-name "$STORAGE_ACCOUNT" --query '[0].value' -o tsv)
+          echo "::add-mask::$STORAGE_KEY"
+          az storage container create \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --name "$MEDIA_CONTAINER" \
+            --public-access off \
+            --output none
+
           az acr build             --registry "$ACR"             --image "partquill:${IMAGE_TAG}"             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#partquill-azure-container-app"
 
           az acr update --name "$ACR" --admin-enabled true --output none
@@ -99,7 +120,7 @@ jobs:
 
           DATABASE_URL="postgresql://${APP}@${PG}.postgres.database.azure.com:5432/partquill?sslmode=require"
 
-          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
+          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               AZURE_STORAGE_ACCOUNT_NAME="$STORAGE_ACCOUNT"               GM_CATALOG_MEDIA_CONTAINER="$MEDIA_CONTAINER"               GM_CATALOG_MEDIA_PREFIX=gm-scans/pages               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com,https://www.partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
 
           for attempt in $(seq 1 90); do
             PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState -o tsv 2>/dev/null || true)

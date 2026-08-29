@@ -110,4 +110,14 @@ describe('production configuration fail-closed behavior', () => {
     });
     expect(config.PILOT_EPHEMERAL_MODE).toBe(true);
   });
+
+  it('requires complete Azure catalog media configuration', () => {
+    expect(() => loadConfig({ AZURE_STORAGE_ACCOUNT_NAME: 'pqdata50230827' }))
+      .toThrow('both the storage account and container');
+    const config = loadConfig({
+      AZURE_STORAGE_ACCOUNT_NAME: 'pqdata50230827',
+      GM_CATALOG_MEDIA_CONTAINER: 'partquill-gm-scans'
+    });
+    expect(config.GM_CATALOG_MEDIA_PREFIX).toBe('gm-scans/pages');
+  });
 });
