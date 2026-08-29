@@ -19,6 +19,14 @@ import type {
 import type { EbayLeafCategory, Store } from './store.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunityImageRecord, CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
+import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
+import {
+  MIGRATION_TABLE_NAMES,
+  type MigrationExportPage,
+  type MigrationImportResult,
+  type MigrationManifest,
+  type MigrationTableName
+} from './migration-transfer.js';
 
 const { Pool } = pg;
 
@@ -26,13 +34,31 @@ type JsonRow<T> = { record: T };
 
 const GM_DATASET_ID = 'gm-catalog-v2-4a3a765e158bcc93';
 
+const migrationTables: Record<MigrationTableName, { qualifiedName: string; orderBy: string }> = {
+  items: { qualifiedName: 'public.items', orderBy: 'id' },
+  evidence: { qualifiedName: 'public.evidence', orderBy: 'id' },
+  approvals: { qualifiedName: 'public.approvals', orderBy: 'id' },
+  listings: { qualifiedName: 'public.listings', orderBy: 'id' },
+  images: { qualifiedName: 'public.images', orderBy: 'id' },
+  audit_events: { qualifiedName: 'public.audit_events', orderBy: 'id' },
+  publish_slots: { qualifiedName: 'public.publish_slots', orderBy: 'item_id' },
+  seller_acknowledgements: { qualifiedName: 'public.seller_acknowledgements', orderBy: 'seller_id, acknowledgement_type' },
+  gm_catalog_parts: { qualifiedName: 'partquill.gm_catalog_parts', orderBy: 'part_number' },
+  gm_catalog_imports: { qualifiedName: 'partquill.gm_catalog_imports', orderBy: 'dataset_id' },
+  ebay_reference_cache: { qualifiedName: 'partquill.ebay_reference_cache', orderBy: 'part_number' },
+  community_submissions: { qualifiedName: 'partquill.community_submissions', orderBy: 'id' },
+  community_images: { qualifiedName: 'partquill.community_images', orderBy: 'id' },
+  ebay_categories: { qualifiedName: 'partquill.ebay_categories', orderBy: 'marketplace_id, category_id' },
+  ebay_category_assignments: { qualifiedName: 'partquill.ebay_category_assignments', orderBy: 'part_number' },
+  ebay_category_sync_state: { qualifiedName: 'partquill.ebay_category_sync_state', orderBy: 'sync_name' }
+};
+
 export class PostgresStore implements Store {
   private readonly pool: pg.Pool;
 
-  constructor(connectionString: string, production: boolean) {
+  constructor(connectionString: string, production: boolean, authMode: DatabaseAuthMode = 'password') {
     this.pool = new Pool({
-      connectionString,
-      ssl: production ? { rejectUnauthorized: false } : undefined,
+      ...postgresPoolConfig(connectionString, production, authMode),
       max: 10,
       idleTimeoutMillis: 30_000
     });
@@ -44,6 +70,72 @@ export class PostgresStore implements Store {
 
   async ping(): Promise<void> {
     await this.pool.query('SELECT 1');
+  }
+
+  async getMigrationManifest(): Promise<MigrationManifest> {
+    const tables = [];
+    for (const table of MIGRATION_TABLE_NAMES) {
+      const definition = migrationTables[table];
+      const result = await this.pool.query<{ rows: string; bytes: string }>(
+        `SELECT count(*)::text AS rows, pg_total_relation_size($1::regclass)::text AS bytes FROM ${definition.qualifiedName}`,
+        [definition.qualifiedName]
+      );
+      tables.push({
+        table,
+        rows: Number(result.rows[0]?.rows ?? 0),
+        bytes: Number(result.rows[0]?.bytes ?? 0)
+      });
+    }
+    return {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      excludedTables: ['seller_connections', 'oauth_nonces', 'partquill_migrations'],
+      tables
+    };
+  }
+
+  async exportMigrationTable(table: MigrationTableName, offset: number, limit: number): Promise<MigrationExportPage> {
+    const definition = migrationTables[table];
+    const result = await this.pool.query<{ row: Record<string, unknown> }>(
+      `SELECT to_jsonb(source_row) AS row
+       FROM ${definition.qualifiedName} AS source_row
+       ORDER BY ${definition.orderBy}
+       OFFSET $1 LIMIT $2`,
+      [offset, limit]
+    );
+    return {
+      table,
+      offset,
+      nextOffset: result.rows.length === limit ? offset + result.rows.length : null,
+      rows: result.rows.map((row) => row.row)
+    };
+  }
+
+  async resetMigrationTarget(): Promise<void> {
+    const reversed = [...MIGRATION_TABLE_NAMES]
+      .reverse()
+      .map((table) => migrationTables[table].qualifiedName)
+      .join(', ');
+    await this.pool.query(`TRUNCATE TABLE ${reversed} RESTART IDENTITY CASCADE`);
+  }
+
+  async importMigrationRows(
+    table: MigrationTableName,
+    rows: Record<string, unknown>[]
+  ): Promise<MigrationImportResult> {
+    const definition = migrationTables[table];
+    if (rows.length) {
+      await this.pool.query(
+        `INSERT INTO ${definition.qualifiedName}
+         SELECT * FROM jsonb_populate_recordset(NULL::${definition.qualifiedName}, $1::jsonb)
+         ON CONFLICT DO NOTHING`,
+        [JSON.stringify(rows)]
+      );
+    }
+    const count = await this.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${definition.qualifiedName}`
+    );
+    return { table, imported: rows.length, totalRows: Number(count.rows[0]?.count ?? 0) };
   }
 
   async listEbayLeafCategories(query = '', limit = 2_000): Promise<EbayLeafCategory[]> {

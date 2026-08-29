@@ -1,0 +1,75 @@
+name: Set PartQuill Azure cost guardrail
+
+on:
+  push:
+    branches:
+      - partquill-azure-container-app
+    paths:
+      - .github/workflows/azure-partquill-budget.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  budget:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Create or update the $100 monthly PartQuill budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUBSCRIPTION_ID="5023fc36-12c2-4d2f-a446-bd2d0157fd15"
+          RG="rg-partquill-platform-westus3"
+          BUDGET="partquill-monthly-100"
+          START_DATE="$(date -u +%Y-%m-01T00:00:00Z)"
+          END_DATE="2036-08-01T00:00:00Z"
+          URI="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.Consumption/budgets/${BUDGET}?api-version=2023-11-01"
+
+          cat > budget.json <<JSON
+          {
+            "properties": {
+              "category": "Cost",
+              "amount": 100,
+              "timeGrain": "Monthly",
+              "timePeriod": {
+                "startDate": "${START_DATE}",
+                "endDate": "${END_DATE}"
+              },
+              "notifications": {
+                "Actual_GreaterThan_50_Percent": {
+                  "enabled": true,
+                  "operator": "GreaterThan",
+                  "threshold": 50,
+                  "thresholdType": "Actual",
+                  "contactEmails": ["knjw1@aol.com"]
+                },
+                "Actual_GreaterThan_80_Percent": {
+                  "enabled": true,
+                  "operator": "GreaterThan",
+                  "threshold": 80,
+                  "thresholdType": "Actual",
+                  "contactEmails": ["knjw1@aol.com"]
+                },
+                "Actual_GreaterThan_100_Percent": {
+                  "enabled": true,
+                  "operator": "GreaterThan",
+                  "threshold": 100,
+                  "thresholdType": "Actual",
+                  "contactEmails": ["knjw1@aol.com"]
+                }
+              }
+            }
+          }
+          JSON
+
+          az rest --method put --uri "$URI" --body @budget.json --output json > budget-result.json
+          az rest --method get --uri "$URI" --query "{name:name,amount:properties.amount,timeGrain:properties.timeGrain,notifications:properties.notifications}" --output json

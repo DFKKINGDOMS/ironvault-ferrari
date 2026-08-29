@@ -34,6 +34,7 @@ import type { EbayReferenceService } from '../ebay/reference-service.js';
 import { isBlockedReferenceImageBytes } from '../ebay/reference-image-policy.js';
 import type { CommunityImageService } from '../community/service.js';
 import { EbayVeroProfileService } from '../ebay/vero-profile-service.js';
+import { MIGRATION_TABLE_NAMES } from '../store/migration-transfer.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -93,6 +94,14 @@ const gmCatalogImportSchema = z.object({
     verificationState: z.string().min(1)
   }).passthrough()).min(1).max(1000),
   complete: z.boolean().default(false)
+});
+const migrationTableParams = z.object({ table: z.enum(MIGRATION_TABLE_NAMES) });
+const migrationExportQuery = z.object({
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(1000).default(250)
+});
+const migrationImportSchema = z.object({
+  rows: z.array(z.record(z.string(), z.unknown())).max(1000)
 });
 
 function secureTokenMatches(provided: string | undefined, expected: string | undefined): boolean {
@@ -193,6 +202,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'POST' && request.url === '/v1/community/submissions') return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
+    if (request.url.startsWith('/internal/migration/')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/gm-catalog/pages/')) return;
@@ -473,6 +483,42 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const { datasetId, records, complete } = gmCatalogImportSchema.parse(request.body);
     await store.importGmCatalogRecords(records as unknown as GmCatalogPart[], { datasetId, complete });
     return reply.header('cache-control', 'no-store').send({ datasetId: datasetId ?? null, imported: records.length, complete });
+  });
+  const migrationAuthorized = (authorization: string | undefined) => secureTokenMatches(
+    authorization?.replace(/^Bearer\s+/i, ''),
+    config.MIGRATION_TRANSFER_TOKEN
+  );
+  const migrationUnavailable = (reply: { code: (status: number) => { send: (payload: unknown) => unknown } }) =>
+    reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
+
+  app.get('/internal/migration/manifest', async (request, reply) => {
+    if (!migrationAuthorized(request.headers.authorization) || !store.getMigrationManifest) {
+      return migrationUnavailable(reply);
+    }
+    return reply.header('cache-control', 'no-store').send(await store.getMigrationManifest());
+  });
+  app.get('/internal/migration/export/:table', async (request, reply) => {
+    if (!migrationAuthorized(request.headers.authorization) || !store.exportMigrationTable) {
+      return migrationUnavailable(reply);
+    }
+    const { table } = migrationTableParams.parse(request.params);
+    const { offset, limit } = migrationExportQuery.parse(request.query);
+    return reply.header('cache-control', 'no-store').send(await store.exportMigrationTable(table, offset, limit));
+  });
+  app.post('/internal/migration/reset', async (request, reply) => {
+    if (!migrationAuthorized(request.headers.authorization) || !store.resetMigrationTarget) {
+      return migrationUnavailable(reply);
+    }
+    await store.resetMigrationTarget();
+    return reply.header('cache-control', 'no-store').send({ reset: true });
+  });
+  app.post('/internal/migration/import/:table', { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
+    if (!migrationAuthorized(request.headers.authorization) || !store.importMigrationRows) {
+      return migrationUnavailable(reply);
+    }
+    const { table } = migrationTableParams.parse(request.params);
+    const { rows } = migrationImportSchema.parse(request.body);
+    return reply.header('cache-control', 'no-store').send(await store.importMigrationRows(table, rows));
   });
   app.get('/ready', async (_request, reply) => {
     try {

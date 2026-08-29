@@ -2,11 +2,16 @@ import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
+import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
 
 const { Pool } = pg;
 
-export async function runMigrations(connectionString: string, production: boolean): Promise<void> {
-  const pool = new Pool({ connectionString, ssl: production ? { rejectUnauthorized: false } : undefined });
+export async function runMigrations(
+  connectionString: string,
+  production: boolean,
+  authMode: DatabaseAuthMode = 'password'
+): Promise<void> {
+  const pool = new Pool(postgresPoolConfig(connectionString, production, authMode));
   const migrationsDirectory = resolve(process.cwd(), 'migrations');
   const names = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort();
 
@@ -37,5 +42,8 @@ export async function runMigrations(connectionString: string, production: boolea
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL is required for migrations');
-  await runMigrations(connectionString, process.env.NODE_ENV === 'production');
+  const authMode = process.env.DATABASE_AUTH_MODE === 'azure-managed-identity'
+    ? 'azure-managed-identity'
+    : 'password';
+  await runMigrations(connectionString, process.env.NODE_ENV === 'production', authMode);
 }

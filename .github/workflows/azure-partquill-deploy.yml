@@ -1,0 +1,150 @@
+name: Deploy PartQuill to Azure
+
+on:
+  push:
+    branches:
+      - partquill-azure-container-app
+    paths:
+      - .github/workflows/azure-partquill-deploy.yml
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - src/**
+      - web/**
+      - migrations/**
+      - data/**
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Build private Azure environment and deploy PartQuill
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RG="rg-partquill-platform-westus3"
+          LOCATION="westus3"
+          VNET="rg-partquill-platform-westus3-vnet"
+          APP_SUBNET="snet-partquill-apps"
+          APP_PREFIX="10.2.0.0/23"
+          PRIVATE_ENV="cae-partquill-private-westus3"
+          APP="ca-partquill-web-westus3"
+          PG="pg-partquill-5023-0827"
+          ACR="partquill50230827"
+          ACR_SERVER="partquill50230827.azurecr.io"
+          IMAGE_TAG="azure-${GITHUB_SHA}"
+          IMAGE="${ACR_SERVER}/partquill:${IMAGE_TAG}"
+          REVISION_SUFFIX="git-${GITHUB_SHA:0:8}"
+
+          if ! az network vnet show --resource-group "$RG" --name "$VNET" --query "addressSpace.addressPrefixes" -o tsv | grep -Fxq "$APP_PREFIX"; then
+            az network vnet update --resource-group "$RG" --name "$VNET" --add addressSpace.addressPrefixes "$APP_PREFIX" --output none
+          fi
+
+          if ! az network vnet subnet show --resource-group "$RG" --vnet-name "$VNET" --name "$APP_SUBNET" >/dev/null 2>&1; then
+            az network vnet subnet create               --resource-group "$RG"               --vnet-name "$VNET"               --name "$APP_SUBNET"               --address-prefixes "$APP_PREFIX"               --delegations Microsoft.App/environments               --output none
+          fi
+          SUBNET_ID=$(az network vnet subnet show --resource-group "$RG" --vnet-name "$VNET" --name "$APP_SUBNET" --query id -o tsv)
+
+          if ! az containerapp env show --resource-group "$RG" --name "$PRIVATE_ENV" >/dev/null 2>&1; then
+            LOG_ID=$(az monitor log-analytics workspace show --resource-group "$RG" --workspace-name log-partquill-westus3 --query customerId -o tsv)
+            LOG_KEY=$(az monitor log-analytics workspace get-shared-keys --resource-group "$RG" --workspace-name log-partquill-westus3 --query primarySharedKey -o tsv)
+            echo "::add-mask::$LOG_KEY"
+            az containerapp env create               --resource-group "$RG"               --name "$PRIVATE_ENV"               --location "$LOCATION"               --infrastructure-subnet-resource-id "$SUBNET_ID"               --logs-workspace-id "$LOG_ID"               --logs-workspace-key "$LOG_KEY"               --output none
+          fi
+
+          if ! az containerapp show --resource-group "$RG" --name "$APP" >/dev/null 2>&1; then
+            az containerapp create               --resource-group "$RG"               --name "$APP"               --environment "$PRIVATE_ENV"               --image mcr.microsoft.com/k8se/quickstart:express               --system-assigned               --ingress external               --target-port 3000               --min-replicas 1               --max-replicas 2               --cpu 0.5               --memory 1Gi               --output none
+          fi
+
+          PRINCIPAL_ID=$(az containerapp show --resource-group "$RG" --name "$APP" --query identity.principalId -o tsv)
+          if ! az postgres flexible-server microsoft-entra-admin list --resource-group "$RG" --server-name "$PG" --query "[?objectId=='$PRINCIPAL_ID'].objectId" -o tsv | grep -Fxq "$PRINCIPAL_ID"; then
+            az postgres flexible-server microsoft-entra-admin create               --resource-group "$RG"               --server-name "$PG"               --display-name "$APP"               --object-id "$PRINCIPAL_ID"               --type ServicePrincipal               --output none
+          fi
+
+          az acr build             --registry "$ACR"             --image "partquill:${IMAGE_TAG}"             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#partquill-azure-container-app"
+
+          az acr update --name "$ACR" --admin-enabled true --output none
+          ACR_USER=$(az acr credential show --name "$ACR" --query username -o tsv)
+          ACR_PASSWORD=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
+          echo "::add-mask::$ACR_PASSWORD"
+
+          az containerapp registry set             --resource-group "$RG"             --name "$APP"             --server "$ACR_SERVER"             --username "$ACR_USER"             --password "$ACR_PASSWORD"             --output none
+
+          PARTQUILL_API_KEY=$(openssl rand -hex 32)
+          TOKEN_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr -d '\n')
+          OAUTH_STATE_SECRET=$(openssl rand -hex 32)
+          GM_IMPORT_TOKEN=$(openssl rand -hex 48)
+          IMAGE_STUDIO_ACCESS_TOKEN=$(openssl rand -hex 32)
+          for VALUE in "$PARTQUILL_API_KEY" "$TOKEN_ENCRYPTION_KEY" "$OAUTH_STATE_SECRET" "$GM_IMPORT_TOKEN" "$IMAGE_STUDIO_ACCESS_TOKEN"; do
+            echo "::add-mask::$VALUE"
+          done
+
+          az containerapp secret set             --resource-group "$RG"             --name "$APP"             --secrets               partquill-api-key="$PARTQUILL_API_KEY"               token-encryption-key="$TOKEN_ENCRYPTION_KEY"               oauth-state-secret="$OAUTH_STATE_SECRET"               gm-import-token="$GM_IMPORT_TOKEN"               image-studio-access-token="$IMAGE_STUDIO_ACCESS_TOKEN"             --output none
+
+          DATABASE_URL="postgresql://${APP}@${PG}.postgres.database.azure.com:5432/partquill?sslmode=require"
+
+          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
+
+          for attempt in $(seq 1 90); do
+            PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState -o tsv 2>/dev/null || true)
+            LATEST_REVISION=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName -o tsv 2>/dev/null || true)
+            echo "Container App provisioning state: ${PROVISIONING_STATE:-unknown}; latest revision: ${LATEST_REVISION:-unknown}"
+            if [ "$PROVISIONING_STATE" = "Succeeded" ] && [ -n "$LATEST_REVISION" ]; then
+              break
+            fi
+            sleep 10
+          done
+          test "$PROVISIONING_STATE" = "Succeeded"
+
+          az containerapp ingress enable             --resource-group "$RG"             --name "$APP"             --type external             --target-port 3000             --transport auto             --allow-insecure false             --output none
+
+          FQDN=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.fqdn -o tsv)
+          URL="https://$FQDN"
+
+          HEALTH_STATUS="pending"
+          READY_STATUS="pending"
+          for attempt in $(seq 1 30); do
+            HEALTH_STATUS=$(curl --connect-timeout 5 --max-time 15 -sS -o health.json -w '%{http_code}' "$URL/health" || true)
+            READY_STATUS=$(curl --connect-timeout 5 --max-time 15 -sS -o ready.json -w '%{http_code}' "$URL/ready" || true)
+            if [ "$HEALTH_STATUS" = "200" ] && [ "$READY_STATUS" = "200" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          {
+            echo "url=$URL"
+            echo "health_status=$HEALTH_STATUS"
+            echo "ready_status=$READY_STATUS"
+            echo "image=$IMAGE"
+            echo "principal_id=$PRINCIPAL_ID"
+            echo "subnet_id=$SUBNET_ID"
+            echo "health_response=$(tr -d '\n' < health.json 2>/dev/null || true)"
+            echo "ready_response=$(tr -d '\n' < ready.json 2>/dev/null || true)"
+          } | tee azure-partquill-deploy.txt
+
+          test "$HEALTH_STATUS" = "200"
+          test "$READY_STATUS" = "200"
+
+      - name: Upload deployment report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-partquill-deploy
+          path: azure-partquill-deploy.txt
+          if-no-files-found: ignore
+          retention-days: 14
