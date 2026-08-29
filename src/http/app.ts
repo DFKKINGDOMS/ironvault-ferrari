@@ -516,13 +516,15 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.get('/internal/migration/media-upload-target', async (request, reply) => {
     const token = request.headers.authorization?.replace(/^Bearer\s+/i, '');
-    const authorized = config.MIGRATION_GITHUB_OIDC_ENABLED
-      && await verifyGithubMediaMigrationOidcToken(token);
-    if (!authorized
-      || !config.AZURE_STORAGE_ACCOUNT_NAME
+    if (!(await verifyGithubMediaMigrationOidcToken(token))) {
+      return migrationUnavailable(reply);
+    }
+    if (!config.AZURE_STORAGE_ACCOUNT_NAME
       || !config.GM_CATALOG_MEDIA_CONTAINER
       || !config.GM_CATALOG_MEDIA_UPLOAD_SAS) {
-      return migrationUnavailable(reply);
+      return reply.code(503).send({
+        error: { code: 'MEDIA_UPLOAD_NOT_CONFIGURED', message: 'media upload target is not configured' }
+      });
     }
     const containerUrl = new URL(
       `https://${config.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${config.GM_CATALOG_MEDIA_CONTAINER}`
