@@ -21,8 +21,14 @@ jobs:
       CONTAINER_APP: ca-partquill-web-westus3
       STORAGE_ACCOUNT: pqdata50230827
       STORAGE_CONTAINER: partquill-gm-catalog
+      MEDIA_CONTAINER: partquill-gm-scans
       DATASET_ID: gm-exact-100001-235000-aa4d30ab-v1
       EXPECTED_PARTS: "894592"
+      RELEASE_TAG: partquill-gm-pageids-100001-235000-20260828
+      EXPECTED_SOURCE_PAGES: "135000"
+      EXPECTED_RELEASE_REPORTS: "81"
+      EXPECTED_ARCHIVE_ASSETS: "152"
+      EXPECTED_ARCHIVE_BYTES: "27696692080"
     steps:
       - name: Sign in to Azure with OIDC
         uses: azure/login@v2
@@ -130,6 +136,166 @@ jobs:
           test "$(jq -r '.[] | select(.name | endswith("_Audit.json")) | .bytes' cutover-audit/certified-blobs.json)" = "19580"
           test "$(jq -r '.[] | select(.name | endswith("SHA256SUMS.txt")) | .bytes' cutover-audit/certified-blobs.json)" = "247"
 
+          mkdir -p cutover-audit/release-reports
+          mapfile -t RELEASE_REPORT_NAMES < <(az storage blob list \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix manifests/release-transfer/ \
+            --num-results '*' \
+            --query '[].name' \
+            --output tsv)
+          test "${#RELEASE_REPORT_NAMES[@]}" -eq "$EXPECTED_RELEASE_REPORTS"
+          for REPORT_NAME in "${RELEASE_REPORT_NAMES[@]}"; do
+            az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "$REPORT_NAME" \
+              --file "cutover-audit/release-reports/$(basename "$REPORT_NAME")" \
+              --overwrite \
+              --only-show-errors \
+              --output none
+          done
+          jq -s '.' cutover-audit/release-reports/*.json > cutover-audit/release-reports.json
+          jq -e \
+            --arg release "$RELEASE_TAG" \
+            --argjson reports "$EXPECTED_RELEASE_REPORTS" \
+            --argjson expected "$EXPECTED_SOURCE_PAGES" '
+              length == $reports
+              and all(.[];
+                .version == 1
+                and .sourceReleaseTag == $release
+                and .range.first >= 100001
+                and .range.last <= 235000
+                and .range.expectedPages == (.range.last - .range.first + 1)
+                and .readyPages == (.uploaded | length)
+                and .range.expectedPages == ((.uploaded | length) + (.unavailablePages | length)))
+              and (map(.range.expectedPages) | add) == $expected
+            ' cutover-audit/release-reports.json >/dev/null
+
+          jq -r '.[] | (.uploaded[].pageId, .unavailablePages[].pageId)' \
+            cutover-audit/release-reports.json > cutover-audit/classified-page-ids.raw.txt
+          jq -r '.[] | .uploaded[].pageId' cutover-audit/release-reports.json \
+            | sort -n > cutover-audit/uploaded-page-ids.txt
+          jq -r '.[] | .unavailablePages[].pageId' cutover-audit/release-reports.json \
+            | sort -n > cutover-audit/unavailable-page-ids.txt
+          sort -nu cutover-audit/classified-page-ids.raw.txt \
+            > cutover-audit/classified-page-ids.txt
+          seq 100001 235000 > cutover-audit/expected-page-ids.txt
+          test "$(wc -l < cutover-audit/classified-page-ids.raw.txt)" -eq "$EXPECTED_SOURCE_PAGES"
+          test "$(wc -l < cutover-audit/classified-page-ids.txt)" -eq "$EXPECTED_SOURCE_PAGES"
+          cmp cutover-audit/expected-page-ids.txt cutover-audit/classified-page-ids.txt
+
+          UPLOADED_IMAGES=$(wc -l < cutover-audit/uploaded-page-ids.txt)
+          UNAVAILABLE_PAGES=$(wc -l < cutover-audit/unavailable-page-ids.txt)
+          CLASSIFIED_PAGES=$((UPLOADED_IMAGES + UNAVAILABLE_PAGES))
+          test "$CLASSIFIED_PAGES" -eq "$EXPECTED_SOURCE_PAGES"
+          BLOB_COUNT=$(az storage blob list \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix gm-scans/pages/ \
+            --num-results '*' \
+            --query "length([?ends_with(name, '/full_page.png')])" \
+            --output tsv)
+          test "$BLOB_COUNT" -eq "$UPLOADED_IMAGES"
+
+          az storage blob list \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix "gm-release-archive/$RELEASE_TAG/" \
+            --num-results '*' \
+            --query '[].{name:name,bytes:properties.contentLength}' \
+            --output json > cutover-audit/release-archive.json
+          ARCHIVE_ASSETS=$(jq 'length' cutover-audit/release-archive.json)
+          ARCHIVE_BYTES=$(jq '[.[].bytes] | add // 0' cutover-audit/release-archive.json)
+          test "$ARCHIVE_ASSETS" -eq "$EXPECTED_ARCHIVE_ASSETS"
+          test "$ARCHIVE_BYTES" -eq "$EXPECTED_ARCHIVE_BYTES"
+          jq -r '.[].sourceArchive' cutover-audit/release-reports.json \
+            | sort > cutover-audit/expected-evidence-archives.txt
+          jq -r '.[].name | split("/")[-1]' cutover-audit/release-archive.json \
+            | sort > cutover-audit/azure-release-archive-basenames.txt
+          comm -23 \
+            cutover-audit/expected-evidence-archives.txt \
+            cutover-audit/azure-release-archive-basenames.txt \
+            > cutover-audit/missing-evidence-archives.txt
+          test ! -s cutover-audit/missing-evidence-archives.txt
+
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --name manifests/certified-referenced-page-ids.txt \
+            --file cutover-audit/certified-referenced-page-ids.txt \
+            --overwrite \
+            --only-show-errors \
+            --output none
+          sort -nu cutover-audit/certified-referenced-page-ids.txt \
+            > cutover-audit/certified-referenced-page-ids.sorted.txt
+          comm -23 cutover-audit/certified-referenced-page-ids.sorted.txt cutover-audit/uploaded-page-ids.txt \
+            > cutover-audit/catalog-references-without-images.txt
+          test ! -s cutover-audit/catalog-references-without-images.txt
+
+          awk -v total="$UPLOADED_IMAGES" -v samples=12 '
+            BEGIN {
+              for (i = 0; i < samples; i++) {
+                target[int(i * (total - 1) / (samples - 1)) + 1] = 1
+              }
+            }
+            target[FNR] { print }
+          ' cutover-audit/uploaded-page-ids.txt > cutover-audit/blob-probe-page-ids.txt
+          test "$(wc -l < cutover-audit/blob-probe-page-ids.txt)" -eq 12
+          PROBE_INDEX=0
+          while read -r PAGE_ID; do
+            BLOB_PROBE_RESULT=$(curl --fail-with-body --silent --show-error \
+              --retry 6 --retry-all-errors --connect-timeout 10 --max-time 120 \
+              --dump-header "cutover-audit/blob-probe-${PAGE_ID}-headers.txt" \
+              --output "cutover-audit/blob-probe-${PAGE_ID}.png" \
+              --write-out '%{http_code} %{content_type}' \
+              "$AZURE_URL/v1/gm-catalog/pages/${PAGE_ID}/image")
+            test "${BLOB_PROBE_RESULT%% *}" = "200"
+            [[ "${BLOB_PROBE_RESULT#* }" == image/* ]]
+            grep -Eiq '^x-partquill-media-source: azure-blob' \
+              "cutover-audit/blob-probe-${PAGE_ID}-headers.txt"
+            PROBE_INDEX=$((PROBE_INDEX + 1))
+          done < cutover-audit/blob-probe-page-ids.txt
+          test "$PROBE_INDEX" -eq 12
+
+          jq -n \
+            --arg release "$RELEASE_TAG" \
+            --argjson reports "$EXPECTED_RELEASE_REPORTS" \
+            --argjson expected "$EXPECTED_SOURCE_PAGES" \
+            --argjson uploaded "$UPLOADED_IMAGES" \
+            --argjson unavailable "$UNAVAILABLE_PAGES" \
+            --argjson classified "$CLASSIFIED_PAGES" \
+            --argjson blobs "$BLOB_COUNT" \
+            --argjson archiveAssets "$ARCHIVE_ASSETS" \
+            --argjson archiveBytes "$ARCHIVE_BYTES" \
+            '{
+              result:"COMPLETE",
+              sourceReleaseTag:$release,
+              sourceRange:{first:100001,last:235000,expected:$expected},
+              reports:$reports,
+              uploadedImages:$uploaded,
+              unavailableSourcePages:$unavailable,
+              classified:$classified,
+              blobs:$blobs,
+              exactManifestMatch:true,
+              liveAzureBlobProbes:12,
+              releaseArchive:{assets:$archiveAssets,bytes:$archiveBytes}
+            }' | tee cutover-audit/media-completion-audit.json
+          az storage blob upload \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --name manifests/completion-audit.json \
+            --file cutover-audit/media-completion-audit.json \
+            --overwrite \
+            --only-show-errors \
+            --output none
+
           az network dns zone list \
             --query '[].{name:name,resourceGroup:resourceGroup,nameServers:nameServers}' \
             --output json > cutover-audit/azure-dns-zones.json
@@ -160,6 +326,9 @@ jobs:
             --arg availableParts "$(jq -r '.gmCatalog.availableParts' cutover-audit/ready.json)" \
             --arg probePart "10110988" \
             --arg probeDescription "HOSE PORTED PURGE SOL" \
+            --arg mediaResult "$(jq -r '.result' cutover-audit/media-completion-audit.json)" \
+            --arg mediaImages "$(jq -r '.uploadedImages' cutover-audit/media-completion-audit.json)" \
+            --arg unavailablePages "$(jq -r '.unavailableSourcePages' cutover-audit/media-completion-audit.json)" \
             '{
               result:"AZURE_CUTOVER_AUDIT_PASSED",
               azureUrl:$azureUrl,
@@ -168,11 +337,16 @@ jobs:
               importedParts:($importedParts|tonumber),
               availableParts:($availableParts|tonumber),
               probePart:$probePart,
-              probeDescription:$probeDescription
+              probeDescription:$probeDescription,
+              mediaResult:$mediaResult,
+              mediaImages:($mediaImages|tonumber),
+              unavailableSourcePages:($unavailablePages|tonumber),
+              uncoveredCatalogPageReferences:0
             }' | tee cutover-audit/summary.json
 
           cat cutover-audit/container-app-summary.json
           cat cutover-audit/certified-blobs.json
+          cat cutover-audit/media-completion-audit.json
           cat cutover-audit/public-dns.txt
 
       - name: Upload cutover audit evidence
