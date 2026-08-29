@@ -22,7 +22,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     steps:
       - name: Sign in to Azure with OIDC
         uses: azure/login@v2
@@ -46,7 +46,9 @@ jobs:
           PG="pg-partquill-5023-0827"
           ACR="partquill50230827"
           ACR_SERVER="partquill50230827.azurecr.io"
-          IMAGE="${ACR_SERVER}/partquill:azure-migration-2"
+          IMAGE_TAG="azure-${GITHUB_SHA}"
+          IMAGE="${ACR_SERVER}/partquill:${IMAGE_TAG}"
+          REVISION_SUFFIX="git-${GITHUB_SHA:0:8}"
 
           if ! az network vnet show --resource-group "$RG" --name "$VNET" --query "addressSpace.addressPrefixes" -o tsv | grep -Fxq "$APP_PREFIX"; then
             az network vnet update --resource-group "$RG" --name "$VNET" --add addressSpace.addressPrefixes "$APP_PREFIX" --output none
@@ -73,7 +75,7 @@ jobs:
             az postgres flexible-server microsoft-entra-admin create               --resource-group "$RG"               --server-name "$PG"               --display-name "$APP"               --object-id "$PRINCIPAL_ID"               --type ServicePrincipal               --output none
           fi
 
-          az acr build             --registry "$ACR"             --image partquill:azure-migration-2             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#partquill-azure-container-app"
+          az acr build             --registry "$ACR"             --image "partquill:${IMAGE_TAG}"             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#partquill-azure-container-app"
 
           az acr update --name "$ACR" --admin-enabled true --output none
           ACR_USER=$(az acr credential show --name "$ACR" --query username -o tsv)
@@ -95,7 +97,7 @@ jobs:
 
           DATABASE_URL="postgresql://${APP}@${PG}.postgres.database.azure.com:5432/partquill?sslmode=require"
 
-          az containerapp update             --resource-group "$RG"             --name "$APP"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
+          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
 
           for attempt in $(seq 1 90); do
             PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState -o tsv 2>/dev/null || true)
@@ -116,8 +118,8 @@ jobs:
           HEALTH_STATUS="pending"
           READY_STATUS="pending"
           for attempt in $(seq 1 30); do
-            HEALTH_STATUS=$(curl -sS -o health.json -w '%{http_code}' "$URL/health" || true)
-            READY_STATUS=$(curl -sS -o ready.json -w '%{http_code}' "$URL/ready" || true)
+            HEALTH_STATUS=$(curl --connect-timeout 5 --max-time 15 -sS -o health.json -w '%{http_code}' "$URL/health" || true)
+            READY_STATUS=$(curl --connect-timeout 5 --max-time 15 -sS -o ready.json -w '%{http_code}' "$URL/ready" || true)
             if [ "$HEALTH_STATUS" = "200" ] && [ "$READY_STATUS" = "200" ]; then
               break
             fi
