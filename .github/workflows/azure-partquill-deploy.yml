@@ -15,7 +15,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Sign in to Azure with OIDC
         uses: azure/login@v2
@@ -88,7 +88,18 @@ jobs:
 
           DATABASE_URL="postgresql://${APP}@${PG}.postgres.database.azure.com:5432/partquill?sslmode=require"
 
-          az containerapp update             --resource-group "$RG"             --name "$APP"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --output none
+          az containerapp update             --resource-group "$RG"             --name "$APP"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
+
+          for attempt in $(seq 1 90); do
+            PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState -o tsv 2>/dev/null || true)
+            LATEST_REVISION=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName -o tsv 2>/dev/null || true)
+            echo "Container App provisioning state: ${PROVISIONING_STATE:-unknown}; latest revision: ${LATEST_REVISION:-unknown}"
+            if [ "$PROVISIONING_STATE" = "Succeeded" ] && [ -n "$LATEST_REVISION" ]; then
+              break
+            fi
+            sleep 10
+          done
+          test "$PROVISIONING_STATE" = "Succeeded"
 
           az containerapp ingress enable             --resource-group "$RG"             --name "$APP"             --type external             --target-port 3000             --transport auto             --allow-insecure false             --output none
 
