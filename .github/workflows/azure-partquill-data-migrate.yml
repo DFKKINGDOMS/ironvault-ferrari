@@ -14,17 +14,17 @@ permissions:
 
 concurrency:
   group: partquill-render-to-azure-data-migration
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   migrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       RESOURCE_GROUP: rg-partquill-platform-westus3
       CONTAINER_APP: ca-partquill-web-westus3
       SOURCE_URL: https://partquill-image-studio.onrender.com
-      PAGE_SIZE: "250"
+      PAGE_SIZE: "1000"
     steps:
       - name: Sign in to Azure with OIDC
         uses: azure/login@v2
