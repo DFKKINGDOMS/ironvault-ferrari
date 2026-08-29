@@ -97,6 +97,16 @@ jobs:
             --https-only \
             --output tsv)
           echo "::add-mask::$MEDIA_SAS"
+          MEDIA_UPLOAD_SAS_EXPIRY=$(date -u -d '+3 days' '+%Y-%m-%dT%H:%MZ')
+          MEDIA_UPLOAD_SAS=$(az storage container generate-sas \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --name "$MEDIA_CONTAINER" \
+            --permissions rcw \
+            --expiry "$MEDIA_UPLOAD_SAS_EXPIRY" \
+            --https-only \
+            --output tsv)
+          echo "::add-mask::$MEDIA_UPLOAD_SAS"
 
           az acr build             --registry "$ACR"             --image "partquill:${IMAGE_TAG}"             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#partquill-azure-container-app"
 
@@ -112,15 +122,15 @@ jobs:
           OAUTH_STATE_SECRET=$(openssl rand -hex 32)
           GM_IMPORT_TOKEN=$(openssl rand -hex 48)
           IMAGE_STUDIO_ACCESS_TOKEN=$(openssl rand -hex 32)
-          for VALUE in "$PARTQUILL_API_KEY" "$TOKEN_ENCRYPTION_KEY" "$OAUTH_STATE_SECRET" "$GM_IMPORT_TOKEN" "$IMAGE_STUDIO_ACCESS_TOKEN" "$MEDIA_SAS"; do
+          for VALUE in "$PARTQUILL_API_KEY" "$TOKEN_ENCRYPTION_KEY" "$OAUTH_STATE_SECRET" "$GM_IMPORT_TOKEN" "$IMAGE_STUDIO_ACCESS_TOKEN" "$MEDIA_SAS" "$MEDIA_UPLOAD_SAS"; do
             echo "::add-mask::$VALUE"
           done
 
-          az containerapp secret set             --resource-group "$RG"             --name "$APP"             --secrets               partquill-api-key="$PARTQUILL_API_KEY"               token-encryption-key="$TOKEN_ENCRYPTION_KEY"               oauth-state-secret="$OAUTH_STATE_SECRET"               gm-import-token="$GM_IMPORT_TOKEN"               image-studio-access-token="$IMAGE_STUDIO_ACCESS_TOKEN"               gm-catalog-media-sas="$MEDIA_SAS"             --output none
+          az containerapp secret set             --resource-group "$RG"             --name "$APP"             --secrets               partquill-api-key="$PARTQUILL_API_KEY"               token-encryption-key="$TOKEN_ENCRYPTION_KEY"               oauth-state-secret="$OAUTH_STATE_SECRET"               gm-import-token="$GM_IMPORT_TOKEN"               image-studio-access-token="$IMAGE_STUDIO_ACCESS_TOKEN"               gm-catalog-media-sas="$MEDIA_SAS"               gm-catalog-media-upload-sas="$MEDIA_UPLOAD_SAS"             --output none
 
           DATABASE_URL="postgresql://${APP}@${PG}.postgres.database.azure.com:5432/partquill?sslmode=require"
 
-          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               AZURE_STORAGE_ACCOUNT_NAME="$STORAGE_ACCOUNT"               GM_CATALOG_MEDIA_CONTAINER="$MEDIA_CONTAINER"               GM_CATALOG_MEDIA_PREFIX=gm-scans/pages               GM_CATALOG_MEDIA_SAS=secretref:gm-catalog-media-sas               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com,https://www.partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
+          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               AZURE_STORAGE_ACCOUNT_NAME="$STORAGE_ACCOUNT"               GM_CATALOG_MEDIA_CONTAINER="$MEDIA_CONTAINER"               GM_CATALOG_MEDIA_PREFIX=gm-scans/pages               GM_CATALOG_MEDIA_SAS=secretref:gm-catalog-media-sas               GM_CATALOG_MEDIA_UPLOAD_SAS=secretref:gm-catalog-media-upload-sas               MIGRATION_GITHUB_OIDC_ENABLED=true               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com,https://www.partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=disabled               IMAGE_STUDIO_MODE=preview               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=chatgpt-manual               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
 
           for attempt in $(seq 1 90); do
             PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState -o tsv 2>/dev/null || true)
