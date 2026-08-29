@@ -23,10 +23,10 @@ import { startEbayCategoryTaxonomySync } from './ebay/category-taxonomy-sync.js'
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
-  await runMigrations(config.DATABASE_URL, config.NODE_ENV === 'production');
+  await runMigrations(config.DATABASE_URL, config.NODE_ENV === 'production', config.DATABASE_AUTH_MODE);
 }
 const store = config.DATABASE_URL
-  ? new PostgresStore(config.DATABASE_URL, config.NODE_ENV === 'production')
+  ? new PostgresStore(config.DATABASE_URL, config.NODE_ENV === 'production', config.DATABASE_AUTH_MODE)
   : new MemoryStore();
 if (store instanceof PostgresStore) {
   await store.initializeGmCatalog();
