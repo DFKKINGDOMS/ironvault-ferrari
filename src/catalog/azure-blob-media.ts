@@ -23,12 +23,14 @@ export async function loadAzureCatalogScan(config: AppConfig, pageFolder: string
   const url = azureCatalogScanUrl(config, pageFolder);
   if (!url) return undefined;
 
-  const token = await managedIdentityAccessToken(STORAGE_RESOURCE);
+  const headers: Record<string, string> = { 'x-ms-version': '2023-11-03' };
+  if (config.GM_CATALOG_MEDIA_SAS) {
+    url.search = config.GM_CATALOG_MEDIA_SAS.replace(/^\?/, '');
+  } else {
+    headers.authorization = `Bearer ${await managedIdentityAccessToken(STORAGE_RESOURCE)}`;
+  }
   const response = await fetch(url, {
-    headers: {
-      authorization: `Bearer ${token}`,
-      'x-ms-version': '2023-11-03'
-    },
+    headers,
     signal: AbortSignal.timeout(15_000)
   });
   if (response.status === 404) return undefined;

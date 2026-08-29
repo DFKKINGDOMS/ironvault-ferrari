@@ -211,16 +211,10 @@ describe('HTTP contract', () => {
   });
 
   it('serves migrated GM scans from private Azure Blob storage', async () => {
-    vi.stubEnv('IDENTITY_ENDPOINT', 'http://identity.local/token');
-    vi.stubEnv('IDENTITY_HEADER', 'identity-secret');
+    const sas = 'sv=2023-11-03&sp=r&sig=test-signature';
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url.startsWith('http://identity.local/token')) {
-        return new Response(JSON.stringify({ access_token: 'storage-token', expires_on: Math.floor(Date.now() / 1000) + 3600 }), {
-          headers: { 'content-type': 'application/json' }
-        });
-      }
-      expect(url).toBe('https://pqdata50230827.blob.core.windows.net/partquill-gm-scans/gm-scans/pages/138446/full_page.png');
+      expect(url).toBe(`https://pqdata50230827.blob.core.windows.net/partquill-gm-scans/gm-scans/pages/138446/full_page.png?${sas}`);
       return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
         headers: { 'content-type': 'application/octet-stream' }
       });
@@ -229,14 +223,15 @@ describe('HTTP contract', () => {
     app = await buildApp(harness({
       GM_CATALOG_SCAN_DIR: '/definitely-not-present',
       AZURE_STORAGE_ACCOUNT_NAME: 'pqdata50230827',
-      GM_CATALOG_MEDIA_CONTAINER: 'partquill-gm-scans'
+      GM_CATALOG_MEDIA_CONTAINER: 'partquill-gm-scans',
+      GM_CATALOG_MEDIA_SAS: sas
     }));
 
     const response = await app.inject({ method: 'GET', url: '/v1/gm-catalog/pages/138446/image' });
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('image/png');
     expect(response.headers['x-partquill-media-source']).toBe('azure-blob');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('creates a held draft and exposes an exception-first queue', async () => {

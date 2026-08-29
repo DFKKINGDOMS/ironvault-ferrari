@@ -23,6 +23,7 @@ const schema = z
     AZURE_STORAGE_ACCOUNT_NAME: z.string().regex(/^[a-z0-9]{3,24}$/).optional(),
     GM_CATALOG_MEDIA_CONTAINER: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/).optional(),
     GM_CATALOG_MEDIA_PREFIX: z.string().regex(/^[A-Za-z0-9._/-]*$/).default('gm-scans/pages'),
+    GM_CATALOG_MEDIA_SAS: z.string().min(16).optional(),
     PILOT_EPHEMERAL_MODE: booleanString,
     EBAY_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
     EBAY_MODE: z.enum(['mock', 'live']).default('mock'),
