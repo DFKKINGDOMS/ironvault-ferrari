@@ -119,10 +119,18 @@ jobs:
 
           HEALTH_STATUS="pending"
           READY_STATUS="pending"
+          CATALOG_SCAN_STATUS="pending"
+          CATALOG_SCAN_TYPE="pending"
           for attempt in $(seq 1 30); do
             HEALTH_STATUS=$(curl --connect-timeout 5 --max-time 15 -sS -o health.json -w '%{http_code}' "$URL/health" || true)
             READY_STATUS=$(curl --connect-timeout 5 --max-time 15 -sS -o ready.json -w '%{http_code}' "$URL/ready" || true)
-            if [ "$HEALTH_STATUS" = "200" ] && [ "$READY_STATUS" = "200" ]; then
+            CATALOG_SCAN_RESULT=$(curl --connect-timeout 5 --max-time 30 -sS -o catalog-scan-138445.png -w '%{http_code} %{content_type}' "$URL/v1/gm-catalog/pages/138445/image" || true)
+            CATALOG_SCAN_STATUS=${CATALOG_SCAN_RESULT%% *}
+            CATALOG_SCAN_TYPE=${CATALOG_SCAN_RESULT#* }
+            if [ "$HEALTH_STATUS" = "200" ] \
+              && [ "$READY_STATUS" = "200" ] \
+              && [ "$CATALOG_SCAN_STATUS" = "200" ] \
+              && [[ "$CATALOG_SCAN_TYPE" == image/* ]]; then
               break
             fi
             sleep 10
@@ -132,6 +140,8 @@ jobs:
             echo "url=$URL"
             echo "health_status=$HEALTH_STATUS"
             echo "ready_status=$READY_STATUS"
+            echo "catalog_scan_138445_status=$CATALOG_SCAN_STATUS"
+            echo "catalog_scan_138445_type=$CATALOG_SCAN_TYPE"
             echo "image=$IMAGE"
             echo "principal_id=$PRINCIPAL_ID"
             echo "subnet_id=$SUBNET_ID"
@@ -141,6 +151,8 @@ jobs:
 
           test "$HEALTH_STATUS" = "200"
           test "$READY_STATUS" = "200"
+          test "$CATALOG_SCAN_STATUS" = "200"
+          [[ "$CATALOG_SCAN_TYPE" == image/* ]]
 
       - name: Upload deployment report
         if: always()
@@ -150,4 +162,3 @@ jobs:
           path: azure-partquill-deploy.txt
           if-no-files-found: ignore
           retention-days: 14
-
