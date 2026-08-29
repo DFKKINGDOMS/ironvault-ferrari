@@ -88,6 +88,48 @@ jobs:
             --num-results '*' \
             --query "length([?ends_with(name, '/full_page.png')])" \
             --output tsv)
+          mkdir -p storage-inventory/release-reports
+          mapfile -t RELEASE_REPORT_NAMES < <(az storage blob list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix manifests/release-transfer/ \
+            --num-results '*' \
+            --query '[].name' \
+            --output tsv)
+          for REPORT_NAME in "${RELEASE_REPORT_NAMES[@]}"; do
+            az storage blob download \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "$REPORT_NAME" \
+              --file "storage-inventory/release-reports/$(basename "$REPORT_NAME")" \
+              --overwrite \
+              --only-show-errors \
+              --output none
+          done
+          if [ "${#RELEASE_REPORT_NAMES[@]}" -gt 0 ]; then
+            jq -s '{
+              reports:length,
+              expectedPages:(map(.range.expectedPages) | add),
+              uploaded:(map(.uploaded | length) | add),
+              unavailable:(map(.unavailablePages | length) | add),
+              classified:((map(.uploaded | length) | add) + (map(.unavailablePages | length) | add))
+            }' storage-inventory/release-reports/*.json > storage-inventory/release-progress.json
+          else
+            jq -n '{reports:0,expectedPages:0,uploaded:0,unavailable:0,classified:0}' \
+              > storage-inventory/release-progress.json
+          fi
+          az storage blob list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix gm-release-archive/partquill-gm-pageids-100001-235000-20260828/ \
+            --num-results '*' \
+            --query '[].{name:name,bytes:properties.contentLength}' \
+            --output json > storage-inventory/release-archive.json
+          jq '{assets:length,bytes:(map(.bytes) | add // 0)}' \
+            storage-inventory/release-archive.json > storage-inventory/release-archive-progress.json
           UPLOADED=$(awk 'NR > 1 { total += $2 } END { print total + 0 }' storage-inventory/media-shards.tsv)
           UNAVAILABLE=$(awk 'NR > 1 { total += $3 } END { print total + 0 }' storage-inventory/media-shards.tsv)
           CLASSIFIED=$((UPLOADED + UNAVAILABLE))
@@ -97,7 +139,9 @@ jobs:
             --argjson unavailable "$UNAVAILABLE" \
             --argjson classified "$CLASSIFIED" \
             --argjson blobs "$BLOB_COUNT" \
-            '{expected:$expected,uploaded:$uploaded,unavailable:$unavailable,classified:$classified,blobs:$blobs}' \
+            --argjson release "$(cat storage-inventory/release-progress.json)" \
+            --argjson archive "$(cat storage-inventory/release-archive-progress.json)" \
+            '{expected:$expected,uploaded:$uploaded,unavailable:$unavailable,classified:$classified,blobs:$blobs,release:$release,archive:$archive}' \
             | tee storage-inventory/media-progress.json
           column -t -s $'\t' storage-inventory/media-shards.tsv
 
