@@ -111,7 +111,7 @@ download/import fallback remains available and is disclosed before processing.
 Neither route can change product geometry, repair or conceal damage, remove a
 third party's watermark, or use the derivative as identity/fitment evidence.
 
-The first Render checkpoint may use ephemeral filesystem storage and an
+The Azure owner-pilot checkpoint may use container-local preview storage and an
 in-process queue so the contract can be tested end to end. Before a real
 multi-seller launch, replace those with private object storage, signed result
 URLs, a durable queue, job cancellation, retention/deletion policy, malware

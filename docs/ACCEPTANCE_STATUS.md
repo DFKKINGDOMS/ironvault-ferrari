@@ -58,5 +58,5 @@ Production publishing remains disabled until every P0 gate is proven against one
 - Automated tests cover configuration, request limits, seller-command parsing, catalog holds, photo-first routing, restricted-restraint gating, security, policy, images, Image Studio pricing/routing, MCP inline media, VIN masking, red-mismatch correct-part recovery, ambiguity blocking, catalog-adapter contracts, approvals, HTTP and post-publish lifecycle.
 - Production OEM research requests remain disabled while data-rights confirmation is false; test fixtures prove the output contract without treating those fixtures as licensed production evidence.
 - Production dependency audit: zero known vulnerabilities at the recorded lockfile revision.
-- Render Blueprint: valid YAML and fail-closed environment defaults.
+- Azure Container App workflow: valid YAML and fail-closed environment defaults.
 - Local TCP smoke test: not available in the current managed workspace because host socket/interface lookup is blocked; Fastify injection exercises the compiled HTTP contract without a listening socket.
