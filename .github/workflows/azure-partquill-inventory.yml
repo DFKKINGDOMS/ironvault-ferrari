@@ -1,0 +1,62 @@
+name: Azure PartQuill Inventory
+
+on:
+  push:
+    branches:
+      - partquill-azure-container-app
+    paths:
+      - .github/workflows/azure-partquill-inventory.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Capture PartQuill Azure inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          VNET="rg-partquill-platform-westus3-vnet"
+          PG="pg-partquill-5023-0827"
+          CAE="cae-partquill-westus3"
+          WORKER="ca-partquill-worker-westus3"
+
+          {
+            echo "ACCOUNT"
+            az account show --query "{subscription:name,subscriptionId:id,tenantId:tenantId,user:user.name}" -o json
+            echo "VNET_ADDRESS_SPACE"
+            az network vnet show --resource-group "$RG" --name "$VNET" --query "addressSpace.addressPrefixes" -o json
+            echo "SUBNETS"
+            az network vnet subnet list --resource-group "$RG" --vnet-name "$VNET" --query "[].{name:name,prefix:addressPrefix,prefixes:addressPrefixes,delegations:delegations[].serviceName,provisioningState:provisioningState}" -o json
+            echo "POSTGRES_AUTH"
+            az postgres flexible-server show --resource-group "$RG" --name "$PG" --query "{authConfig:authConfig,administratorLogin:administratorLogin,network:network,fullyQualifiedDomainName:fullyQualifiedDomainName,state:state,sku:sku,storage:storage}" -o json
+            echo "POSTGRES_ENTRA_ADMINS"
+            az postgres flexible-server microsoft-entra-admin list --resource-group "$RG" --server-name "$PG" -o json
+            echo "CONTAINER_ENV"
+            az containerapp env show --resource-group "$RG" --name "$CAE" -o json
+            echo "WORKER"
+            az containerapp show --resource-group "$RG" --name "$WORKER" -o json
+            echo "KEYVAULT_SECRET_NAMES"
+            az keyvault secret list --vault-name kv-pq-5023-0827 --query "[].name" -o json
+            echo "ACR"
+            az acr show --resource-group "$RG" --name partquill50230827 --query "{id:id,loginServer:loginServer,sku:sku,provisioningState:provisioningState}" -o json
+          } | tee azure-partquill-inventory.txt
+
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-partquill-inventory
+          path: azure-partquill-inventory.txt
+          retention-days: 7
