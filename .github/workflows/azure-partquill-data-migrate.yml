@@ -1,11 +1,6 @@
 name: Migrate PartQuill data to Azure
 
 on:
-  push:
-    branches:
-      - partquill-azure-container-app
-    paths:
-      - .github/workflows/azure-partquill-data-migrate.yml
   workflow_dispatch:
 
 permissions:

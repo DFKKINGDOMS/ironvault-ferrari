@@ -3,7 +3,7 @@ name: Inspect PartQuill Azure storage
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-storage-inventory.yml
   workflow_dispatch:

@@ -4,10 +4,10 @@ const issuer = 'https://token.actions.githubusercontent.com';
 const audience = 'partquill-migration';
 const repositoryId = '1332273432';
 const repositoryOwnerId = '98978443';
-const migrationRef = 'refs/heads/partquill-azure-container-app';
+const migrationRef = 'refs/heads/main';
 const migrationWorkflowRefs = new Set([
-  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-data-migrate.yml@refs/heads/partquill-azure-container-app',
-  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-gm-catalog-import.yml@refs/heads/partquill-azure-container-app'
+  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-data-migrate.yml@refs/heads/main',
+  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-gm-catalog-import.yml@refs/heads/main'
 ]);
 const mediaMigrationAudience = 'partquill-media-migration';
 const mediaMigrationRepositoryId = '1316643567';

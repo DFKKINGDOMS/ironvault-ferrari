@@ -3,7 +3,7 @@ name: Import certified PartQuill GM catalog
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-gm-catalog-import.yml
       - scripts/import-gm-certified.py

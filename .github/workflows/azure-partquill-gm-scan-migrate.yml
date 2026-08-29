@@ -1,11 +1,6 @@
 name: Retire live GMPartsWiki scan importer
 
 on:
-  push:
-    branches:
-      - partquill-azure-container-app
-    paths:
-      - .github/workflows/azure-partquill-gm-scan-migrate.yml
   workflow_dispatch:
 
 permissions:

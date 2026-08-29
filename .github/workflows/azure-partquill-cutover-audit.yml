@@ -3,7 +3,7 @@ name: Audit PartQuill Azure cutover readiness
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-cutover-audit.yml
   workflow_dispatch:

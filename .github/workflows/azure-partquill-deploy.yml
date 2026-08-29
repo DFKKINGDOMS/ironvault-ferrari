@@ -3,7 +3,7 @@ name: Deploy PartQuill to Azure
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-deploy.yml
       - .github/workflows/azure-partquill-gm-catalog-import.yml
@@ -108,7 +108,7 @@ jobs:
             --output tsv)
           echo "::add-mask::$MEDIA_UPLOAD_SAS"
 
-          az acr build             --registry "$ACR"             --image "partquill:${IMAGE_TAG}"             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#partquill-azure-container-app"
+          az acr build             --registry "$ACR"             --image "partquill:${IMAGE_TAG}"             "https://github.com/DFKKINGDOMS/ironvault-ferrari.git#main"
 
           az acr update --name "$ACR" --admin-enabled true --output none
           ACR_USER=$(az acr credential show --name "$ACR" --query username -o tsv)
