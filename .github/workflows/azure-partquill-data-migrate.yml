@@ -105,7 +105,12 @@ jobs:
           wait_for_manifest "$SOURCE_URL" migration-report/source-manifest.json
           wait_for_manifest "$TARGET_URL" migration-report/target-before-manifest.json
 
-          mapfile -t TABLES < <(jq -r '.tables[].table' migration-report/source-manifest.json)
+          # The certified GM catalog is loaded as its own audited dataset after the
+          # operational database copy. Avoid re-reading a potentially partial
+          # Render catalog through slow OFFSET pagination.
+          mapfile -t TABLES < <(jq -r \
+            '.tables[].table | select(. != "gm_catalog_parts" and . != "gm_catalog_imports")' \
+            migration-report/source-manifest.json)
           test "${#TABLES[@]}" -gt 0
           : > migration-report/export-counts.tsv
           : > migration-report/source-page-sha256.tsv
@@ -165,9 +170,11 @@ jobs:
 
           api_get "$TARGET_URL/internal/migration/manifest" \
             > migration-report/target-after-manifest.json
-          jq -S '[.tables[] | {table, rows}]' migration-report/source-manifest.json \
+          jq -S '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports") | {table, rows}]' \
+            migration-report/source-manifest.json \
             > migration-report/source-counts.json
-          jq -S '[.tables[] | {table, rows}]' migration-report/target-after-manifest.json \
+          jq -S '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports") | {table, rows}]' \
+            migration-report/target-after-manifest.json \
             > migration-report/target-counts.json
           cmp migration-report/source-counts.json migration-report/target-counts.json
 
@@ -190,8 +197,9 @@ jobs:
           done
           cmp migration-report/source-page-sha256.tsv migration-report/target-page-sha256.tsv
 
-          source_total=$(jq '[.tables[].rows] | add' migration-report/source-manifest.json)
-          target_total=$(jq '[.tables[].rows] | add' migration-report/target-after-manifest.json)
+          source_total=$(jq '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports") | .rows] | add' migration-report/source-manifest.json)
+          target_total=$(jq '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports") | .rows] | add' migration-report/target-after-manifest.json)
+          deferred_gm_rows=$(jq '[.tables[] | select(.table == "gm_catalog_parts") | .rows] | add // 0' migration-report/source-manifest.json)
           {
             echo "status=verified"
             echo "source=$SOURCE_URL"
@@ -199,6 +207,8 @@ jobs:
             echo "tables=${#TABLES[@]}"
             echo "source_rows=$source_total"
             echo "target_rows=$target_total"
+            echo "render_gm_rows_deferred=$deferred_gm_rows"
+            echo "gm_catalog_strategy=replace-with-certified-100001-235000-dataset"
             echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } | tee migration-report/summary.txt
 
