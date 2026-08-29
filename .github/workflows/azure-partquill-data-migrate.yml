@@ -222,7 +222,7 @@ jobs:
           az containerapp update \
             --resource-group "$RESOURCE_GROUP" \
             --name "$CONTAINER_APP" \
-            --revision-suffix "migration-close-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --revision-suffix "mclose-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=false \
             --output none
 
