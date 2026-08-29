@@ -6,6 +6,13 @@ on:
       - partquill-azure-container-app
     paths:
       - .github/workflows/azure-partquill-deploy.yml
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - src/**
+      - web/**
+      - migrations/**
+      - data/**
   workflow_dispatch:
 
 permissions:
