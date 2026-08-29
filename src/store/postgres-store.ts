@@ -19,6 +19,7 @@ import type {
 import type { EbayLeafCategory, Store } from './store.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunityImageRecord, CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
+import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
 
 const { Pool } = pg;
 
@@ -29,10 +30,9 @@ const GM_DATASET_ID = 'gm-catalog-v2-4a3a765e158bcc93';
 export class PostgresStore implements Store {
   private readonly pool: pg.Pool;
 
-  constructor(connectionString: string, production: boolean) {
+  constructor(connectionString: string, production: boolean, authMode: DatabaseAuthMode = 'password') {
     this.pool = new Pool({
-      connectionString,
-      ssl: production ? { rejectUnauthorized: false } : undefined,
+      ...postgresPoolConfig(connectionString, production, authMode),
       max: 10,
       idleTimeoutMillis: 30_000
     });
