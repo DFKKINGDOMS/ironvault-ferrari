@@ -1,0 +1,217 @@
+name: Import certified PartQuill GM catalog
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-partquill-gm-catalog-import.yml
+      - scripts/import-gm-certified.py
+      - src/http/app.ts
+      - src/security/github-migration-oidc.ts
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: partquill-certified-gm-catalog-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      RESOURCE_GROUP: rg-partquill-platform-westus3
+      CONTAINER_APP: ca-partquill-web-westus3
+      STORAGE_ACCOUNT: pqdata50230827
+      STORAGE_CONTAINER: partquill-gm-catalog
+      CATALOG_BLOB: certified/PartQuill_GM_Exact_Catalog_100001_235000.ndjson.gz
+      AUDIT_BLOB: certified/PartQuill_GM_Exact_Catalog_100001_235000_Audit.json
+      CHECKSUM_BLOB: certified/SHA256SUMS.txt
+      COMPRESSED_SHA256: f62cdfae1038a48b0bf00830540a6beca1af3e3f0cff38a6c9584f946cd30acb
+      UNCOMPRESSED_SHA256: aa4d30ab4a478c3187fc8d3ccfd7aa7a03c6b679d19046d0147d6f77773314eb
+      EXPECTED_PARTS: "894592"
+      DATASET_ID: gm-exact-100001-235000-aa4d30ab-v1
+    steps:
+      - name: Check out the exact import code
+        uses: actions/checkout@v4
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Wait for this commit's Azure revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:8}"
+          for attempt in $(seq 1 120); do
+            revision=$(az containerapp revision list \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$CONTAINER_APP" \
+              --query "[?contains(name, 'git-${short_sha}') && properties.active].name | [0]" \
+              --output tsv 2>/dev/null || true)
+            state=""
+            if [ -n "$revision" ]; then
+              state=$(az containerapp revision show \
+                --resource-group "$RESOURCE_GROUP" \
+                --name "$CONTAINER_APP" \
+                --revision "$revision" \
+                --query properties.runningState \
+                --output tsv 2>/dev/null || true)
+            fi
+            echo "revision=${revision:-pending} state=${state:-pending}"
+            if [ -n "$revision" ] && [ "$state" = "Running" ]; then
+              break
+            fi
+            sleep 15
+          done
+          test -n "$revision"
+          test "$state" = "Running"
+
+      - name: Download and certify the Azure blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p catalog import-report
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "$CATALOG_BLOB" \
+            --file catalog/gm-catalog.ndjson.gz \
+            --auth-mode key \
+            --only-show-errors
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "$AUDIT_BLOB" \
+            --file catalog/audit.json \
+            --auth-mode key \
+            --only-show-errors
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "$CHECKSUM_BLOB" \
+            --file catalog/SHA256SUMS.txt \
+            --auth-mode key \
+            --only-show-errors
+
+          echo "$COMPRESSED_SHA256  catalog/gm-catalog.ndjson.gz" | sha256sum --check --strict
+          test "$(jq -er '.outputParts' catalog/audit.json)" = "$EXPECTED_PARTS"
+          test "$(jq -er '.outputSha256Uncompressed' catalog/audit.json)" = "$UNCOMPRESSED_SHA256"
+          test "$(jq -er '.probe.partNumber' catalog/audit.json)" = "10110988"
+          jq -e '.validation | to_entries | all(.value == "complete" or .value == "passed")' catalog/audit.json >/dev/null
+          cp catalog/audit.json import-report/certified-audit.json
+          cp catalog/SHA256SUMS.txt import-report/SHA256SUMS.txt
+
+      - name: Open the temporary OIDC import channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --revision-suffix "gmopen-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=true \
+            --output none
+          fqdn=$(az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          test -n "$fqdn"
+          target_url="https://$fqdn"
+          echo "PARTQUILL_BASE_URL=$target_url" >> "$GITHUB_ENV"
+
+          get_oidc_token() {
+            curl --fail-with-body --silent --show-error \
+              --connect-timeout 10 --max-time 30 \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=partquill-migration" \
+              | jq -er '.value'
+          }
+
+          channel_ready=false
+          for attempt in $(seq 1 30); do
+            token=$(get_oidc_token)
+            if curl --fail-with-body --silent --show-error \
+              --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $token" \
+              "$target_url/internal/migration/manifest" >/dev/null 2>&1; then
+              channel_ready=true
+              break
+            fi
+            echo "Waiting for temporary OIDC import revision ($attempt/30)"
+            sleep 10
+          done
+          test "$channel_ready" = "true"
+
+      - name: Import every certified catalog record
+        shell: bash
+        env:
+          GM_CATALOG_FILE: catalog/gm-catalog.ndjson.gz
+          GM_DATASET_ID: ${{ env.DATASET_ID }}
+          GM_EXPECTED_COUNT: ${{ env.EXPECTED_PARTS }}
+          GM_EXPECTED_SHA256: ${{ env.UNCOMPRESSED_SHA256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/import-gm-certified.py 2>&1 | tee import-report/import.log
+
+      - name: Verify Azure catalog identity and count
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --retry 6 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            "$PARTQUILL_BASE_URL/ready" > import-report/ready.json
+          jq -e --arg dataset "$DATASET_ID" --argjson expected "$EXPECTED_PARTS" \
+            '.gmCatalog.datasetId == $dataset
+             and .gmCatalog.status == "completed"
+             and .gmCatalog.importedParts >= $expected
+             and .gmCatalog.availableParts >= $expected' \
+            import-report/ready.json >/dev/null
+
+          curl --fail-with-body --silent --show-error \
+            --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            -H 'Content-Type: application/json' \
+            --data '{"command":"I have GM part 10110988 for sale"}' \
+            "$PARTQUILL_BASE_URL/v1/seller-ui/command-preview" \
+            > import-report/part-10110988.json
+          jq -e '.. | strings | select(contains("HOSE PORTED PURGE SOL"))' \
+            import-report/part-10110988.json >/dev/null
+
+          {
+            echo "status=verified"
+            echo "dataset=$DATASET_ID"
+            echo "certified_records=$EXPECTED_PARTS"
+            echo "probe_part=10110988"
+            echo "probe_description=HOSE PORTED PURGE SOL"
+            echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee import-report/summary.txt
+
+      - name: Close the temporary OIDC import channel
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --revision-suffix "gmclose-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=false \
+            --output none
+
+      - name: Upload certified import evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-certified-gm-import-${{ github.run_id }}
+          path: import-report/
+          if-no-files-found: warn
+          retention-days: 30

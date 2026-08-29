@@ -14,6 +14,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     DATABASE_AUTH_MODE: 'password',
     MIGRATION_GITHUB_OIDC_ENABLED: false,
     GM_CATALOG_SCAN_DIR: 'data/gm-scans/pages',
+    GM_CATALOG_MEDIA_PREFIX: 'gm-scans/pages',
     PILOT_EPHEMERAL_MODE: false,
     EBAY_ENV: 'sandbox',
     EBAY_MODE: 'mock',

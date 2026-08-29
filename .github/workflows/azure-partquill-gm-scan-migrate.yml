@@ -1,0 +1,20 @@
+name: Retire live GMPartsWiki scan importer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: partquill-gm-scan-migration
+  cancel-in-progress: true
+
+jobs:
+  retired:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm the durable source
+        run: |
+          echo "The live-site importer is retired."
+          echo "PartQuill GM scans now migrate from the preserved private GitHub release."

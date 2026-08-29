@@ -1,0 +1,231 @@
+name: Migrate PartQuill data to Azure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: partquill-render-to-azure-data-migration
+  cancel-in-progress: true
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RESOURCE_GROUP: rg-partquill-platform-westus3
+      CONTAINER_APP: ca-partquill-web-westus3
+      SOURCE_URL: https://partquill-image-studio.onrender.com
+      PAGE_SIZE: "1000"
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Open the one-time Azure migration channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --revision-suffix "migration-open-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=true \
+            --output none
+          FQDN=$(az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          test -n "$FQDN"
+          echo "TARGET_URL=https://$FQDN" >> "$GITHUB_ENV"
+
+      - name: Snapshot, transfer, and verify every migrated row
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p transfer migration-report
+
+          get_oidc_token() {
+            curl --fail-with-body --silent --show-error \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=partquill-migration" \
+              | jq -er '.value'
+          }
+
+          api_get() {
+            local url="$1"
+            local token
+            token=$(get_oidc_token)
+            curl --fail-with-body --silent --show-error \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+              -H "Authorization: Bearer $token" \
+              "$url"
+          }
+
+          api_post() {
+            local url="$1"
+            local payload="$2"
+            local token
+            token=$(get_oidc_token)
+            curl --fail-with-body --silent --show-error \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 180 \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              --data-binary "@$payload" \
+              "$url"
+          }
+
+          wait_for_manifest() {
+            local base_url="$1"
+            local output="$2"
+            for attempt in $(seq 1 30); do
+              if api_get "$base_url/internal/migration/manifest" > "$output" 2>/dev/null; then
+                jq -e '.version == 1 and (.tables | type == "array")' "$output" >/dev/null
+                return 0
+              fi
+              sleep 10
+            done
+            echo "Migration endpoint did not become ready: $base_url" >&2
+            return 1
+          }
+
+          wait_for_manifest "$SOURCE_URL" migration-report/source-manifest.json
+          wait_for_manifest "$TARGET_URL" migration-report/target-before-manifest.json
+
+          # The certified GM catalog and its derived category assignments are
+          # loaded as one audited dataset after the operational database copy.
+          # Avoid re-reading partial derived catalog data through slow pagination.
+          mapfile -t TABLES < <(jq -r \
+            '.tables[].table | select(. != "gm_catalog_parts" and . != "gm_catalog_imports" and . != "ebay_category_assignments")' \
+            migration-report/source-manifest.json)
+          test "${#TABLES[@]}" -gt 0
+          : > migration-report/export-counts.tsv
+          : > migration-report/source-page-sha256.tsv
+
+          for table in "${TABLES[@]}"; do
+            expected=$(jq -er --arg table "$table" '.tables[] | select(.table == $table) | .rows' migration-report/source-manifest.json)
+            mkdir -p "transfer/$table"
+            offset=0
+            exported=0
+            page=0
+
+            while [ "$exported" -lt "$expected" ]; do
+              page_file=$(printf 'transfer/%s/%09d.json' "$table" "$offset")
+              api_get "$SOURCE_URL/internal/migration/export/$table?offset=$offset&limit=$PAGE_SIZE" > "$page_file"
+              jq -e --arg table "$table" --argjson offset "$offset" \
+                '.table == $table and .offset == $offset and (.rows | type == "array")' \
+                "$page_file" >/dev/null
+              page_rows=$(jq -er '.rows | length' "$page_file")
+              if [ "$page_rows" -le 0 ]; then
+                echo "Source returned an empty page before the manifest count for $table" >&2
+                exit 1
+              fi
+              exported=$((exported + page_rows))
+              if [ "$exported" -gt "$expected" ]; then
+                echo "Source exported more rows than its manifest for $table" >&2
+                exit 1
+              fi
+              jq -cS '.rows' "$page_file" | sha256sum | awk -v t="$table" -v o="$offset" '{print t "\t" o "\t" $1}' \
+                >> migration-report/source-page-sha256.tsv
+              next_offset=$(jq -r '.nextOffset // empty' "$page_file")
+              if [ "$exported" -lt "$expected" ] && [ -z "$next_offset" ]; then
+                echo "Source pagination ended early for $table" >&2
+                exit 1
+              fi
+              offset=${next_offset:-$exported}
+              page=$((page + 1))
+            done
+            printf '%s\t%s\t%s\t%s\n' "$table" "$expected" "$exported" "$page" \
+              >> migration-report/export-counts.tsv
+          done
+
+          jq -n '{}' > transfer/empty.json
+          api_post "$TARGET_URL/internal/migration/reset" transfer/empty.json \
+            > migration-report/reset-result.json
+          jq -e '.reset == true' migration-report/reset-result.json >/dev/null
+
+          : > migration-report/import-results.ndjson
+          shopt -s nullglob
+          for table in "${TABLES[@]}"; do
+            for page_file in transfer/"$table"/*.json; do
+              jq '{rows: .rows}' "$page_file" > transfer/import-payload.json
+              api_post "$TARGET_URL/internal/migration/import/$table" transfer/import-payload.json \
+                >> migration-report/import-results.ndjson
+              printf '\n' >> migration-report/import-results.ndjson
+            done
+          done
+
+          api_get "$TARGET_URL/internal/migration/manifest" \
+            > migration-report/target-after-manifest.json
+          jq -S '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports" and .table != "ebay_category_assignments") | {table, rows}]' \
+            migration-report/source-manifest.json \
+            > migration-report/source-counts.json
+          jq -S '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports" and .table != "ebay_category_assignments") | {table, rows}]' \
+            migration-report/target-after-manifest.json \
+            > migration-report/target-counts.json
+          cmp migration-report/source-counts.json migration-report/target-counts.json
+
+          : > migration-report/target-page-sha256.tsv
+          for table in "${TABLES[@]}"; do
+            for source_page in transfer/"$table"/*.json; do
+              offset=$(jq -er '.offset' "$source_page")
+              target_page="transfer/target-$table-$offset.json"
+              api_get "$TARGET_URL/internal/migration/export/$table?offset=$offset&limit=$PAGE_SIZE" \
+                > "$target_page"
+              source_hash=$(jq -cS '.rows' "$source_page" | sha256sum | awk '{print $1}')
+              target_hash=$(jq -cS '.rows' "$target_page" | sha256sum | awk '{print $1}')
+              printf '%s\t%s\t%s\n' "$table" "$offset" "$target_hash" \
+                >> migration-report/target-page-sha256.tsv
+              if [ "$source_hash" != "$target_hash" ]; then
+                echo "Row checksum mismatch for $table at offset $offset" >&2
+                exit 1
+              fi
+            done
+          done
+          cmp migration-report/source-page-sha256.tsv migration-report/target-page-sha256.tsv
+
+          source_total=$(jq '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports" and .table != "ebay_category_assignments") | .rows] | add' migration-report/source-manifest.json)
+          target_total=$(jq '[.tables[] | select(.table != "gm_catalog_parts" and .table != "gm_catalog_imports" and .table != "ebay_category_assignments") | .rows] | add' migration-report/target-after-manifest.json)
+          deferred_gm_rows=$(jq '[.tables[] | select(.table == "gm_catalog_parts") | .rows] | add // 0' migration-report/source-manifest.json)
+          deferred_assignment_rows=$(jq '[.tables[] | select(.table == "ebay_category_assignments") | .rows] | add // 0' migration-report/source-manifest.json)
+          {
+            echo "status=verified"
+            echo "source=$SOURCE_URL"
+            echo "target=$TARGET_URL"
+            echo "tables=${#TABLES[@]}"
+            echo "source_rows=$source_total"
+            echo "target_rows=$target_total"
+            echo "render_gm_rows_deferred=$deferred_gm_rows"
+            echo "render_category_assignments_deferred=$deferred_assignment_rows"
+            echo "gm_catalog_strategy=replace-with-certified-100001-235000-dataset"
+            echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee migration-report/summary.txt
+
+      - name: Close the Azure migration channel
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --revision-suffix "mclose-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=false \
+            --output none
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-render-to-azure-migration-${{ github.run_id }}
+          path: migration-report/
+          if-no-files-found: warn
+          retention-days: 30

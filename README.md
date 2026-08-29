@@ -1,6 +1,6 @@
 # PartQuill — one-command eBay seller pilot
 
-This repository serves the PartQuill seller workspace and its evidence-gated API from one Render web service. The primary action is a sentence such as `List part 58487514 on eBay for $9.99 now` or `List a used black dashboard for $49.99`; the backend extracts seller intent, chooses the safest intake path, applies only supportable defaults, fingerprints the exact preview, and preserves two independent approval gates.
+This repository serves the PartQuill seller workspace and its evidence-gated API from Azure Container Apps, backed by Azure Database for PostgreSQL and private Azure Blob storage. The primary action is a sentence such as `List part 58487514 on eBay for $9.99 now` or `List a used black dashboard for $49.99`; the backend extracts seller intent, chooses the safest intake path, applies only supportable defaults, fingerprints the exact preview, and preserves two independent approval gates.
 
 It is intentionally not a universal visual parts identifier. The default runtime uses a clearly labeled mock eBay gateway, PostgreSQL-compatible storage, and `ALLOW_EBAY_WRITES=false`.
 
@@ -44,7 +44,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Domestic/international origin separation, core terms, unverified-fitment and restricted-item gates.
 - Immutable original image retention and explicit derivative lineage.
 - Image rights and foreground-preservation contracts.
-- PostgreSQL migration and Render Blueprint.
+- PostgreSQL migrations and repeatable Azure deployment workflows.
 - EvidencePack JSON export for disputes and audits.
 - Does-not-fit feedback that clears compatibility, invalidates approvals and holds the item for evidence review.
 - Sibling compatibility quarantine for listings sharing the same sourced evidence edge.
@@ -204,7 +204,7 @@ Any material edit restarts the approval chain.
 - Replace the in-process pilot queue with a durable background queue before production volume.
 - Activate the server-side OpenAI credential and record actual per-image telemetry before committing to final retail packs.
 - Ingest does-not-fit return feedback and token refresh/revocation lifecycle.
-- Complete the Render owner-pilot deployment and keep live AI activation fail-closed until its server credential is configured.
+- Complete the Azure owner-pilot acceptance audit and keep live AI activation fail-closed until its server credential is configured.
 - Connect the public `/mcp` endpoint in ChatGPT Developer Mode and prove the generated-file return path with a two-image job before claiming unattended free-route round trips.
 
 The current gate-by-gate status is in [docs/ACCEPTANCE_STATUS.md](docs/ACCEPTANCE_STATUS.md).

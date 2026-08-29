@@ -5,7 +5,7 @@ Last updated: 2026-08-29
 ## Non-negotiable goals
 
 1. Azure becomes the only production home for PartQuill after parity testing.
-2. Render remains an untouched rollback copy until the controlled cutover is stable.
+2. Remove the PartQuill Render service and database after the Azure completion audit and explicit deletion confirmation.
 3. eBay writes remain disabled until separately approved.
 4. Maintain at least five genuine Azure workloads, each with at least USD 1 in spend for approximately 60 continuous days, to pursue the Microsoft for Startups USD 25,000 milestone.
 5. Keep the PartQuill resource-group budget at USD 100/month with alerts at 50%, 80%, and 100%.
@@ -37,9 +37,11 @@ Supporting services such as Storage, Key Vault, DNS, Document Intelligence, and 
 ## Migration gates
 
 - Azure application health and readiness pass.
-- Render PostgreSQL schema and application data copied.
-- Exact 894,592-record GM catalog imported and verified.
+- Render PostgreSQL schema and application data copied and checksum-verified in Azure PostgreSQL.
+- Exact 894,592-record certified GM source imported, with 894,593 catalog rows available including the preserved seed row.
+- Every source page ID from 100001 through 235000 classified as an uploaded Azure Blob image or an independently verified unavailable source page.
+- Every certified catalog page reference covered by the uploaded image manifest.
 - Persistent files, secrets references, and configuration copied.
 - Record counts and known probes pass, including GM part 10110988 -> page 138445.
 - partquill.com switched only after parity certification.
-- Render disabled/read-only during the rollback period, then removed after final approval.
+- PartQuill Render web service and PostgreSQL instance deleted after final approval; unrelated IronVault Render resources remain untouched.

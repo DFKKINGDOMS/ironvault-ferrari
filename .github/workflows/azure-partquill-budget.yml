@@ -3,7 +3,7 @@ name: Set PartQuill Azure cost guardrail
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-budget.yml
   workflow_dispatch:

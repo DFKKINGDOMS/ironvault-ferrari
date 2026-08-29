@@ -35,7 +35,11 @@ import { isBlockedReferenceImageBytes } from '../ebay/reference-image-policy.js'
 import type { CommunityImageService } from '../community/service.js';
 import { EbayVeroProfileService } from '../ebay/vero-profile-service.js';
 import { MIGRATION_TABLE_NAMES } from '../store/migration-transfer.js';
-import { verifyGithubMigrationOidcToken } from '../security/github-migration-oidc.js';
+import {
+  verifyGithubMediaMigrationOidcToken,
+  verifyGithubMigrationOidcToken
+} from '../security/github-migration-oidc.js';
+import { loadAzureCatalogScan } from '../catalog/azure-blob-media.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -456,9 +460,23 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (existsSync(localPath)) {
       return reply
         .header('cache-control', 'public, max-age=86400, immutable')
+        .header('x-partquill-media-source', 'local')
         .header('x-content-type-options', 'nosniff')
         .type('image/png')
         .send(createReadStream(localPath));
+    }
+    try {
+      const azureScan = await loadAzureCatalogScan(config, pageFolder);
+      if (azureScan) {
+        return reply
+          .header('cache-control', 'public, max-age=86400, immutable')
+          .header('x-partquill-media-source', 'azure-blob')
+          .header('x-content-type-options', 'nosniff')
+          .type(azureScan.contentType)
+          .send(azureScan.bytes);
+      }
+    } catch (error) {
+      request.log.warn({ error, pageId }, 'Azure catalog scan retrieval failed');
     }
     if (config.GM_CATALOG_MEDIA_BASE_URL) {
       const base = config.GM_CATALOG_MEDIA_BASE_URL.replace(/\/$/, '');
@@ -468,6 +486,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         if (contentType?.startsWith('image/')) {
           return reply
             .header('cache-control', 'public, max-age=86400')
+            .header('x-partquill-media-source', 'media-base-url')
             .header('x-content-type-options', 'nosniff')
             .type(contentType)
             .send(Buffer.from(await upstream.arrayBuffer()));
@@ -478,7 +497,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
   app.post('/internal/gm-catalog/import', { bodyLimit: 16 * 1024 * 1024 }, async (request, reply) => {
     const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
-    if (!secureTokenMatches(supplied, config.GM_IMPORT_TOKEN) || !store.importGmCatalogRecords) {
+    const authorized = secureTokenMatches(supplied, config.GM_IMPORT_TOKEN)
+      || (config.MIGRATION_GITHUB_OIDC_ENABLED && await verifyGithubMigrationOidcToken(supplied));
+    if (!authorized || !store.importGmCatalogRecords) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
     }
     const { datasetId, records, complete } = gmCatalogImportSchema.parse(request.body);
@@ -492,6 +513,29 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   };
   const migrationUnavailable = (reply: { code: (status: number) => { send: (payload: unknown) => unknown } }) =>
     reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
+
+  app.get('/internal/migration/media-upload-target', async (request, reply) => {
+    const token = request.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (!(await verifyGithubMediaMigrationOidcToken(token))) {
+      return migrationUnavailable(reply);
+    }
+    if (!config.AZURE_STORAGE_ACCOUNT_NAME
+      || !config.GM_CATALOG_MEDIA_CONTAINER
+      || !config.GM_CATALOG_MEDIA_UPLOAD_SAS) {
+      return reply.code(503).send({
+        error: { code: 'MEDIA_UPLOAD_NOT_CONFIGURED', message: 'media upload target is not configured' }
+      });
+    }
+    const containerUrl = new URL(
+      `https://${config.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${config.GM_CATALOG_MEDIA_CONTAINER}`
+    );
+    containerUrl.search = config.GM_CATALOG_MEDIA_UPLOAD_SAS.replace(/^\?/, '');
+    return reply.header('cache-control', 'no-store').send({
+      containerUrl: containerUrl.toString(),
+      blobPrefix: config.GM_CATALOG_MEDIA_PREFIX.replace(/^\/+|\/+$/g, ''),
+      pageRange: { first: 100001, last: 235000 }
+    });
+  });
 
   app.get('/internal/migration/manifest', async (request, reply) => {
     if (!(await migrationAuthorized(request.headers.authorization)) || !store.getMigrationManifest) {

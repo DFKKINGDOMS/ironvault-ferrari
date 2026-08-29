@@ -1,0 +1,104 @@
+name: Validate PartQuill GM catalog dump
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-partquill-gm-catalog-validate.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Download and validate the staged catalog dump
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          ACCOUNT="pqdata50230827"
+          CONTAINER="partquill-gm-catalog"
+          BLOB="staging/PartQuill_GM_PostgreSQL_Import.sql.gz"
+          mkdir -p gm-validation
+
+          KEY=$(az storage account keys list \
+            --resource-group "$RG" \
+            --account-name "$ACCOUNT" \
+            --query '[0].value' \
+            --output tsv)
+          echo "::add-mask::$KEY"
+          az storage blob download \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$CONTAINER" \
+            --name "$BLOB" \
+            --file gm-validation/catalog.sql.gz \
+            --no-progress \
+            --output none
+
+          gzip -t gm-validation/catalog.sql.gz
+          sha256sum gm-validation/catalog.sql.gz | tee gm-validation/catalog.sha256
+          gzip -l gm-validation/catalog.sql.gz | tee gm-validation/gzip-list.txt
+          compressed_bytes=$(stat -c '%s' gm-validation/catalog.sql.gz)
+          uncompressed_lines=$(gzip -dc gm-validation/catalog.sql.gz | wc -l)
+
+          set +o pipefail
+          gzip -dc gm-validation/catalog.sql.gz \
+            | grep -E '^(BEGIN;|COMMIT;|CREATE TABLE|COPY |INSERT INTO|TRUNCATE |SET )' \
+            | head -n 200 > gm-validation/sql-structure.txt
+          gzip -dc gm-validation/catalog.sql.gz \
+            | grep -m 5 -F '10110988' > gm-validation/part-10110988.txt || true
+          set -o pipefail
+
+          copy_rows=$(gzip -dc gm-validation/catalog.sql.gz | awk '
+            /^COPY .*gm_catalog_parts.* FROM stdin;$/ { inside=1; found=1; next }
+            inside && $0 == "\\." { inside=0; next }
+            inside { count++ }
+            END { if (found) print count+0; else print 0 }
+          ')
+          insert_rows=$(gzip -dc gm-validation/catalog.sql.gz | grep -c '^INSERT INTO .*gm_catalog_parts' || true)
+          part_hits=$(wc -l < gm-validation/part-10110988.txt)
+
+          {
+            echo "blob=$BLOB"
+            echo "compressed_bytes=$compressed_bytes"
+            echo "uncompressed_lines=$uncompressed_lines"
+            echo "copy_rows=$copy_rows"
+            echo "insert_rows=$insert_rows"
+            echo "part_10110988_hits=$part_hits"
+          } | tee gm-validation/summary.txt
+
+          test "$part_hits" -gt 0
+          test "$copy_rows" -gt 0 -o "$insert_rows" -gt 0
+
+          echo "--- SQL structure"
+          cat gm-validation/sql-structure.txt
+          echo "--- 10110988 evidence"
+          cat gm-validation/part-10110988.txt
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-gm-catalog-validation
+          path: |
+            gm-validation/catalog.sha256
+            gm-validation/gzip-list.txt
+            gm-validation/sql-structure.txt
+            gm-validation/part-10110988.txt
+            gm-validation/summary.txt
+          if-no-files-found: warn
+          retention-days: 30

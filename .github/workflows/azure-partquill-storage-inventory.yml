@@ -1,0 +1,183 @@
+name: Inspect PartQuill Azure storage
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-partquill-storage-inventory.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Inventory storage without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          ACCOUNT="pqdata50230827"
+          KEY=$(az storage account keys list \
+            --resource-group "$RG" \
+            --account-name "$ACCOUNT" \
+            --query '[0].value' \
+            --output tsv)
+          echo "::add-mask::$KEY"
+
+          mkdir -p storage-inventory
+          az storage container list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --query '[].name' \
+            --output json > storage-inventory/containers.json
+
+          MEDIA_CONTAINER="partquill-gm-scans"
+          mkdir -p storage-inventory/media-shards
+          printf 'shard\tuploaded\tunavailable\tclassified\n' > storage-inventory/media-shards.tsv
+          for INDEX in $(seq 0 11); do
+            SHARD=$(printf '%02d' "$INDEX")
+            DONE_FILE="storage-inventory/media-shards/shard-${SHARD}.done.tsv"
+            UNAVAILABLE_FILE="storage-inventory/media-shards/shard-${SHARD}.unavailable.tsv"
+            if ! az storage blob download \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "manifests/shards/shard-${SHARD}.done.tsv" \
+              --file "$DONE_FILE" \
+              --overwrite \
+              --only-show-errors \
+              --output none; then
+              : > "$DONE_FILE"
+            fi
+            if ! az storage blob download \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "manifests/shards/shard-${SHARD}.unavailable.tsv" \
+              --file "$UNAVAILABLE_FILE" \
+              --overwrite \
+              --only-show-errors \
+              --output none; then
+              : > "$UNAVAILABLE_FILE"
+            fi
+            UPLOADED=$(wc -l < "$DONE_FILE" | tr -d ' ')
+            UNAVAILABLE=$(wc -l < "$UNAVAILABLE_FILE" | tr -d ' ')
+            printf '%s\t%s\t%s\t%s\n' \
+              "$SHARD" "$UPLOADED" "$UNAVAILABLE" "$((UPLOADED + UNAVAILABLE))" \
+              >> storage-inventory/media-shards.tsv
+          done
+
+          BLOB_COUNT=$(az storage blob list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix gm-scans/pages/ \
+            --num-results '*' \
+            --query "length([?ends_with(name, '/full_page.png')])" \
+            --output tsv)
+          mkdir -p storage-inventory/release-reports
+          mapfile -t RELEASE_REPORT_NAMES < <(az storage blob list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix manifests/release-transfer/ \
+            --num-results '*' \
+            --query '[].name' \
+            --output tsv)
+          for REPORT_NAME in "${RELEASE_REPORT_NAMES[@]}"; do
+            az storage blob download \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$MEDIA_CONTAINER" \
+              --name "$REPORT_NAME" \
+              --file "storage-inventory/release-reports/$(basename "$REPORT_NAME")" \
+              --overwrite \
+              --only-show-errors \
+              --output none
+          done
+          if [ "${#RELEASE_REPORT_NAMES[@]}" -gt 0 ]; then
+            jq -s '{
+              reports:length,
+              expectedPages:(map(.range.expectedPages) | add),
+              uploaded:(map(.uploaded | length) | add),
+              unavailable:(map(.unavailablePages | length) | add),
+              classified:((map(.uploaded | length) | add) + (map(.unavailablePages | length) | add))
+            }' storage-inventory/release-reports/*.json > storage-inventory/release-progress.json
+          else
+            jq -n '{reports:0,expectedPages:0,uploaded:0,unavailable:0,classified:0}' \
+              > storage-inventory/release-progress.json
+          fi
+          az storage blob list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --container-name "$MEDIA_CONTAINER" \
+            --prefix gm-release-archive/partquill-gm-pageids-100001-235000-20260828/ \
+            --num-results '*' \
+            --query '[].{name:name,bytes:properties.contentLength}' \
+            --output json > storage-inventory/release-archive.json
+          jq '{assets:length,bytes:(map(.bytes) | add // 0)}' \
+            storage-inventory/release-archive.json > storage-inventory/release-archive-progress.json
+          UPLOADED=$(awk 'NR > 1 { total += $2 } END { print total + 0 }' storage-inventory/media-shards.tsv)
+          UNAVAILABLE=$(awk 'NR > 1 { total += $3 } END { print total + 0 }' storage-inventory/media-shards.tsv)
+          CLASSIFIED=$((UPLOADED + UNAVAILABLE))
+          jq -n \
+            --argjson expected 135000 \
+            --argjson uploaded "$UPLOADED" \
+            --argjson unavailable "$UNAVAILABLE" \
+            --argjson classified "$CLASSIFIED" \
+            --argjson blobs "$BLOB_COUNT" \
+            --argjson release "$(cat storage-inventory/release-progress.json)" \
+            --argjson archive "$(cat storage-inventory/release-archive-progress.json)" \
+            '{expected:$expected,uploaded:$uploaded,unavailable:$unavailable,classified:$classified,blobs:$blobs,release:$release,archive:$archive}' \
+            | tee storage-inventory/media-progress.json
+          column -t -s $'\t' storage-inventory/media-shards.tsv
+
+          jq -r '.[]' storage-inventory/containers.json | while read -r container; do
+            safe_name=$(printf '%s' "$container" | tr -c 'A-Za-z0-9._-' '_')
+            az storage blob list \
+              --account-name "$ACCOUNT" \
+              --account-key "$KEY" \
+              --container-name "$container" \
+              --num-results 5000 \
+              --query '[].{name:name,bytes:properties.contentLength,lastModified:properties.lastModified}' \
+              --output json > "storage-inventory/blobs-${safe_name}.json"
+          done
+
+          az storage share list \
+            --account-name "$ACCOUNT" \
+            --account-key "$KEY" \
+            --query '[].{name:name,quota:properties.quota}' \
+            --output json > storage-inventory/file-shares.json
+
+          jq -n \
+            --arg account "$ACCOUNT" \
+            --argjson containers "$(cat storage-inventory/containers.json)" \
+            --argjson media "$(cat storage-inventory/media-progress.json)" \
+            '{account:$account,containers:$containers,media:$media}' \
+            | tee storage-inventory/summary.json
+          for inventory in storage-inventory/blobs-*.json storage-inventory/file-shares.json; do
+            echo "--- $inventory"
+            jq . "$inventory"
+          done
+
+      - name: Upload storage inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-storage-inventory
+          path: storage-inventory/
+          if-no-files-found: warn
+          retention-days: 7

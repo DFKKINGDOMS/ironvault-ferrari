@@ -20,6 +20,11 @@ const schema = z
     MIGRATION_GITHUB_OIDC_ENABLED: booleanString,
     GM_CATALOG_SCAN_DIR: z.string().default('data/gm-scans/pages'),
     GM_CATALOG_MEDIA_BASE_URL: z.string().url().optional(),
+    AZURE_STORAGE_ACCOUNT_NAME: z.string().regex(/^[a-z0-9]{3,24}$/).optional(),
+    GM_CATALOG_MEDIA_CONTAINER: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/).optional(),
+    GM_CATALOG_MEDIA_PREFIX: z.string().regex(/^[A-Za-z0-9._/-]*$/).default('gm-scans/pages'),
+    GM_CATALOG_MEDIA_SAS: z.string().min(16).optional(),
+    GM_CATALOG_MEDIA_UPLOAD_SAS: z.string().min(16).optional(),
     PILOT_EPHEMERAL_MODE: booleanString,
     EBAY_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
     EBAY_MODE: z.enum(['mock', 'live']).default('mock'),
@@ -66,6 +71,13 @@ const schema = z
     SELLER_PREVIEW_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8)
   })
   .superRefine((env, context) => {
+    if (Boolean(env.AZURE_STORAGE_ACCOUNT_NAME) !== Boolean(env.GM_CATALOG_MEDIA_CONTAINER)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['GM_CATALOG_MEDIA_CONTAINER'],
+        message: 'Azure catalog media requires both the storage account and container'
+      });
+    }
     if (env.NODE_ENV === 'production') {
       if (!env.TOKEN_ENCRYPTION_KEY) {
         context.addIssue({ code: 'custom', path: ['TOKEN_ENCRYPTION_KEY'], message: 'required in production' });

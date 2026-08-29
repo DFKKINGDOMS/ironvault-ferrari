@@ -3,7 +3,7 @@ name: Azure PartQuill Inventory
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-inventory.yml
   workflow_dispatch:

@@ -3,7 +3,7 @@ name: Check PartQuill Azure app
 on:
   push:
     branches:
-      - partquill-azure-container-app
+      - main
     paths:
       - .github/workflows/azure-partquill-app-check.yml
   workflow_dispatch:
