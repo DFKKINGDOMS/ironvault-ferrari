@@ -291,6 +291,7 @@ type VintageGmShortlistCandidate = {
     manufacturer: string;
     productType: string;
     description: string;
+    identityState: "CATALOG_AND_INVENTORY_ALIGNED" | "INVENTORY_IDENTITY_HELD_FOR_CALLOUT";
     divisions: string[];
     catalogGroup: string | null;
     mappingState: "CURATED_EXACT" | "CATALOG_LINKED_EXACT" | "CATALOG_STATED_EXACT";
@@ -315,7 +316,7 @@ type VintageGmShortlistCandidate = {
 };
 
 type VintageGmShortlist = {
-  schemaVersion: "2026-08-29";
+  schemaVersion: "2026-08-30";
   kind: "VINTAGE_GM_SHORTLIST";
   status: "READY" | "PARTIAL" | "DATA_NOT_LOADED" | "NO_EXACT_MATCHES";
   command: string;
@@ -1401,11 +1402,11 @@ function VintageGmShortlistPanel({
 
     {hasCandidates ? <div className="vintage-candidate-grid">{shortlist.candidates.map((candidate) => <article className="vintage-candidate" key={candidate.partNumber}>
       <div className="vintage-candidate-rank"><b>{String(candidate.rank).padStart(2, "0")}</b><Badge tone={candidate.inventory.scarcityBand === "ONE_IN_SOURCE" ? "orange" : "amber"}>{scarcityLabel(candidate)}</Badge></div>
-      <div className="vintage-candidate-title"><span>GM PART {candidate.partNumber}</span><h3>{candidate.catalog.description}</h3><p>{candidate.inventory.description}</p></div>
+      <div className="vintage-candidate-title"><span>GM PART {candidate.partNumber}</span><h3>{candidate.catalog.description}</h3><p>{candidate.catalog.identityState === "INVENTORY_IDENTITY_HELD_FOR_CALLOUT" ? "Catalog rollup conflict caught — exact row and callout resolve in the held draft." : candidate.inventory.description}</p></div>
       <dl className="vintage-candidate-facts">
         <div><dt>Vintage stock</dt><dd>{candidate.inventory.quantity.toLocaleString()}</dd></div>
         <div><dt>Vintage source price</dt><dd>{sourcePrice(candidate)}</dd></div>
-        <div><dt>GM evidence</dt><dd>{evidenceLabel(candidate)}</dd></div>
+        <div><dt>GM evidence</dt><dd>{evidenceLabel(candidate)}{candidate.catalog.identityState === "INVENTORY_IDENTITY_HELD_FOR_CALLOUT" ? " · identity held" : ""}</dd></div>
         <div><dt>Source pages</dt><dd>{candidate.catalog.sourcePages.length}</dd></div>
       </dl>
       <div className="vintage-catalog-proof"><span><i/><strong>{candidate.catalog.manufacturer}</strong><small>{candidate.catalog.divisions.length ? candidate.catalog.divisions.join(" · ") : "GM division not bounded"}{candidate.catalog.catalogGroup ? ` · Group ${candidate.catalog.catalogGroup}` : ""}</small></span><span><i/><strong>{candidate.catalog.category.categoryName ?? "Category review required"}</strong><small>{candidate.catalog.category.categoryId ? `Official leaf ${candidate.catalog.category.categoryId}` : "No category ID enters a draft until reviewed"}</small></span></div>

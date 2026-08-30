@@ -13,6 +13,20 @@ import type {
 const DEFAULT_SHORTLIST_COUNT = 10;
 const MAX_SHORTLIST_COUNT = 25;
 const restraintPattern = /\b(?:air\s*bag|airbag|srs|inflator|pretensioner|supplemental\s+restraint|seat\s*belt\s*(?:retractor|pretensioner))\b/i;
+const identityStopWords = new Set(['and', 'for', 'from', 'general', 'gm', 'motor', 'motors', 'oem', 'part', 'the', 'with']);
+const identityAliases: Readonly<Record<string, string>> = {
+  asm: 'assembly',
+  assy: 'assembly',
+  brkt: 'bracket',
+  cyl: 'cylinder',
+  frm: 'frame',
+  hsg: 'housing',
+  pmp: 'pump',
+  ret: 'retainer',
+  shft: 'shaft',
+  strg: 'steering',
+  strtr: 'starter'
+};
 
 function requestedCount(command: string): number {
   const explicit = command.match(/\b(?:give|show|find|pick|recommend|list)(?:\s+me)?(?:\s+(?:a|the))?(?:\s+list\s+of)?\s+(\d{1,2})\b/i)?.[1]
@@ -58,6 +72,19 @@ function titleGuard(value: string): string {
   return normalized.slice(0, 80).replace(/\s+\S*$/, '').trim();
 }
 
+function identityTokens(value: string): Set<string> {
+  return new Set((value.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .map((token) => identityAliases[token] ?? token)
+    .filter((token) => token.length >= 3 && !identityStopWords.has(token)));
+}
+
+function catalogAndInventoryIdentityAlign(catalogIdentity: string, inventoryIdentity: string): boolean {
+  const catalogTokens = identityTokens(catalogIdentity);
+  const inventoryTokens = identityTokens(inventoryIdentity);
+  if (!catalogTokens.size || !inventoryTokens.size) return false;
+  return [...inventoryTokens].some((token) => catalogTokens.has(token));
+}
+
 function candidateFromMatch(
   match: VintageGmCatalogMatchPool['matches'][number],
   rank: number
@@ -77,11 +104,26 @@ function candidateFromMatch(
     ...catalog.applications.flatMap((application) => [application.partName, application.description, application.componentFamily])
   ].filter(Boolean).join(' '))) return null;
 
-  const catalogDescription = cleanTitlePart(catalog.description ?? catalog.productType ?? 'Automotive Part');
-  const inventoryDescription = cleanTitlePart(match.inventory.descriptions[0] ?? catalogDescription);
-  const intelligence = buildCatalogListingIntelligence(catalog);
+  const rawCatalogDescription = cleanTitlePart(catalog.description ?? catalog.productType ?? 'Automotive Part');
+  const inventoryDescription = cleanTitlePart(match.inventory.descriptions[0] ?? rawCatalogDescription);
+  const identityAligned = catalogAndInventoryIdentityAlign(rawCatalogDescription, inventoryDescription);
+  // Exact part-number equality proves the crosswalk, but it does not prove that
+  // the catalog rollup chose the right neighboring row. When the two source
+  // identities disagree, show the Vintage identity and withhold the rollup's
+  // group/page/category until the held draft resolves an exact spatial callout.
+  const catalogDescription = identityAligned ? rawCatalogDescription : inventoryDescription;
+  const listingCatalog = identityAligned
+    ? catalog
+    : (({ ebayCategory: _staleCategory, ...catalogWithoutEmbeddedCategory }) => ({
+        ...catalogWithoutEmbeddedCategory,
+        description: catalogDescription,
+        productType: catalogDescription,
+        catalogGroup: null,
+        applications: []
+      }))(catalog);
+  const intelligence = buildCatalogListingIntelligence(listingCatalog);
   const suggestedTitle = titleGuard(`GM ${match.inventory.partNumber} ${catalogDescription}`);
-  const evidencePage = mapping.sourcePages[0] ?? null;
+  const evidencePage = identityAligned ? mapping.sourcePages[0] ?? null : null;
   return {
     rank,
     partNumber: match.inventory.partNumber,
@@ -102,10 +144,13 @@ function candidateFromMatch(
     },
     catalog: {
       manufacturer: catalog.manufacturer || 'General Motors',
-      productType: cleanTitlePart(catalog.productType ?? catalogDescription),
+      productType: cleanTitlePart(listingCatalog.productType ?? catalogDescription),
       description: catalogDescription,
+      identityState: identityAligned
+        ? 'CATALOG_AND_INVENTORY_ALIGNED'
+        : 'INVENTORY_IDENTITY_HELD_FOR_CALLOUT',
       divisions: catalog.divisions,
-      catalogGroup: catalog.catalogGroup,
+      catalogGroup: listingCatalog.catalogGroup,
       mappingState: mapping.state as VintageGmShortlistCandidate['catalog']['mappingState'],
       sourcePages: mapping.sourcePages,
       occurrenceCount: catalog.rollup.occurrenceCount,
@@ -153,7 +198,7 @@ export function buildVintageGmShortlist(
         ? 'PARTIAL' as const
         : 'READY' as const;
   return {
-    schemaVersion: '2026-08-29',
+    schemaVersion: '2026-08-30',
     kind: 'VINTAGE_GM_SHORTLIST',
     status,
     command,

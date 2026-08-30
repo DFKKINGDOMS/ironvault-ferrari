@@ -104,6 +104,7 @@ export interface VintageGmShortlistCandidate {
     manufacturer: string;
     productType: string;
     description: string;
+    identityState: 'CATALOG_AND_INVENTORY_ALIGNED' | 'INVENTORY_IDENTITY_HELD_FOR_CALLOUT';
     divisions: string[];
     catalogGroup: string | null;
     mappingState: Extract<GmCatalogMappingState, 'CURATED_EXACT' | 'CATALOG_LINKED_EXACT' | 'CATALOG_STATED_EXACT'>;
@@ -128,7 +129,7 @@ export interface VintageGmShortlistCandidate {
 }
 
 export interface VintageGmShortlist {
-  schemaVersion: '2026-08-29';
+  schemaVersion: '2026-08-30';
   kind: 'VINTAGE_GM_SHORTLIST';
   status: VintageGmShortlistStatus;
   command: string;

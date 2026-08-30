@@ -146,6 +146,44 @@ describe('Vintage GM evidence shortlist', () => {
     expect(result.noExternalRequestMade).toBe(true);
   });
 
+  it('holds a conflicting catalog rollup instead of presenting the neighboring row as the part identity', () => {
+    const staleRollup: GmCatalogPart = {
+      ...gm5459066,
+      partNumber: '9438315',
+      productType: 'Bolt',
+      description: 'Clamp Spring Band',
+      catalogGroup: '6.326',
+      identityEvidence: {
+        method: 'gmpartswiki_exact_part_link',
+        verificationState: 'catalog_stated',
+        sourcePages: [103522, 104988]
+      }
+    };
+    const pool: VintageGmCatalogMatchPool = {
+      dataset: completedDataset,
+      matches: [match(staleRollup, inventoryRecord({
+        sourceRow: 688_462,
+        sku: '9438315',
+        partNumber: '9438315',
+        brand: 'GM FACTORY MOTOR PARTS',
+        description: 'HOSE'
+      }))]
+    };
+
+    const [candidate] = buildVintageGmShortlist('Give me 10 rare Vintage GM parts', pool).candidates;
+    expect(candidate).toMatchObject({
+      partNumber: '9438315',
+      catalog: {
+        description: 'Hose',
+        productType: 'Hose',
+        catalogGroup: null,
+        evidenceViewUrl: null,
+        identityState: 'INVENTORY_IDENTITY_HELD_FOR_CALLOUT'
+      },
+      listing: { suggestedTitle: 'GM 9438315 Hose' }
+    });
+  });
+
   it('preserves every strict-GM row while holding an irreversible scientific-notation SKU', async () => {
     const store = new MemoryStore();
     await store.importGmCatalogRecords([gm5459066], { datasetId: 'gm-test', complete: true });
