@@ -14,6 +14,9 @@ import type {
 
 const MAX_SCAN_BYTES = 20 * 1024 * 1024;
 const DETECTOR_TIMEOUT_MS = 75_000;
+const MAX_PAGE_CANDIDATES = 32;
+const MAX_DETECTOR_ATTEMPTS = 6;
+const PAGE_LOAD_CONCURRENCY = 6;
 const ORANGE = '#d9571b';
 const ORANGE_BRIGHT = '#f97316';
 
@@ -148,16 +151,100 @@ async function runDetector(scan: Buffer, partNumber: string): Promise<z.infer<ty
   }));
 }
 
-function catalogPageCandidates(catalog: GmCatalogPart): number[] {
-  const pages = new Set<number>();
-  for (const diagram of [...catalog.diagrams].sort((left, right) => Number(right.isPrimary) - Number(left.isPrimary))) {
-    pages.add(diagram.pageId);
+function sampledPages(pages: number[], limit: number): number[] {
+  const unique = [...new Set(pages.filter((pageId) => Number.isInteger(pageId) && pageId > 0))];
+  if (unique.length <= limit) return unique;
+
+  // Preserve the earliest certified occurrences (where catalog navigation tends
+  // to land) and spread the remainder across the complete evidence range. This
+  // avoids both the old first-three-page blind spot and an unbounded OCR fanout.
+  const leadingCount = Math.min(16, limit);
+  const selected = new Set(unique.slice(0, leadingCount));
+  const remainingSlots = limit - selected.size;
+  for (let index = 0; index < remainingSlots; index += 1) {
+    const position = Math.round((index + 1) * (unique.length - 1) / (remainingSlots + 1));
+    selected.add(unique[position]!);
   }
-  for (const application of [...catalog.applications].sort((left, right) => right.sourcePageId - left.sourcePageId)) {
-    pages.add(application.sourcePageId);
+  for (let index = unique.length - 1; selected.size < limit && index >= 0; index -= 1) {
+    selected.add(unique[index]!);
   }
-  if (catalog.rollup.representativePageId) pages.add(catalog.rollup.representativePageId);
-  return [...pages].slice(0, 3);
+  return [...selected];
+}
+
+export function gmCatalogCalloutPageCandidates(catalog: GmCatalogPart): number[] {
+  const pages: number[] = [];
+  for (const diagram of [...catalog.diagrams].sort((left, right) =>
+    Number(right.exactPartDepiction) - Number(left.exactPartDepiction)
+    || Number(Boolean(right.calloutLabel?.match(/^\d{1,3}$/))) - Number(Boolean(left.calloutLabel?.match(/^\d{1,3}$/)))
+    || Number(right.isPrimary) - Number(left.isPrimary)
+    || right.confidence - left.confidence
+    || left.pageId - right.pageId
+  )) pages.push(diagram.pageId);
+  pages.push(...(catalog.identityEvidence?.sourcePages ?? []));
+  pages.push(...[...catalog.applications]
+    .sort((left, right) => right.confidence - left.confidence || left.sourcePageId - right.sourcePageId)
+    .map((application) => application.sourcePageId));
+  if (catalog.rollup.representativePageId) pages.push(catalog.rollup.representativePageId);
+  return sampledPages(pages, MAX_PAGE_CANDIDATES);
+}
+
+export async function scoreGmCalloutPageLayout(scan: Buffer): Promise<number> {
+  const { data, info } = await sharp(scan)
+    .resize({ width: 512, withoutEnlargement: true })
+    .flatten({ background: '#ffffff' })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const topRows = Math.max(1, Math.floor(info.height * 0.68));
+  const rowInk: number[] = [];
+  let darkPixels = 0;
+  for (let row = 0; row < topRows; row += 1) {
+    let rowDark = 0;
+    const start = row * info.width;
+    for (let column = 0; column < info.width; column += 1) {
+      if (data[start + column]! < 145) rowDark += 1;
+    }
+    darkPixels += rowDark;
+    rowInk.push(rowDark / info.width);
+  }
+  const density = darkPixels / (topRows * info.width);
+  const activeRows = rowInk.filter((ratio) => ratio > 0.02).length / topRows;
+  const orderedRows = [...rowInk].sort((left, right) => left - right);
+  const highInkRow = orderedRows[Math.min(orderedRows.length - 1, Math.floor(orderedRows.length * 0.9))] ?? 0;
+
+  // Illustration pages spread relatively light line art over most of the page;
+  // dense parts-only tables and half-empty continuation pages score lower.
+  return activeRows / Math.max(0.015, density + 0.015) - highInkRow * 8;
+}
+
+async function rankedCandidateScans(
+  config: AppConfig,
+  catalog: GmCatalogPart
+): Promise<Array<{ pageId: number; scan: Buffer }>> {
+  const pageIds = gmCatalogCalloutPageCandidates(catalog);
+  const loaded: Array<{ pageId: number; scan: Buffer; score: number }> = [];
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(PAGE_LOAD_CONCURRENCY, pageIds.length) }, async () => {
+    while (cursor < pageIds.length) {
+      const pageId = pageIds[cursor++]!;
+      const scan = await loadGmCatalogPage(config, pageId);
+      if (!scan) continue;
+      const score = await scoreGmCalloutPageLayout(scan).catch(() => 0);
+      loaded.push({ pageId, scan, score });
+    }
+  });
+  await Promise.all(workers);
+  const exactDiagramPages = new Set(catalog.diagrams
+    .filter((diagram) => diagram.exactPartDepiction && diagram.calloutLabel?.match(/^\d{1,3}$/))
+    .map((diagram) => diagram.pageId));
+  return loaded
+    .sort((left, right) =>
+      Number(exactDiagramPages.has(right.pageId)) - Number(exactDiagramPages.has(left.pageId))
+      || right.score - left.score
+      || left.pageId - right.pageId
+    )
+    .slice(0, MAX_DETECTOR_ATTEMPTS)
+    .map(({ pageId, scan }) => ({ pageId, scan }));
 }
 
 function directDiagramEvidence(catalog: GmCatalogPart): GmCatalogCalloutEvidence | undefined {
@@ -195,9 +282,7 @@ export async function resolveGmCatalogCallout(config: AppConfig, catalog: GmCata
   const pending = (async () => {
     const direct = directDiagramEvidence(catalog);
     if (direct) return direct;
-    for (const pageId of catalogPageCandidates(catalog)) {
-      const scan = await loadGmCatalogPage(config, pageId);
-      if (!scan) continue;
+    for (const { pageId, scan } of await rankedCandidateScans(config, catalog)) {
       const detected = await runDetector(scan, catalog.partNumber);
       if (detected?.state !== 'EXACT_ROW_AND_CALLOUT' || !detected.calloutId || !detected.rowBox || !detected.calloutBoxes.length) continue;
       return {
