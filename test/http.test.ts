@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/http/app.js';
 import { harness, validPayload } from './helpers.js';
 import { registerCatalogImage } from '../src/catalog/image-proxy.js';
+import { clearGmCalloutCaches } from '../src/catalog/gm-callout.js';
 import type { Store } from '../src/store/store.js';
 import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
 
@@ -13,6 +14,7 @@ const gm5459066 = JSON.parse(
 
 let app: FastifyInstance | undefined;
 afterEach(async () => {
+  clearGmCalloutCaches();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await app?.close();
@@ -67,7 +69,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.20.0',
+      version: '0.21.0',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       defaults: {
@@ -111,6 +113,74 @@ describe('HTTP contract', () => {
       media: { state: 'SELLER_PHOTO_REQUIRED' },
       gates: { publicEbayWrite: 'DISABLED', ebayHandoffUrl: 'https://www.ebay.com/' },
       noExternalRequestMade: true
+    });
+  });
+
+  it('serves a locked orange primary image for an exact row-to-callout mapping', async () => {
+    const h = harness({ ALLOW_EBAY_WRITES: false });
+    const exactCatalog: GmCatalogPart = {
+      ...gm5459066,
+      partNumber: '9438315',
+      productType: 'HOSE',
+      description: 'HOSE, FUEL-OIL EVAP',
+      catalogGroup: '8.962',
+      diagrams: [{
+        ...gm5459066.diagrams[0]!,
+        pageId: 2145,
+        calloutLabel: '9',
+        displayRotationDegrees: 0,
+        evidenceBox: {
+          coordinate_space: 'source_image',
+          rotation_degrees: 0,
+          left: 400,
+          top: 300,
+          width: 90,
+          height: 90,
+          image_width: 3300,
+          image_height: 2550
+        },
+        relationshipState: 'exact_row_spatial_callout',
+        exactPartDepiction: true,
+        isPrimary: true,
+        confidence: 0.97
+      }]
+    };
+    await h.store.importGmCatalogRecords([exactCatalog], { datasetId: 'gm-callout-http-test', complete: true });
+    app = await buildApp(h);
+
+    const metadata = await app.inject({ method: 'GET', url: '/v1/gm-catalog/parts/9438315/callout' });
+    expect(metadata.statusCode).toBe(200);
+    expect(metadata.json()).toMatchObject({
+      state: 'EXACT_ROW_AND_CALLOUT',
+      partNumber: '9438315',
+      pageId: 2145,
+      calloutId: '9'
+    });
+
+    const image = await app.inject({ method: 'GET', url: '/v1/gm-catalog/parts/9438315/callout-image' });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers['content-type']).toContain('image/png');
+    expect(image.headers['x-partquill-callout-id']).toBe('9');
+    expect(image.rawPayload.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+
+    const preview = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'List part 9438315 for $9.99' }
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().preview).toMatchObject({
+      listing: {
+        handlingTime: '3 business days',
+        aspects: { 'Callout Ref ID': '9' }
+      },
+      media: {
+        primaryListingImage: {
+          url: '/v1/gm-catalog/parts/9438315/callout-image',
+          calloutId: '9'
+        }
+      },
+      gates: { publicEbayWrite: 'DISABLED' }
     });
   });
 

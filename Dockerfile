@@ -14,6 +14,10 @@ RUN npm run build
 
 FROM node:22-bookworm-slim AS runtime
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-numpy python3-pil tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
@@ -30,6 +34,7 @@ RUN npm ci --omit=dev \
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/data ./data
 COPY --from=build --chown=node:node /app/migrations ./migrations
+COPY --from=build --chown=node:node /app/scripts/detect-gm-callout.py ./scripts/detect-gm-callout.py
 
 USER node
 

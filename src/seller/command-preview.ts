@@ -43,7 +43,7 @@ export interface ListingCommandIntent {
 }
 
 export interface SellerCommandPreview {
-  schemaVersion: '2026-08-28';
+  schemaVersion: '2026-08-30';
   status: CommandPreviewStatus;
   command: string;
   intent: ListingCommandIntent;
@@ -56,7 +56,7 @@ export interface SellerCommandPreview {
     category: string | null;
     categoryId: string | null;
     aspects: Record<string, string>;
-    handlingTime: '1 business day';
+    handlingTime: '3 business days';
     returns: '30 days · buyer-paid';
     international: 'Held until origin is verified';
   };
@@ -87,6 +87,7 @@ export interface SellerCommandPreview {
       pageId: number;
       label: string;
       viewUrl: string;
+      listingImageUrl: string | null;
       imageRef: string | null;
       imageBlobKey: string | null;
       callout: string | null;
@@ -97,6 +98,14 @@ export interface SellerCommandPreview {
       displayRotationDegrees: number | null;
       relationshipState: string;
     }>;
+    primaryListingImage: {
+      url: string;
+      name: string;
+      pageId: number;
+      calloutId: string;
+      source: 'FIRST_PARTY_CATALOG_CALLOUT';
+      rightsState: 'FIRST_PARTY_CATALOG_EVIDENCE';
+    } | null;
   };
   intelligence: CatalogListingIntelligence | null;
   tariff: TariffIntelligence | null;
@@ -401,17 +410,37 @@ function catalogFitmentApplications(catalog: GmCatalogPart): SellerCommandPrevie
 }
 
 function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media']['catalogReferences'] {
+  const calloutEvidence = catalog.calloutEvidence;
+  const calloutReference = calloutEvidence ? [{
+    kind: 'diagram' as const,
+    pageId: calloutEvidence.pageId,
+    label: `GM illustration · exact callout ${calloutEvidence.calloutId}`,
+    viewUrl: calloutEvidence.annotatedImageUrl,
+    listingImageUrl: calloutEvidence.annotatedImageUrl,
+    imageRef: `GM${calloutEvidence.pageId}-CALLOUT-${calloutEvidence.calloutId}`,
+    imageBlobKey: null,
+    callout: calloutEvidence.calloutId,
+    confidence: Math.min(calloutEvidence.rowConfidence, ...calloutEvidence.calloutBoxes.map((box) => box.confidence ?? 0.75)),
+    exactPartDepiction: true,
+    primary: true,
+    // The primary asset is already rendered with every matching callout.
+    // Avoid drawing a second browser-side ring over the first occurrence.
+    evidenceBox: null,
+    displayRotationDegrees: null,
+    relationshipState: 'exact_row_spatial_callout'
+  }] : [];
   const rowReferences = catalog.applications.map((application, index) => ({
     kind: 'catalog-row' as const,
     pageId: application.sourcePageId,
     label: `${application.catalogTitle ?? 'GM catalog'} · Group ${application.catalogGroup ?? 'not decoded'}`,
     viewUrl: `/v1/gm-catalog/pages/${application.sourcePageId}/image`,
+    listingImageUrl: null,
     imageRef: application.imageRef,
     imageBlobKey: application.imageBlobKey,
     callout: catalog.partNumber,
     confidence: application.confidence,
     exactPartDepiction: true,
-    primary: catalog.diagrams.length === 0 && index === 0,
+    primary: !calloutEvidence && catalog.diagrams.length === 0 && index === 0,
     evidenceBox: application.evidenceBox,
     displayRotationDegrees: null,
     relationshipState: 'catalog_stated_row'
@@ -421,17 +450,19 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
     pageId: diagram.pageId,
     label: diagram.title ?? `GM illustration · Group ${diagram.catalogGroup ?? 'not decoded'}`,
     viewUrl: `/v1/gm-catalog/pages/${diagram.pageId}/image`,
+    listingImageUrl: null,
     imageRef: diagram.imageRef,
     imageBlobKey: diagram.imageBlobKey,
     callout: diagram.calloutLabel,
     confidence: diagram.confidence,
     exactPartDepiction: diagram.exactPartDepiction,
-    primary: diagram.isPrimary,
+    primary: !calloutEvidence && diagram.isPrimary,
     evidenceBox: diagram.evidenceBox,
     displayRotationDegrees: diagram.displayRotationDegrees,
     relationshipState: diagram.relationshipState
   }));
   const references: SellerCommandPreview['media']['catalogReferences'] = [
+    ...calloutReference,
     ...diagramReferences,
     ...rowReferences
   ];
@@ -442,6 +473,7 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
       pageId,
       label: `GM catalog exact part-number occurrence · Group ${catalog.catalogGroup ?? 'not decoded'}`,
       viewUrl: `/v1/gm-catalog/pages/${pageId}/image`,
+      listingImageUrl: null,
       imageRef: catalog.rollup.representativeImageRef,
       imageBlobKey: catalog.rollup.representativeImageRef
         ? `gm-scans/pages/${String(pageId).padStart(6, '0')}/full_page.png`
@@ -449,7 +481,7 @@ function catalogReferences(catalog: GmCatalogPart): SellerCommandPreview['media'
       callout: catalog.partNumber,
       confidence: catalog.rollup.bestLayoutConfidence,
       exactPartDepiction: true,
-      primary: diagramReferences.length === 0,
+      primary: !calloutEvidence && diagramReferences.length === 0,
       evidenceBox: null,
       displayRotationDegrees: null,
       relationshipState: 'exact_part_number_occurrence'
@@ -669,14 +701,15 @@ export function buildSellerCommandPreview(
           'California Prop 65 Warning': '',
           ...(compatibleBrand ? { 'Compatible Vehicle Brand': compatibleBrand } : {}),
           ...(identity.productType ? { Type: identity.productType } : {}),
-          ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {})
+          ...(catalogMatch.catalogGroup ? { 'GM Catalog Group': catalogMatch.catalogGroup } : {}),
+          ...(catalogMatch.calloutEvidence ? { 'Callout Ref ID': catalogMatch.calloutEvidence.calloutId } : {})
         }
     : intent.partNumber
       ? { 'Manufacturer Part Number': intent.partNumber }
       : {};
 
   const previewWithoutFingerprint = {
-    schemaVersion: '2026-08-28' as const,
+    schemaVersion: '2026-08-30' as const,
     status,
     command,
     intent,
@@ -688,14 +721,23 @@ export function buildSellerCommandPreview(
       // inventory key. A previous prototype prefix caused cross-draft leakage.
       sku: identity.manufacturerPartNumber ?? intent.partNumber,
       description: catalogMatch
-        ? `${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'General Motors catalog part')}, part ${identity.manufacturerPartNumber}. GM catalog group ${catalogMatch.catalogGroup ?? 'not decoded'}; ${catalogYears(catalogMatch) ? `catalog-stated application ${catalogYears(catalogMatch)}` : 'application year not decoded'}. Quantity ${intent.quantity}. Seller must confirm the exact physical item, condition and contents before publication.`
+        ? [
+            `General Motors part ${identity.manufacturerPartNumber}`,
+            `Description: ${properCaseCatalogText(catalogMatch.description ?? catalogMatch.productType ?? 'Automotive part')}`,
+            catalogMatch.calloutEvidence ? `Callout Ref ID: ${catalogMatch.calloutEvidence.calloutId}` : null,
+            `GM catalog group: ${catalogMatch.catalogGroup ?? 'not decoded'}`,
+            '',
+            `Compatibility: ${fitmentApplications.length} catalog application row${fitmentApplications.length === 1 ? '' : 's'} are available in the structured eBay compatibility review${catalogYears(catalogMatch) ? ` for catalog-stated years ${catalogYears(catalogMatch)}` : ''}. The full row set is not repeated in this description.`,
+            `Verify OEM part number ${identity.manufacturerPartNumber} against the physical item and use the structured compatibility table for exact vehicle details.`,
+            `Quantity: ${intent.quantity}. The seller must confirm condition, package contents and the actual item before publication.`
+          ].filter((line): line is string => line !== null).join('\n')
         : buildDescription(intent, identity.productType),
       category: isIllustrativeFixture
         ? 'Air & Fuel Delivery › Filters'
         : intelligence?.category.categoryPath ?? intelligence?.category.categoryName ?? null,
       categoryId: intelligence?.category.categoryId ?? null,
       aspects,
-      handlingTime: '1 business day' as const,
+      handlingTime: '3 business days' as const,
       returns: '30 days · buyer-paid' as const,
       international: 'Held until origin is verified' as const
     },
@@ -758,7 +800,15 @@ export function buildSellerCommandPreview(
               { id: 'label', label: 'Part-number label', detail: 'Recommended when a readable label exists.', required: false }
             ],
       analysisState: 'NOT_UPLOADED' as const,
-      catalogReferences: catalogMatch ? catalogReferences(catalogMatch) : []
+      catalogReferences: catalogMatch ? catalogReferences(catalogMatch) : [],
+      primaryListingImage: catalogMatch?.calloutEvidence ? {
+        url: catalogMatch.calloutEvidence.annotatedImageUrl,
+        name: `${catalogMatch.partNumber}_callout_${catalogMatch.calloutEvidence.calloutId}.png`,
+        pageId: catalogMatch.calloutEvidence.pageId,
+        calloutId: catalogMatch.calloutEvidence.calloutId,
+        source: 'FIRST_PARTY_CATALOG_CALLOUT' as const,
+        rightsState: 'FIRST_PARTY_CATALOG_EVIDENCE' as const
+      } : null
     },
     intelligence,
     tariff,
@@ -827,7 +877,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.20.0',
+    version: '0.21.0',
     mode: 'private-pilot',
     backendConnected: true,
     ebay: {
@@ -857,7 +907,7 @@ export function buildSellerUiBootstrap(config: AppConfig) {
     defaults: {
       listingFormat: 'Buy It Now · GTC',
       minimumPrice: '0.99',
-      handlingTime: '1 business day',
+      handlingTime: '3 business days',
       handlingTimes: [
         { days: 0, label: 'Same business day' },
         { days: 1, label: '1 business day' },

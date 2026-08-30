@@ -158,6 +158,55 @@ describe('one-command seller preview', () => {
     expect(preview.issues.map((issue) => issue.code)).not.toContain('CATALOG_LOOKUP_REQUIRED');
   });
 
+  it('makes the exact orange callout asset primary and keeps buyer text concise', () => {
+    const preview = buildSellerCommandPreview('List part 9438315 for $9.99', {
+      ...gm5459066,
+      partNumber: '9438315',
+      productType: 'HOSE',
+      description: 'HOSE, FUEL-OIL EVAP',
+      catalogGroup: '8.962',
+      calloutEvidence: {
+        state: 'EXACT_ROW_AND_CALLOUT',
+        partNumber: '9438315',
+        pageId: 104988,
+        calloutId: '9',
+        catalogGroup: '8.962',
+        description: 'HOSE, FUEL-OIL EVAP',
+        rowBox: { left: 200, top: 2800, width: 1900, height: 60, image_width: 2528, image_height: 3520 },
+        rowConfidence: 0.92,
+        calloutBoxes: [
+          { left: 2052, top: 187, width: 88, height: 88, image_width: 2528, image_height: 3520, confidence: 0.76 },
+          { left: 839, top: 2060, width: 88, height: 88, image_width: 2528, image_height: 3520, confidence: 0.95 }
+        ],
+        sourceImageUrl: '/v1/gm-catalog/pages/104988/image',
+        annotatedImageUrl: '/v1/gm-catalog/parts/9438315/callout-image',
+        method: 'CERTIFIED_ROW_SPATIAL_OCR'
+      }
+    });
+
+    expect(preview.listing.handlingTime).toBe('3 business days');
+    expect(preview.listing.aspects).toMatchObject({
+      'Callout Ref ID': '9',
+      'GM Catalog Group': '8.962'
+    });
+    expect(preview.listing.description).toContain('Description: Hose, Fuel-Oil Evap');
+    expect(preview.listing.description).toContain('Callout Ref ID: 9');
+    expect(preview.listing.description).not.toContain('CLAMP, SPRG BAND');
+    expect(preview.listing.description.split('\n')).toHaveLength(8);
+    expect(preview.media.primaryListingImage).toMatchObject({
+      url: '/v1/gm-catalog/parts/9438315/callout-image',
+      calloutId: '9',
+      source: 'FIRST_PARTY_CATALOG_CALLOUT'
+    });
+    expect(preview.media.catalogReferences[0]).toMatchObject({
+      primary: true,
+      listingImageUrl: '/v1/gm-catalog/parts/9438315/callout-image',
+      callout: '9',
+      evidenceBox: null
+    });
+    expect(preview.tariff?.hsCode).toMatch(/^\d{6}$/);
+  });
+
   it('preserves the supplied 602698 catalog row with its full fitment qualifier', () => {
     const preview = buildSellerCommandPreview('List part 602698 for $49.99', gm602698);
     expect(preview.identity).toMatchObject({

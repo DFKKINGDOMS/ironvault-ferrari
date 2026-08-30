@@ -41,6 +41,11 @@ import {
 } from '../security/github-migration-oidc.js';
 import { loadAzureCatalogScan } from '../catalog/azure-blob-media.js';
 import {
+  loadGmCatalogPage,
+  renderGmCalloutImage,
+  resolveGmCatalogCallout
+} from '../catalog/gm-callout.js';
+import {
   buildVintageGmShortlist,
   isVintageGmShortlistCommand,
   vintageGmShortlistRequestedCount
@@ -252,7 +257,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.url.startsWith('/internal/migration/')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
-    if (request.method === 'GET' && request.url.startsWith('/v1/gm-catalog/pages/')) return;
+    if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/gm-catalog/pages/')) return;
+    if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/gm-catalog/parts/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
       request.url.startsWith('/v1/image-studio/') &&
@@ -284,7 +290,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.20.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.21.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -397,7 +403,25 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         ? await store.lookupGmCatalogPart?.(intent.partNumber)
         : undefined;
       const mapping = assessGmCatalogMapping(rawGmCatalog, intent.partNumber);
-      const gmCatalog = normalizeGmCatalogPart(rawGmCatalog, intent.partNumber);
+      let gmCatalog = normalizeGmCatalogPart(rawGmCatalog, intent.partNumber);
+      if (gmCatalog) {
+        try {
+          const calloutEvidence = await resolveGmCatalogCallout(config, gmCatalog);
+          if (calloutEvidence) {
+            const correctedDescription = calloutEvidence.description ?? gmCatalog.description;
+            const correctedProductType = correctedDescription?.split(/[,;(]/, 1)[0]?.trim() || gmCatalog.productType;
+            gmCatalog = {
+              ...gmCatalog,
+              calloutEvidence,
+              description: correctedDescription,
+              productType: correctedProductType,
+              catalogGroup: calloutEvidence.catalogGroup ?? gmCatalog.catalogGroup
+            };
+          }
+        } catch (error) {
+          request.log.warn({ error, partNumber: gmCatalog.partNumber }, 'GM callout detection unavailable; catalog evidence remains held');
+        }
+      }
       let intelligence = gmCatalog ? buildCatalogListingIntelligence(gmCatalog) : undefined;
       if (gmCatalog && intelligence && ebayTaxonomy) {
         try {
@@ -547,6 +571,46 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     }
     return reply.code(404).send({ error: { code: 'CATALOG_SCAN_NOT_AVAILABLE', message: 'catalog scan is not available in PartQuill media storage' } });
   });
+  app.get('/v1/gm-catalog/parts/:partNumber/callout', async (request, reply) => {
+    const permit = sellerPreviewGuard.acquire(request.ip);
+    try {
+      const { partNumber } = ebayReferenceParams.parse(request.params);
+      const rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
+      const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
+      if (!catalog) return reply.code(404).send({ error: { code: 'CATALOG_PART_NOT_FOUND', message: 'exact catalog part was not found' } });
+      const evidence = await resolveGmCatalogCallout(config, catalog);
+      if (!evidence) return reply.code(404).send({ error: { code: 'CALLOUT_NOT_RESOLVED', message: 'an exact row-to-callout relationship was not resolved' } });
+      return reply
+        .header('cache-control', 'public, max-age=86400, stale-while-revalidate=604800')
+        .header('x-content-type-options', 'nosniff')
+        .send(evidence);
+    } finally {
+      permit.release();
+    }
+  });
+  app.get('/v1/gm-catalog/parts/:partNumber/callout-image', async (request, reply) => {
+    const permit = sellerPreviewGuard.acquire(request.ip);
+    try {
+      const { partNumber } = ebayReferenceParams.parse(request.params);
+      const rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
+      const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
+      if (!catalog) return reply.code(404).send({ error: { code: 'CATALOG_PART_NOT_FOUND', message: 'exact catalog part was not found' } });
+      const evidence = await resolveGmCatalogCallout(config, catalog);
+      if (!evidence) return reply.code(404).send({ error: { code: 'CALLOUT_NOT_RESOLVED', message: 'an exact row-to-callout relationship was not resolved' } });
+      const scan = await loadGmCatalogPage(config, evidence.pageId);
+      if (!scan) return reply.code(404).send({ error: { code: 'CATALOG_SCAN_NOT_AVAILABLE', message: 'catalog scan is not available in PartQuill media storage' } });
+      const annotated = await renderGmCalloutImage(scan, evidence);
+      return reply
+        .header('cache-control', 'public, max-age=86400, stale-while-revalidate=604800')
+        .header('content-disposition', `inline; filename="${evidence.partNumber}_callout_${evidence.calloutId}.png"`)
+        .header('x-partquill-callout-id', evidence.calloutId)
+        .header('x-content-type-options', 'nosniff')
+        .type('image/png')
+        .send(annotated);
+    } finally {
+      permit.release();
+    }
+  });
   app.post('/internal/gm-catalog/import', { bodyLimit: 16 * 1024 * 1024 }, async (request, reply) => {
     const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
     const authorized = secureTokenMatches(supplied, config.GM_IMPORT_TOKEN)
@@ -680,7 +744,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.20.0',
+          version: '0.21.0',
           commandPreview: true,
           vintageGmShortlist: true,
           publicEbayWritesDisabled: true

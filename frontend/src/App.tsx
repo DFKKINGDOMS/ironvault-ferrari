@@ -110,6 +110,7 @@ type CatalogReference = {
   pageId: number;
   label: string;
   viewUrl: string;
+  listingImageUrl: string | null;
   imageRef: string | null;
   imageBlobKey: string | null;
   callout: string | null;
@@ -157,15 +158,19 @@ type ListingIntelligence = {
 };
 
 type TariffIntelligence = {
-  state: "CANDIDATE_REQUIRES_SELLER_REVIEW" | "NOT_CLASSIFIED";
-  hsCode: string | null;
-  htsCode: string | null;
-  description: string | null;
+  state: "CANDIDATE_REQUIRES_SELLER_REVIEW";
+  hsCode: string;
+  htsCode: string;
+  description: string;
   confidence: number;
-  source: "USITC_HTS_SNAPSHOT" | "NONE";
-  release: string | null;
+  source: "USITC_HTS_SNAPSHOT";
+  release: string;
   sourceUrl: string;
+  classificationMode: "IDENTITY_RULE" | "FUNCTION_RULE" | "AUTOMOTIVE_FALLBACK";
   basis: string[];
+  reasoning: string;
+  alternatives: Array<{ hsCode: string; description: string; useWhen: string }>;
+  missingFacts: string[];
   sellerConfirmationRequired: true;
 };
 
@@ -219,6 +224,14 @@ type SellerPreview = {
     requiredViews: Array<{ id: string; label: string; detail: string; required: boolean }>;
     analysisState: "NOT_UPLOADED";
     catalogReferences: CatalogReference[];
+    primaryListingImage: {
+      url: string;
+      name: string;
+      pageId: number;
+      calloutId: string;
+      source: "FIRST_PARTY_CATALOG_CALLOUT";
+      rightsState: "FIRST_PARTY_CATALOG_EVIDENCE";
+    } | null;
   };
   intelligence: ListingIntelligence | null;
   tariff: TariffIntelligence | null;
@@ -374,12 +387,30 @@ type StagedPhoto = {
   id: string;
   name: string;
   url: string;
-  source: "SELLER_UPLOAD" | "PRIVATE_REFERENCE" | "RIGHTS_CLEARED_REFERENCE";
+  source: "SELLER_UPLOAD" | "PRIVATE_REFERENCE" | "RIGHTS_CLEARED_REFERENCE" | "FIRST_PARTY_CATALOG_CALLOUT";
   publishEligible: boolean;
-  rightsState: "SELLER_PHOTOGRAPH" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED";
+  rightsState: "SELLER_PHOTOGRAPH" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED" | "FIRST_PARTY_CATALOG_EVIDENCE";
   originalUrl?: string;
   editState?: "ORIGINAL" | "BROWSER_EDITED" | "AI_EDITED";
 };
+
+function catalogCalloutPhoto(preview: SellerPreview): StagedPhoto[] {
+  const image = preview.media.primaryListingImage;
+  return image ? [{
+    id: `catalog-callout-${preview.listing.sku ?? preview.intent.partNumber ?? image.pageId}`,
+    name: image.name,
+    url: image.url,
+    originalUrl: image.url,
+    editState: "ORIGINAL",
+    source: image.source,
+    publishEligible: true,
+    rightsState: image.rightsState
+  }] : [];
+}
+
+function isCatalogCalloutPhoto(photo: StagedPhoto): boolean {
+  return photo.source === "FIRST_PARTY_CATALOG_CALLOUT";
+}
 
 type EditableFitmentRow = { vehicle: string; qualifier: string; state: string };
 
@@ -576,7 +607,7 @@ function CatalogEvidenceViewer({ references }: { references: CatalogReference[] 
           <img src={reference.viewUrl} alt={`${reference.kind === "diagram" ? "GM schematic" : "GM catalog row"} page ${reference.pageId}`} onError={() => setImageFailed(true)}/>
           {overlay && <span className="evidence-callout-ring" style={overlay}><b>{reference.callout ?? "PART ROW"}</b></span>}
         </div> : <div className="catalog-scan-missing"><Icon name="alert"/><strong>First-party scan migration pending</strong><p>The evidence record and callout coordinates are retained, but this page image has not yet reached PartQuill media storage.</p></div>}
-        <footer><div><strong>Page {reference.pageId}</strong><span>{reference.label}</span></div><div><Badge tone="red">Red ring = OCR callout location</Badge><Badge tone="slate">Confidence {Math.round((reference.confidence ?? 0) * 100)}%</Badge></div></footer>
+        <footer><div><strong>Page {reference.pageId}</strong><span>{reference.label}</span></div><div><Badge tone="orange">Orange = exact callout ref {reference.callout ?? "row"}</Badge><Badge tone="slate">Confidence {Math.round((reference.confidence ?? 0) * 100)}%</Badge></div></footer>
       </div>
     </div>
   </section>;
@@ -700,13 +731,17 @@ function properCaseTitle(value: string): string {
 const FITMENT_BLOCK_START = "<!-- PARTQUILL_FITMENT_START -->";
 const FITMENT_BLOCK_END = "<!-- PARTQUILL_FITMENT_END -->";
 
+function fitmentSummary(rows: EditableFitmentRow[], limit = 6): string {
+  if (!rows.length) return "No vehicle compatibility is being published.";
+  const examples = rows.slice(0, limit).map((row) => `${row.vehicle}${row.qualifier ? ` — ${row.qualifier}` : ""}`);
+  return `${rows.length} structured compatibility row${rows.length === 1 ? "" : "s"} will be reviewed for the eBay compatibility table. Examples: ${examples.join(" · ")}${rows.length > examples.length ? ` · +${rows.length - examples.length} more` : ""}.`;
+}
+
 function fitmentDescriptionBlock(rows: EditableFitmentRow[], html: boolean): string {
-  const content = rows.length
-    ? rows.map((row) => `${row.vehicle}${row.qualifier ? ` — ${row.qualifier}` : ""}`)
-    : ["No vehicle compatibility is being published."];
+  const content = fitmentSummary(rows);
   return html
-    ? `${FITMENT_BLOCK_START}<h3>Seller-reviewed compatibility</h3><ul>${content.map((row) => `<li>${escapeHtml(row)}</li>`).join("")}</ul>${FITMENT_BLOCK_END}`
-    : `${FITMENT_BLOCK_START}\nSeller-reviewed compatibility:\n${content.map((row) => `• ${row}`).join("\n")}\n${FITMENT_BLOCK_END}`;
+    ? `${FITMENT_BLOCK_START}<h3>Seller-reviewed compatibility</h3><p>${escapeHtml(content)}</p><p>Full fitment remains in the structured eBay compatibility table and is not duplicated here.</p>${FITMENT_BLOCK_END}`
+    : `${FITMENT_BLOCK_START}\nSeller-reviewed compatibility:\n${content}\nFull fitment remains in the structured eBay compatibility table and is not duplicated here.\n${FITMENT_BLOCK_END}`;
 }
 
 function replaceFitmentDescriptionBlock(description: string, rows: EditableFitmentRow[], html: boolean): string {
@@ -789,7 +824,7 @@ function ActiveDraftEditor({
       return;
     }
     const fresh = draftFieldsFromPreview(preview);
-    const key = "partquill-draft-v3:" + (preview.listing.sku ?? "held") + ":" + preview.fingerprint;
+    const key = "partquill-draft-v4:" + (preview.listing.sku ?? "held") + ":" + preview.fingerprint;
     try {
       const saved = window.localStorage.getItem(key);
       const parsed = saved ? JSON.parse(saved) as { fingerprint?: string; fields?: EditableDraftFields } : null;
@@ -945,6 +980,10 @@ function ActiveDraftEditor({
   }
 
   async function runBrowserPhotoEdit(photo: StagedPhoto, action: "clean" | "left" | "right") {
+    if (isCatalogCalloutPhoto(photo)) {
+      showNotice("The server-rendered orange callout image is locked as the primary catalog image.");
+      return;
+    }
     setPhotoEditBusy(photo.id);
     try {
       const result = action === "clean"
@@ -964,6 +1003,7 @@ function ActiveDraftEditor({
   }
 
   function restorePhoto(photo: StagedPhoto) {
+    if (isCatalogCalloutPhoto(photo)) return;
     if (!photo.originalUrl) return;
     updatePhoto(photo.id, { url: photo.originalUrl, editState: "ORIGINAL" });
     showNotice("Original seller image restored.");
@@ -1030,7 +1070,7 @@ function ActiveDraftEditor({
   const sku = preview.listing.sku ?? (preview.intent.partNumber || "OEM part number required");
 
   function saveDraft() {
-    const key = "partquill-draft-v3:" + sku + ":" + activePreview.fingerprint;
+    const key = "partquill-draft-v4:" + sku + ":" + activePreview.fingerprint;
     window.localStorage.setItem(key, JSON.stringify({ sku, fingerprint: activePreview.fingerprint, fields: activeFields, title, price, quantity, photos: photos.map(({ id, name, source, publishEligible, rightsState }) => ({ id, name, source, publishEligible, rightsState })) }));
     showNotice("Draft saved under the exact OEM SKU and fingerprint. No other item can inherit these fields.");
   }
@@ -1054,6 +1094,8 @@ function ActiveDraftEditor({
   const heroPhoto = photos[0];
   const previewPhoto = photos.find((photo) => photo.id === previewPhotoId) ?? heroPhoto;
   const publishablePhotos = photos.filter((photo) => photo.publishEligible);
+  const sellerItemPhotos = photos.filter((photo) => photo.source === "SELLER_UPLOAD" && photo.publishEligible);
+  const catalogPrimaryLocked = photos.some(isCatalogCalloutPhoto);
   const requiredAspectCount = REQUIRED_EBAY_ASPECTS.filter((name) => activeFields.aspects[name]?.trim()).length;
   const requiredAspectsComplete = requiredAspectCount === REQUIRED_EBAY_ASPECTS.length;
   const optionalAspects = Object.entries(activeFields.aspects).filter(([name]) => !REQUIRED_EBAY_ASPECTS.includes(name as typeof REQUIRED_EBAY_ASPECTS[number]));
@@ -1128,6 +1170,7 @@ function ActiveDraftEditor({
     && conditionReady
     && requiredAspectsComplete
     && publishablePhotos.length > 0
+    && sellerItemPhotos.length > 0
     && fields.shippingConfirmed
     && shippingFieldsValid
     && carrierSelectionValid
@@ -1165,7 +1208,7 @@ function ActiveDraftEditor({
     <div className="active-source-strip">
       <article><span>Mapping</span><strong>{preview.mapping.sellerFacingAllowed ? "Exact evidence allowed" : "Candidate held"}</strong><small>{preview.mapping.state.replaceAll("_", " ")}</small></article>
       <article><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong><small>{categoryVerified ? "Official exact active leaf" : categoryFallback ? "Official fallback · review" : "Validate before send"}</small></article>
-      <article><span>Main image</span><strong>{heroPhoto ? heroPhoto.name : "Seller image required"}</strong><small>{publishablePhotos.length} publish-eligible · {photos.length} in workbench</small></article>
+      <article><span>Main image</span><strong>{heroPhoto ? heroPhoto.name : "Listing image required"}</strong><small>{sellerItemPhotos.length} actual-item · {publishablePhotos.length} publish-eligible</small></article>
       <article><span>Package</span><strong>{fields.packageProfileId || shipping?.shippingClass || "Measure"}</strong><small>{fields.shippingConfirmed ? "Packed measurements confirmed" : "Estimate · editable"}</small></article>
     </div>
 
@@ -1183,7 +1226,7 @@ function ActiveDraftEditor({
           <label className="form-field"><span>Quantity</span><input type="number" min="0" max="999" value={quantity} onChange={(event) => { setQuantity(event.target.value); onMaterialEdit(); }}/><small>0 is valid and keeps the draft out of stock.</small></label>
           <label className="form-field"><span>Custom SKU</span><input value={sku} readOnly/><small>System invariant: exact normalized OEM / manufacturer part number.</small></label>
         </div>
-        <section className="description-editor"><header><div><strong>Buyer-visible description</strong><small>Seller-authored content is fully editable. Choose plain text or sanitized HTML.</small></div><div className="description-mode"><button className={fields.descriptionFormat === "TEXT" ? "active" : ""} onClick={() => editField("descriptionFormat", "TEXT")}>Plain text</button><button className={fields.descriptionFormat === "HTML" ? "active" : ""} onClick={() => editField("descriptionFormat", "HTML")}>HTML</button></div></header>{fields.descriptionFormat === "HTML" && <div className="html-toolbar"><button onClick={() => appendDescriptionMarkup("<h3>Details</h3>")}>Heading</button><button onClick={() => appendDescriptionMarkup("<p><strong>Important:</strong> </p>")}>Bold note</button><button onClick={() => appendDescriptionMarkup("<ul><li></li></ul>")}>List</button><button onClick={() => appendDescriptionMarkup("<table><tr><th>Detail</th><th>Value</th></tr><tr><td></td><td></td></tr></table>")}>Table</button></div>}<textarea rows={12} value={fields.description} onChange={(event) => editField("description", event.target.value)} spellCheck/><div className="description-live-preview"><span>Safe buyer preview</span>{fields.descriptionFormat === "HTML" ? <div dangerouslySetInnerHTML={{ __html: sanitizeSellerHtml(fields.description) }}/> : <p>{fields.description}</p>}</div></section>
+        <section className="description-editor"><header><div><strong>Buyer-visible description</strong><small>Seller-authored content is fully editable. Choose plain text or sanitized HTML.</small></div><div className="description-mode"><button className={fields.descriptionFormat === "TEXT" ? "active" : ""} onClick={() => editField("descriptionFormat", "TEXT")}>Plain text</button><button className={fields.descriptionFormat === "HTML" ? "active" : ""} onClick={() => editField("descriptionFormat", "HTML")}>HTML</button></div></header>{fields.descriptionFormat === "HTML" && <div className="html-toolbar"><button onClick={() => appendDescriptionMarkup("<h3>Details</h3>")}>Heading</button><button onClick={() => appendDescriptionMarkup("<p><strong>Important:</strong> </p>")}>Bold note</button><button onClick={() => appendDescriptionMarkup("<ul><li></li></ul>")}>List</button><button onClick={() => appendDescriptionMarkup("<table><tr><th>Detail</th><th>Value</th></tr><tr><td></td><td></td></tr></table>")}>Table</button></div>}<textarea rows={12} value={fields.description} onChange={(event) => editField("description", event.target.value)} spellCheck/><div className="description-live-preview"><span>Safe buyer preview</span>{fields.descriptionFormat === "HTML" ? <div dangerouslySetInnerHTML={{ __html: sanitizeSellerHtml(fields.description) }}/> : <p className="plain-text-description">{fields.description}</p>}</div></section>
       </div>}
 
       {editorTab === "identity" && <div className="form-section"><SectionHeading eyebrow="Brand and VeRO controls" title="Describe what the physical item is" body="The public VeRO profile index is downloaded read-only, but eBay says it is not a complete list. The Fits/For rule therefore applies by brand relationship, not only list membership."/>
@@ -1203,27 +1246,37 @@ function ActiveDraftEditor({
 
       {editorTab === "condition" && <div className="form-section"><SectionHeading eyebrow="Physical-item facts" title="Use the exact eBay condition for this category" body="The list refreshes from eBay Metadata whenever the primary category changes. Catalog scans cannot prove unused condition, package contents, defects or function."/><label className="form-field"><span>eBay condition</span><select value={fields.conditionId} disabled={!conditionPolicy?.verified} onChange={(event) => selectCondition(event.target.value)}><option value="">{conditionPolicy?.verified ? "Select condition" : "Condition policy is unavailable"}</option>{conditionPolicy?.conditions.map((row) => <option value={row.conditionId} key={row.conditionId}>{row.description}{row.usage === "RESTRICTED" ? " · restricted" : ""}</option>)}</select><small>{fields.conditionHelpText || "An exact category condition is required before preflight."}</small></label><label className="inline-image-upload"><Icon name="camera"/><span><strong>Add condition and label photos</strong><small>Upload seller-owned whole-item, packaging, wear and label views without leaving this screen.</small></span><input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label><div className="smallest-question"><Icon name="camera"/><div><span>Required evidence</span><strong>Add seller-owned whole-item and label photos</strong><p>Used, damaged or defective items must use photos of the exact item, not a stock or marketplace reference.</p></div></div></div>}
 
-      {editorTab === "fitment" && <div className="form-section"><SectionHeading eyebrow="Editable compatibility inspector" title={fields.fitment.length + " application row" + (fields.fitment.length === 1 ? "" : "s")} body="Edits appear in the impact preview immediately, but title and description stay unchanged until you select Apply."/><div className="fitment-impact-preview"><span>Live, not yet applied</span><strong>{properCaseTitle([fields.actualBrand.toLowerCase().replace(/[^a-z0-9]/g, "") === "generalmotors" ? "GM" : fields.actualBrand, sku, fields.productType || "Automotive Part", fields.authenticity === "AFTERMARKET_COMPATIBLE" && fields.compatibleBrand ? `Fits ${fields.compatibleBrand}` : "", fields.fitment.map((row) => row.vehicle.match(/\b\d{4}(?:[–-]\d{4})?\b/)?.[0]).find(Boolean) ?? ""].filter(Boolean).join(" "))}</strong><p>{fields.fitment.length ? fields.fitment.map((row) => `${row.vehicle}${row.qualifier ? ` — ${row.qualifier}` : ""}`).join(" · ") : "No compatibility rows will be published."}</p><small>Apply updates both the Fits/For title rule and a clearly marked seller-reviewed compatibility block in the description. Cancel restores the last applied rows. Revert restores the original catalog rows.</small></div><div className="compatibility-table editable"><div className="table-head"><span>Application</span><span>Qualifier</span><span>Status</span><span/></div>{fields.fitment.map((row, index) => <div key={index}><input value={row.vehicle} onChange={(event) => updateFitment(index, "vehicle", event.target.value)}/><input value={row.qualifier} onChange={(event) => updateFitment(index, "qualifier", event.target.value)}/><Badge tone={row.state === "SELLER_EDITED" ? "orange" : "amber"}>{row.state.replaceAll("_", " ")}</Badge><button onClick={() => editField("fitment", fields.fitment.filter((_, rowIndex) => rowIndex !== index))}>Delete</button></div>)}</div><div className="fitment-actions"><button className="secondary" onClick={() => editField("fitment", [...fields.fitment, { vehicle: "", qualifier: "", state: "SELLER_EDITED" }])}>Add fitment row</button><button className="secondary" disabled={!fitmentDirty} onClick={cancelFitmentChanges}>Cancel edits</button><button className="secondary" onClick={revertFitmentToCatalog}>Revert to catalog</button><button className="primary" disabled={!fitmentDirty} onClick={applyFitmentChanges}>Apply to title + description</button></div></div>}
+      {editorTab === "fitment" && <div className="form-section">
+        <SectionHeading eyebrow="Editable compatibility inspector" title={fields.fitment.length + " application row" + (fields.fitment.length === 1 ? "" : "s")} body="Edits appear in the impact preview immediately, but title and description stay unchanged until you select Apply."/>
+        <div className="fitment-impact-preview">
+          <span>Live, not yet applied</span>
+          <strong>{properCaseTitle([fields.actualBrand.toLowerCase().replace(/[^a-z0-9]/g, "") === "generalmotors" ? "GM" : fields.actualBrand, sku, fields.productType || "Automotive Part", fields.authenticity === "AFTERMARKET_COMPATIBLE" && fields.compatibleBrand ? `Fits ${fields.compatibleBrand}` : "", fields.fitment.map((row) => row.vehicle.match(/\b\d{4}(?:[–-]\d{4})?\b/)?.[0]).find(Boolean) ?? ""].filter(Boolean).join(" "))}</strong>
+          <p>{fitmentSummary(fields.fitment, 8)}</p>
+          <small>Apply updates the Fits/For title rule and a concise compatibility summary. The complete row set stays in the structured eBay compatibility table. Cancel restores the last applied rows. Revert restores the original catalog rows.</small>
+        </div>
+        <div className="compatibility-table editable"><div className="table-head"><span>Application</span><span>Qualifier</span><span>Status</span><span/></div>{fields.fitment.map((row, index) => <div key={index}><input value={row.vehicle} onChange={(event) => updateFitment(index, "vehicle", event.target.value)}/><input value={row.qualifier} onChange={(event) => updateFitment(index, "qualifier", event.target.value)}/><Badge tone={row.state === "SELLER_EDITED" ? "orange" : "amber"}>{row.state.replaceAll("_", " ")}</Badge><button onClick={() => editField("fitment", fields.fitment.filter((_, rowIndex) => rowIndex !== index))}>Delete</button></div>)}</div>
+        <div className="fitment-actions"><button className="secondary" onClick={() => editField("fitment", [...fields.fitment, { vehicle: "", qualifier: "", state: "SELLER_EDITED" }])}>Add fitment row</button><button className="secondary" disabled={!fitmentDirty} onClick={cancelFitmentChanges}>Cancel edits</button><button className="secondary" onClick={revertFitmentToCatalog}>Revert to catalog</button><button className="primary" disabled={!fitmentDirty} onClick={applyFitmentChanges}>Apply to title + description</button></div>
+      </div>}
 
-      {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Main listing image workbench" title="Choose, order and remove up to 24 images" body="Archived references can be moved into this main visual workbench. Personal-reference images remain blocked from the eBay payload unless rights are separately cleared."/>
+      {editorTab === "images" && <div className="form-section"><SectionHeading eyebrow="Main listing image workbench" title="Orange callout first, actual-item photos next" body="The exact GM diagram callout is locked as image 1. Add and reorder seller-owned actual-item photos after it; personal references remain blocked unless rights are separately cleared."/>
         <section className="main-image-workbench">
           <div className="main-image-stage">{previewPhoto ? <><img src={previewPhoto.url} alt={previewPhoto.name}/><span><strong>{previewPhoto.id === heroPhoto?.id ? "Main image" : "Selected image"} · {previewPhoto.name}</strong><small>{previewPhoto.publishEligible ? "Publish-eligible after review" : "Reference only — not eligible for eBay"}</small></span></> : <div className="empty-state"><Icon name="camera"/><h3>No main item image yet</h3><p>Upload seller-owned photos or move an archived reference into the visual workbench.</p></div>}</div>
           <label className="image-upload-button"><Icon name="camera"/> Add images in bulk<input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label>
-          <p className="image-reorder-help"><strong>Drag to reorder.</strong> The first image is the eBay main image. Arrow buttons provide the same control without dragging.</p>
+          <p className="image-reorder-help"><strong>Image 1 is evidence-locked.</strong> Seller photos can be reordered from image 2 onward. Arrow buttons provide the same control without dragging.</p>
           <div className="main-image-grid">{photos.map((photo, index) => <article
             key={photo.id}
-            draggable
+            draggable={!isCatalogCalloutPhoto(photo)}
             onDragStart={() => setDraggedPhotoId(photo.id)}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => { event.preventDefault(); if (draggedPhotoId) reorderPhoto(draggedPhotoId, index); setDraggedPhotoId(null); }}
             onDragEnd={() => setDraggedPhotoId(null)}
-            className={[index === 0 ? "main" : "", draggedPhotoId === photo.id ? "dragging" : ""].filter(Boolean).join(" ")}
+            className={[index === 0 ? "main" : "", isCatalogCalloutPhoto(photo) ? "catalog-primary-locked" : "", draggedPhotoId === photo.id ? "dragging" : ""].filter(Boolean).join(" ")}
           >
-            <button className="drag-handle" type="button" aria-label={`Drag ${photo.name} to reorder`}>⋮⋮</button>
+            <button className="drag-handle" type="button" disabled={isCatalogCalloutPhoto(photo)} aria-label={isCatalogCalloutPhoto(photo) ? `${photo.name} is locked as the primary image` : `Drag ${photo.name} to reorder`}>{isCatalogCalloutPhoto(photo) ? "LOCK" : "⋮⋮"}</button>
             <button className="image-preview-button" type="button" onClick={() => setPreviewPhotoId(photo.id)}><img src={photo.url} alt={photo.name}/></button>
-            <div><strong>{index === 0 ? "MAIN · " : ""}{photo.name}</strong><small>{photo.source.replaceAll("_", " ")} · {(photo.editState ?? "ORIGINAL").replaceAll("_", " ")}</small><Badge tone={photo.publishEligible ? "green" : "amber"}>{photo.publishEligible ? "Listing eligible" : "Reference only"}</Badge></div>
-            <div className="image-order-actions"><button disabled={index === 0} aria-label={`Move ${photo.name} left`} onClick={() => reorderPhoto(photo.id, index - 1)}>←</button><button disabled={index === photos.length - 1} aria-label={`Move ${photo.name} right`} onClick={() => reorderPhoto(photo.id, index + 1)}>→</button><button disabled={index === 0} onClick={() => setMainPhoto(photo.id)}>Set main</button><button onClick={() => removePhoto(photo.id)}>Delete</button></div>
-            <div className="photo-edit-actions"><span>Edit here · original is retained</span><button disabled={photoEditBusy === photo.id} onClick={() => void runBrowserPhotoEdit(photo, "left")}>Rotate left</button><button disabled={photoEditBusy === photo.id} onClick={() => void runBrowserPhotoEdit(photo, "right")}>Rotate right</button><button disabled={photoEditBusy === photo.id || !photo.publishEligible} onClick={() => void runBrowserPhotoEdit(photo, "clean")}>{photoEditBusy === photo.id ? "Editing…" : "Clean white background"}</button><button disabled title={imageStudioActivated ? "Private AI processing is connected but requires its separate access token; the in-browser editor works here now" : "Private AI provider is not connected; the in-browser editor works here now"}>{imageStudioActivated ? "AI edit · private access" : "AI edit not connected"}</button><button disabled={!photo.originalUrl || photo.editState === "ORIGINAL"} onClick={() => restorePhoto(photo)}>Restore original</button></div>
+            <div><strong>{isCatalogCalloutPhoto(photo) ? "LOCKED PRIMARY · " : index === 0 ? "MAIN · " : ""}{photo.name}</strong><small>{photo.source.replaceAll("_", " ")} · {(photo.editState ?? "ORIGINAL").replaceAll("_", " ")}</small><Badge tone={photo.publishEligible ? "green" : "amber"}>{isCatalogCalloutPhoto(photo) ? "Exact callout evidence" : photo.publishEligible ? "Listing eligible" : "Reference only"}</Badge></div>
+            <div className="image-order-actions"><button disabled={isCatalogCalloutPhoto(photo) || (catalogPrimaryLocked ? index <= 1 : index === 0)} aria-label={`Move ${photo.name} left`} onClick={() => reorderPhoto(photo.id, index - 1)}>←</button><button disabled={isCatalogCalloutPhoto(photo) || index === photos.length - 1} aria-label={`Move ${photo.name} right`} onClick={() => reorderPhoto(photo.id, index + 1)}>→</button><button disabled={isCatalogCalloutPhoto(photo) || (catalogPrimaryLocked ? index <= 1 : index === 0)} onClick={() => setMainPhoto(photo.id)}>{catalogPrimaryLocked ? "First seller photo" : "Set main"}</button><button disabled={isCatalogCalloutPhoto(photo)} onClick={() => removePhoto(photo.id)}>Delete</button></div>
+            <div className="photo-edit-actions"><span>{isCatalogCalloutPhoto(photo) ? "Server-rendered evidence · edits locked" : "Edit here · original is retained"}</span><button disabled={isCatalogCalloutPhoto(photo) || photoEditBusy === photo.id} onClick={() => void runBrowserPhotoEdit(photo, "left")}>Rotate left</button><button disabled={isCatalogCalloutPhoto(photo) || photoEditBusy === photo.id} onClick={() => void runBrowserPhotoEdit(photo, "right")}>Rotate right</button><button disabled={isCatalogCalloutPhoto(photo) || photoEditBusy === photo.id || !photo.publishEligible} onClick={() => void runBrowserPhotoEdit(photo, "clean")}>{photoEditBusy === photo.id ? "Editing…" : "Clean white background"}</button><button disabled title={imageStudioActivated ? "Private AI processing is connected but requires its separate access token; the in-browser editor works here now" : "Private AI provider is not connected; the in-browser editor works here now"}>{imageStudioActivated ? "AI edit · private access" : "AI edit not connected"}</button><button disabled={isCatalogCalloutPhoto(photo) || !photo.originalUrl || photo.editState === "ORIGINAL"} onClick={() => restorePhoto(photo)}>Restore original</button></div>
           </article>)}</div>
         </section>
         {references.length ? <CatalogEvidenceViewer references={references}/> : <div className="empty-state"><h3>No linked catalog diagram was found</h3><p>The catalog row is retained, but PartQuill will not invent a schematic relationship.</p></div>}
@@ -1261,7 +1314,12 @@ function ActiveDraftEditor({
 
       {editorTab === "policies" && <div className="form-section"><SectionHeading eyebrow="Editable publication controls" title="eBay policy and customs controls" body="Only supported structured choices are used. The selected business policies are revalidated against the seller account before a public payload."/><div className="form-grid"><label className="form-field"><span>Handling time</span><select value={fields.handlingTime} onChange={(event) => editField("handlingTime", event.target.value)}>{handlingTimes.map((option) => <option key={option.days} value={option.label}>{option.label}</option>)}</select><small>Current eBay US choices run from same-day through 40 business days; 45 days is not an allowed value.</small></label><label className="form-field"><span>Returns</span><select value={fields.returns} onChange={(event) => editField("returns", event.target.value)}><option>30 days · buyer-paid</option><option>30 days · free returns</option><option>60 days · buyer-paid</option><option>60 days · free returns</option><option>No returns · where eBay permits</option></select><small>eBay Money Back Guarantee rights still apply where required.</small></label><label className="form-field"><span>International</span><select value={fields.international} onChange={(event) => editField("international", event.target.value)}><option>Held until origin is verified</option><option>Disabled</option><option>Enabled after origin + HS review</option></select><small>Domestic calculated shipping is not blocked by missing origin.</small></label></div>
         <div className="policy-links"><a href="https://www.ebay.com/help/selling/business-policies/business-policies?id=4212" target="_blank" rel="noreferrer">eBay business policies <Icon name="arrow"/></a><a href="https://www.ebay.com/help/selling/managing-returns-refunds/handling-return-requests/setting-return-policy?id=4368" target="_blank" rel="noreferrer">eBay return rules <Icon name="arrow"/></a></div>
-        <section className="tariff-review"><header><div><span>Customs classification candidate</span><strong>{preview.tariff?.htsCode ?? "No narrow candidate"}</strong><small>{preview.tariff?.description ?? "A customs reviewer must classify this item before international publication."}</small></div><Badge tone={preview.tariff?.state === "CANDIDATE_REQUIRES_SELLER_REVIEW" ? "amber" : "slate"}>{preview.tariff?.state === "CANDIDATE_REQUIRES_SELLER_REVIEW" ? `${Math.round((preview.tariff?.confidence ?? 0) * 100)}% candidate` : "Unclassified"}</Badge></header><div className="form-grid"><label className="form-field"><span>Country of origin · ISO-2</span><input maxLength={2} placeholder="US" value={fields.countryOfOrigin} onChange={(event) => editField("countryOfOrigin", event.target.value.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 2))}/></label><label className="form-field"><span>HS code · 6–10 digits</span><input inputMode="numeric" placeholder="870830" value={fields.hsCode} onChange={(event) => editField("hsCode", event.target.value.replace(/\D/g, "").slice(0, 10))}/><small>{preview.tariff?.hsCode ? `Suggested HS ${preview.tariff.hsCode}${preview.tariff.htsCode ? ` / US HTS ${preview.tariff.htsCode}` : ""}.` : "No description-only candidate is available; enter a reviewed classification."}</small></label></div><label className="approval-check"><input type="checkbox" checked={fields.tariffConfirmed} onChange={(event) => editField("tariffConfirmed", event.target.checked)}/><span><strong>I reviewed the item function, composition, vehicle class and origin.</strong><small>Description matching proposes a candidate; it cannot guarantee a 100% accurate customs classification.</small></span></label><a href={preview.tariff?.sourceUrl ?? "https://hts.usitc.gov/"} target="_blank" rel="noreferrer">Open the official USITC HTS source <Icon name="arrow"/></a></section>
+        <section className="tariff-review">
+          <header><div><span>Identity-first customs candidate</span><strong>{preview.tariff?.htsCode ?? fields.hsCode}</strong><small>{preview.tariff?.description ?? "Automotive classification candidate requires seller review."}</small></div><Badge tone="amber">{Math.round((preview.tariff?.confidence ?? 0) * 100)}% · {(preview.tariff?.classificationMode ?? "AUTOMOTIVE_FALLBACK").replaceAll("_", " ")}</Badge></header>
+          {preview.tariff && <div className="tariff-rationale"><strong>Why PartQuill selected it</strong><p>{preview.tariff.reasoning}</p><small>Facts still needed: {preview.tariff.missingFacts.join(" · ")}</small>{preview.tariff.alternatives.length > 0 && <details><summary>{preview.tariff.alternatives.length} classification alternative{preview.tariff.alternatives.length === 1 ? "" : "s"}</summary>{preview.tariff.alternatives.map((alternative) => <p key={alternative.hsCode}><b>{alternative.hsCode}</b> · {alternative.description} — {alternative.useWhen}</p>)}</details>}</div>}
+          <div className="form-grid"><label className="form-field"><span>Country of origin · ISO-2</span><input maxLength={2} placeholder="US" value={fields.countryOfOrigin} onChange={(event) => editField("countryOfOrigin", event.target.value.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 2))}/></label><label className="form-field"><span>HS code · 6–10 digits</span><input inputMode="numeric" placeholder="870899" value={fields.hsCode} onChange={(event) => editField("hsCode", event.target.value.replace(/\D/g, "").slice(0, 10))}/><small>Auto-filled HS {preview.tariff?.hsCode ?? fields.hsCode}{preview.tariff?.htsCode ? ` / US HTS ${preview.tariff.htsCode}` : ""}; never inferred from unrelated fitment prose.</small></label></div>
+          <label className="approval-check"><input type="checkbox" checked={fields.tariffConfirmed} onChange={(event) => editField("tariffConfirmed", event.target.checked)}/><span><strong>I reviewed the item function, composition, vehicle class and origin.</strong><small>The candidate is automatic, but customs classification still requires seller review before international publication.</small></span></label><a href={preview.tariff?.sourceUrl ?? "https://hts.usitc.gov/"} target="_blank" rel="noreferrer">Open the official USITC HTS source <Icon name="arrow"/></a>
+        </section>
         <div className="specifics-table">{preview.issues.map((issue) => <div key={issue.code}><span>{issue.code}</span><strong>{issue.message}</strong><Badge tone={issue.blocking ? "amber" : "slate"}>{issue.blocking ? "Blocking" : "Review"}</Badge></div>)}</div></div>}
 
       {editorTab === "preview" && <div className="form-section">
@@ -1273,7 +1331,7 @@ function ActiveDraftEditor({
             <section className="ebay-purchase-panel"><small>PartQuill seller draft · SKU {sku}</small><h2>{title || "Title required"}</h2><div className="ebay-condition"><span>Condition:</span><strong>{fields.condition}</strong></div><div className="ebay-price-line"><strong>${price || "—"}</strong>{Number(quantity) === 0 && <Badge tone="red">Out of stock</Badge>}</div><div className="ebay-quantity"><span>Quantity:</span><select value={quantity} disabled><option>{quantity}</option></select><span>{Number(quantity) > 0 ? `${quantity} available` : "0 available"}</span></div><button className="ebay-buy" disabled={!ebayPriceEligible || Number(quantity) === 0}>Buy It Now</button><button className="ebay-cart" disabled={!ebayPriceEligible || Number(quantity) === 0}>Add to cart</button><dl><div><dt>Shipping</dt><dd>{fields.shippingMode === "FREE" ? "FREE domestic shipping" : `Calculated at checkout · ${selectedCarriers.map((carrier) => CARRIER_LABELS[carrier]).join(", ") || "service required"}`}</dd></div><div><dt>Handling</dt><dd>{fields.handlingTime}</dd></div><div><dt>Returns</dt><dd>{fields.returns}</dd></div></dl></section>
           </div>
           <section className="ebay-specifics-preview"><h3>Item specifics</h3><dl>{REQUIRED_EBAY_ASPECTS.map((name) => <div key={name}><dt>{name}</dt><dd>{fields.aspects[name] || "Not provided"}</dd></div>)}{optionalAspects.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value || "Not provided"}</dd></div>)}</dl></section>
-          <section className="ebay-description-preview"><h3>Item description from the seller</h3>{fields.descriptionFormat === "HTML" ? <div dangerouslySetInnerHTML={{ __html: sanitizeSellerHtml(fields.description) }}/> : <p>{fields.description}</p>}<div className="fitment-boilerplate">Verify OEM part number {partNumber}. {appliedFitment.length ? appliedFitment.map((row) => row.vehicle).join(" · ") : "No compatibility row will publish."}</div></section>
+          <section className="ebay-description-preview"><h3>Item description from the seller</h3>{fields.descriptionFormat === "HTML" ? <div dangerouslySetInnerHTML={{ __html: sanitizeSellerHtml(fields.description) }}/> : <p>{fields.description}</p>}<div className="fitment-boilerplate">Verify OEM part number {partNumber}. {fitmentSummary(appliedFitment)}</div></section>
           <footer>Preview only · exact eBay rendering can still vary by device, category, account policy and live eBay UI.</footer>
         </article>
       </div>}
@@ -1291,13 +1349,14 @@ function ActiveDraftEditor({
       {!conditionReady && <div className="hold"><Icon name="alert"/><p><strong>Select an exact eBay condition for this category</strong><small>EBAY_CONDITION_POLICY_REQUIRED</small></p></div>}
       {!requiredAspectsComplete && <div className="hold"><Icon name="alert"/><p><strong>Complete all four pinned item specifics</strong><small>REQUIRED_ASPECTS_{requiredAspectCount}_OF_4</small></p></div>}
       {!publishablePhotos.length && <div className="hold"><Icon name="camera"/><p><strong>Seller-owned or rights-cleared image required</strong><small>LISTING_IMAGE_REQUIRED</small></p></div>}
+      {!sellerItemPhotos.length && <div className="hold"><Icon name="camera"/><p><strong>Add a seller photo of the actual physical item</strong><small>SELLER_ITEM_PHOTO_REQUIRED</small></p></div>}
       {(!fields.shippingConfirmed || !shippingFieldsValid) && <div className="hold"><Icon name="truck"/><p><strong>Confirm positive packed dimensions and weight</strong><small>PACKED_SHIPPING_REQUIRED</small></p></div>}
       {!carrierSelectionValid && <div className="hold"><Icon name="truck"/><p><strong>Select at least one shipping carrier</strong><small>SHIPPING_SERVICE_REQUIRED</small></p></div>}
       {!priceValid && <div className="hold"><Icon name="alert"/><p><strong>Enter an eBay Motors price of at least $0.99</strong><small>EBAY_MOTORS_MINIMUM_PRICE_REQUIRED</small></p></div>}
       {!quantityValid && <div className="hold"><Icon name="alert"/><p><strong>Quantity must be a whole number from 0 to 999</strong><small>QUANTITY_VALUE_REQUIRED</small></p></div>}
       {!tariffReady && <div className="hold"><Icon name="alert"/><p><strong>Confirm origin and reviewed HS code for international shipping</strong><small>INTERNATIONAL_CUSTOMS_HOLD</small></p></div>}
     </div><button className="primary full" disabled={!preflightReady} onClick={() => navigate("review")}>Run private preflight <Icon name="arrow"/></button><p className="safe-note">Nothing is sent to eBay.</p></aside></div>
-    <div className="sticky-economics"><div><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong></div><div><span>OEM SKU</span><strong>{sku}</strong></div><div><span>Seller price</span><strong>${price}</strong></div><div><span>Listing images</span><strong>{publishablePhotos.length}/{photos.length}</strong></div><label className="sticky-image-upload"><Icon name="camera"/><span>Add images</span><input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label><button disabled={!preflightReady} onClick={() => navigate("review")}>Review gates <Icon name="arrow"/></button></div>
+    <div className="sticky-economics"><div><span>Category ID</span><strong>{fields.categoryId || "Required"}</strong></div><div><span>OEM SKU</span><strong>{sku}</strong></div><div><span>Seller price</span><strong>${price}</strong></div><div><span>Images</span><strong>{publishablePhotos.length} eligible · {sellerItemPhotos.length} actual</strong></div><label className="sticky-image-upload"><Icon name="camera"/><span>Add images</span><input type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.currentTarget.value = ""; }}/></label><button disabled={!preflightReady} onClick={() => navigate("review")}>Review gates <Icon name="arrow"/></button></div>
   </section>;
 }
 
@@ -1443,6 +1502,10 @@ export default function Home() {
     }).catch(() => showNotice("One or more photo previews could not be opened."));
   };
   const removeInstantPhoto = (photoId: string) => {
+    if (instantPhotos.some((photo) => photo.id === photoId && isCatalogCalloutPhoto(photo))) {
+      showNotice("The orange callout diagram is locked as the primary catalog image.");
+      return;
+    }
     setInstantPhotos((current) => current.filter((photo) => photo.id !== photoId));
     setPreflightApproved(false);
     setPublicApproved(false);
@@ -1452,30 +1515,41 @@ export default function Home() {
   const setMainInstantPhoto = (photoId: string) => {
     setInstantPhotos((current) => {
       const selected = current.find((photo) => photo.id === photoId);
-      return selected ? [selected, ...current.filter((photo) => photo.id !== photoId)] : current;
+      if (!selected || isCatalogCalloutPhoto(selected)) return current;
+      const catalogPrimary = current.find(isCatalogCalloutPhoto);
+      const remaining = current.filter((photo) => photo.id !== photoId && photo.id !== catalogPrimary?.id);
+      return catalogPrimary ? [catalogPrimary, selected, ...remaining] : [selected, ...remaining];
     });
     setPreflightApproved(false);
     setPublicApproved(false);
     setFeeFresh(false);
-    showNotice("Main image changed for this OEM-keyed draft.");
+    showNotice(instantPhotos.some(isCatalogCalloutPhoto)
+      ? "First actual-item photo changed; the orange catalog callout remains image 1."
+      : "Main image changed for this OEM-keyed draft.");
   };
   const reorderInstantPhoto = (photoId: string, targetIndex: number) => {
     setInstantPhotos((current) => {
       const fromIndex = current.findIndex((photo) => photo.id === photoId);
-      if (fromIndex < 0 || targetIndex < 0 || targetIndex >= current.length || fromIndex === targetIndex) return current;
+      const catalogPrimary = current.find(isCatalogCalloutPhoto);
+      if (fromIndex < 0 || isCatalogCalloutPhoto(current[fromIndex]!) || targetIndex < 0 || targetIndex >= current.length) return current;
+      const safeTarget = catalogPrimary ? Math.max(1, targetIndex) : targetIndex;
+      if (fromIndex === safeTarget) return current;
       const next = [...current];
       const [moved] = next.splice(fromIndex, 1);
       if (!moved) return current;
-      next.splice(targetIndex, 0, moved);
-      return next;
+      next.splice(safeTarget, 0, moved);
+      if (!catalogPrimary) return next;
+      return [catalogPrimary, ...next.filter((photo) => photo.id !== catalogPrimary.id)];
     });
     setPreflightApproved(false);
     setPublicApproved(false);
     setFeeFresh(false);
-    showNotice("Image order updated. The first image is now the main eBay image.");
+    showNotice(instantPhotos.some(isCatalogCalloutPhoto)
+      ? "Seller image order updated; the orange catalog callout remains image 1."
+      : "Image order updated. The first image is now the main eBay image.");
   };
   const updateInstantPhoto = (photoId: string, patch: Partial<StagedPhoto>) => {
-    setInstantPhotos((current) => current.map((photo) => photo.id === photoId ? { ...photo, ...patch } : photo));
+    setInstantPhotos((current) => current.map((photo) => photo.id === photoId && !isCatalogCalloutPhoto(photo) ? { ...photo, ...patch } : photo));
     setPreflightApproved(false);
     setPublicApproved(false);
     setFeeFresh(false);
@@ -1563,7 +1637,7 @@ export default function Home() {
       setInstantPartConfirmed(false);
       setInstantConditionConfirmed(false);
       setInstantDirty(false);
-      setInstantPhotos([]);
+      setInstantPhotos(catalogCalloutPhoto(preview));
       setFoundPartNumber("");
       setTitle(preview.listing.title);
       setPrice(preview.intent.price ?? "0.99");
@@ -1658,10 +1732,12 @@ export default function Home() {
   const primaryCatalogReference = instantPreview?.media.catalogReferences.find((reference) => reference.primary)
     ?? instantPreview?.media.catalogReferences[0];
   const instantHeld = Boolean(instantPreview && !instantSample);
+  const instantSellerItemPhotos = instantPhotos.filter((photo) => photo.source === "SELLER_UPLOAD" && photo.publishEligible);
   const instantReady = Boolean(
     instantPartConfirmed
     && instantConditionConfirmed
     && !instantDirty
+    && (instantSample || instantSellerItemPhotos.length >= (instantPreview?.media.minimumPhotos ?? 1))
     && instantPreview?.gates.privatePreflight === "SIMULATION_AVAILABLE"
   );
   const instantTitle = instantPreview?.listing.title ?? "Listing evidence required";
@@ -1802,10 +1878,10 @@ export default function Home() {
                   <div className="instant-media">
                     {instantCatalogMatch && primaryCatalogReference ? <button className="catalog-image-candidate catalog-scan-thumb" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span>PARTQUILL CATALOG SCAN · FIRST PARTY</span><img src={primaryCatalogReference.viewUrl} alt={`Catalog evidence page ${primaryCatalogReference.pageId}`}/><strong>{primaryCatalogReference.callout ?? `Catalog page ${primaryCatalogReference.pageId}`}</strong><small>Open the full scan with its colored callout highlight.</small></button> : <div className={`catalog-image-candidate ${instantPhotoFirst ? "photo-first" : ""} ${instantSafety ? "safety" : ""}`}><span>{instantSafety ? "RESTRICTED ITEM · EVIDENCE INTAKE" : instantPhotoFirst ? "PHOTO-FIRST ITEM INTAKE" : "MEDIA REVIEW · PLACEHOLDER ONLY"}</span><Icon name={instantSafety ? "shield" : instantPhotoFirst ? "camera" : "box"}/><strong>{instantItemLabel}</strong><small>{instantPreview?.media.sourceDetail ?? "A seller-owned item photo is required."}</small></div>}
                     <div className="instant-thumbs">{(instantPreview?.media.requiredViews ?? [ { id: "hero", label: "Hero", detail: "Whole item", required: true }, { id: "label", label: "Label", detail: "Readable markings", required: false } ]).slice(0, 4).map((view) => <button key={view.id} onClick={() => showNotice(`${view.label}: ${view.detail}`)}><Icon name={view.id.includes("label") || view.id.includes("oem") ? "search" : "camera"}/><span>{view.label}</span></button>)}</div>
-                    {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo, index) => <figure key={photo.id}><span className="photo-order">{index + 1}</span><button className="remove-photo" type="button" aria-label={`Remove ${photo.name}`} onClick={() => removeInstantPhoto(photo.id)}>×</button><img src={photo.url} alt={`Seller-selected item photo ${index + 1}`}/><figcaption><span>{photo.name}</span><small>Photo {index + 1} of {instantPhotos.length}</small></figcaption></figure>)}</div>}
+                    {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo, index) => <figure className={isCatalogCalloutPhoto(photo) ? "catalog-primary-locked" : ""} key={photo.id}><span className="photo-order">{index + 1}</span><button className="remove-photo" type="button" disabled={isCatalogCalloutPhoto(photo)} aria-label={isCatalogCalloutPhoto(photo) ? `${photo.name} is locked as the primary image` : `Remove ${photo.name}`} onClick={() => removeInstantPhoto(photo.id)}>{isCatalogCalloutPhoto(photo) ? "LOCK" : "×"}</button><img src={photo.url} alt={isCatalogCalloutPhoto(photo) ? `Orange catalog callout primary image ${index + 1}` : `Seller-selected item photo ${index + 1}`}/><figcaption><span>{photo.name}</span><small>{isCatalogCalloutPhoto(photo) ? "Locked primary catalog image" : `Photo ${index + 1} of ${instantPhotos.length}`}</small></figcaption></figure>)}</div>}
                     <div className="media-source"><Icon name="alert"/><span><strong>{instantPreview?.media.sourceLabel ?? "Seller-owned item photo required"}</strong><small>No grey placeholder can enter the eBay payload.</small></span></div>
                     {(instantPreview?.media.catalogReferences.length ?? 0) > 0 && <button className="catalog-evidence-jump" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Icon name="search"/><span><strong>Open highlighted catalog evidence</strong><small>{instantPreview?.media.catalogReferences.length} first-party row and diagram references</small></span><Icon name="arrow"/></button>}
-                    <div className="media-upload-toolbar"><label className="media-add-button" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); stageInstantPhotos(event.dataTransfer.files); }}><Icon name="camera"/><span><strong>{instantPhotos.length ? "Add more photos" : "Bulk add item photos"}</strong><small>Select or drop multiple images · up to {MAX_SELLER_PHOTOS}</small></span><b>{MAX_SELLER_PHOTOS - instantPhotos.length} open</b><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { stageInstantPhotos(event.target.files); event.currentTarget.value = ""; }}/></label>{instantPhotos.length > 0 && <button className="clear-photos" type="button" onClick={() => { setInstantPhotos([]); resetMaterialApprovals(); showNotice("All staged photos were removed from this draft."); }}>Remove all</button>}</div>
+                    <div className="media-upload-toolbar"><label className="media-add-button" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); stageInstantPhotos(event.dataTransfer.files); }}><Icon name="camera"/><span><strong>{instantSellerItemPhotos.length ? "Add more actual-item photos" : "Add actual-item photos"}</strong><small>Select or drop multiple images · up to {MAX_SELLER_PHOTOS}</small></span><b>{MAX_SELLER_PHOTOS - instantPhotos.length} open</b><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { stageInstantPhotos(event.target.files); event.currentTarget.value = ""; }}/></label>{instantSellerItemPhotos.length > 0 && <button className="clear-photos" type="button" onClick={() => { setInstantPhotos((current) => current.filter(isCatalogCalloutPhoto)); resetMaterialApprovals(); showNotice("Seller photos were removed; the orange catalog callout remains image 1."); }}>Remove seller photos</button>}</div>
                     <p className="local-photo-note"><Icon name="shield"/> Private pilot: selected images stay in this browser preview. Photo analysis and durable upload are not connected yet.</p>
                   </div>
 
@@ -1813,7 +1889,7 @@ export default function Home() {
                     <div className="listing-proof-strip">
                       <article><span>Identity source</span><strong><i className={instantSafety ? "red" : "amber"}/>{instantPreview?.identity.sourceLabel}</strong><small>{instantPreview?.identity.sourceDetail}</small></article>
                       <article><span>Fitment source</span><strong><i className="amber"/>{instantPreview?.fitment.sourceLabel}</strong><small>{instantPreview?.fitment.sourceDetail}</small></article>
-                      <article><span>Seller facts</span><strong><i className={instantReady ? "green" : instantSafety ? "red" : "amber"}/>{instantReady ? "Complete" : instantSafety ? "Policy evidence missing" : instantPhotoFirst ? `${instantPreview?.media.minimumPhotos ?? 3} photos + condition` : "2 confirms left"}</strong><small>Physical item only</small></article>
+                      <article><span>Seller facts</span><strong><i className={instantReady ? "green" : instantSafety ? "red" : "amber"}/>{instantReady ? "Complete" : instantSafety ? "Policy evidence missing" : `${instantSellerItemPhotos.length}/${instantPreview?.media.minimumPhotos ?? 1} actual-item photos`}</strong><small>Physical item only · catalog scan does not prove condition</small></article>
                     </div>
                     <div className="copy-heading"><div><span>{instantSample ? "BUYER-FACING LISTING DEMO" : "WORKING DRAFT · NOT PUBLISHABLE"}</span><Badge tone="orange">TitleGuard · {instantTitle.length}/80</Badge></div><label><span>{instantSample ? "Illustrative catalog/title-guarded title" : instantSafety ? "Safety-held working title" : instantPhotoFirst ? "Seller-described working title" : instantCatalogMatch ? "GM catalog-supported working title" : "Catalog-held title"}</span><input value={instantTitle} readOnly/><small>{instantSample ? "This filled state demonstrates the approved UI. It is not live catalog evidence." : instantSafety ? "This title cannot enter a marketplace payload during the restricted-item hold." : instantPhotoFirst ? "PartQuill preserves what the seller said but does not treat it as verified identity or fitment." : instantCatalogMatch ? "Identity and application text come from the scanned GM catalog; seller condition and marketplace fitment remain separately controlled." : "Brand, part type and category are intentionally absent until a unique authorized match exists."}</small></label></div>
                     {!instantCatalogRoute ? <div className={`instant-fitment-strip held ${instantSafety ? "safety" : ""}`}>
@@ -1825,7 +1901,8 @@ export default function Home() {
                     </div> : <div className="instant-fitment-strip held">
                       <div><span><i className="amber"/><strong>Fitment · {instantPreview?.fitment.totalApplications ?? 0} {instantCatalogMatch ? "catalog-derived" : "unverified"} applications</strong></span><Badge tone="amber">Review required</Badge></div>
                       <p>{instantPreview?.fitment.sourceDetail}</p>
-                      {instantPreview?.fitment.applications.map((application) => <div className="fitment-sample-row" key={`${application.vehicle}-${application.qualifier}`}><span><strong>{application.vehicle}</strong><small>{application.qualifier}</small></span><Badge tone="amber">{application.state === "CATALOG_DERIVED" ? "Catalog derived" : application.state === "CATALOG_STATED" ? "Catalog stated" : "Not verified"}</Badge></div>)}
+                      {instantPreview?.fitment.applications.slice(0, 8).map((application, index) => <div className="fitment-sample-row" key={`${application.vehicle}-${application.qualifier}-${index}`}><span><strong>{application.vehicle}</strong><small>{application.qualifier}</small></span><Badge tone="amber">{application.state === "CATALOG_DERIVED" ? "Catalog derived" : application.state === "CATALOG_STATED" ? "Catalog stated" : "Not verified"}</Badge></div>)}
+                      {(instantPreview?.fitment.applications.length ?? 0) > 8 && <div className="fitment-sample-row fitment-more-row"><span><strong>+{(instantPreview?.fitment.applications.length ?? 0) - 8} additional structured rows</strong><small>Open the compatibility inspector to review or edit the complete set.</small></span><Badge tone="slate">Not duplicated here</Badge></div>}
                       <button onClick={() => openDraft("fitment")}>Inspect compatibility evidence <Icon name="arrow"/></button>
                     </div>}
                     <div className="instant-key-fields">
@@ -1859,7 +1936,7 @@ export default function Home() {
 
               <aside className="instant-submit-panel">
                 <div className={`instant-score ${instantSafety ? "safety" : instantPhotoFirst ? "photo-first" : ""}`}><div><span>Listing status</span><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo facts complete" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photo intake" : "Action required"}</Badge></div><strong>{instantReady ? "Ready for simulated preflight" : instantStatusHeading}</strong><p>{instantReady ? "Next: private preflight binds the exact demo payload before final approval." : instantStatusCopy}</p></div>
-                <div className="autofill-summary"><span>Automatically prefilled</span>{[ ["Price", instantPrice ? `$${instantPrice}` : "Required", instantPrice ? "green" : "amber"], ["Quantity", instantQuantity, "green"], ["Condition", instantCondition, instantCondition === "Not specified" ? "amber" : "green"], ["Listing format", instantPreview?.listing.format ?? "Buy It Now · GTC", "green"], ["eBay category", instantPreview?.listing.categoryId ? `${instantPreview.listing.category} · ${instantPreview.listing.categoryId}` : instantPreview?.intelligence?.category.categoryName ? `${instantPreview.intelligence.category.categoryName} · verify` : "Pending", instantPreview?.listing.categoryId ? "green" : "amber"], ["Shipping", instantPreview?.intelligence?.shipping.estimatedBillableWeightLb ? `Calculated · est. ${instantPreview.intelligence.shipping.estimatedBillableWeightLb} lb billable` : instantShipping, "amber"], ["Handling", instantPreview?.listing.handlingTime ?? "1 business day", "green"], ["Returns", instantPreview?.listing.returns ?? "30 days · buyer-paid", "green"], ["Media", instantPhotos.length ? `${instantPhotos.length} staged locally` : `${instantPreview?.media.minimumPhotos ?? 1} required`, "amber"], ["International", instantSafety ? "Disabled for airbag route" : "Held until origin", "amber"] ].map(([label,value,tone]) => <div key={label}><Icon name={tone === "green" ? "check" : "alert"}/><span><strong>{label}</strong><small>{value}</small></span></div>)}</div>
+                <div className="autofill-summary"><span>Automatically prefilled</span>{[ ["Price", instantPrice ? `$${instantPrice}` : "Required", instantPrice ? "green" : "amber"], ["Quantity", instantQuantity, "green"], ["Condition", instantCondition, instantCondition === "Not specified" ? "amber" : "green"], ["Listing format", instantPreview?.listing.format ?? "Buy It Now · GTC", "green"], ["eBay category", instantPreview?.listing.categoryId ? `${instantPreview.listing.category} · ${instantPreview.listing.categoryId}` : instantPreview?.intelligence?.category.categoryName ? `${instantPreview.intelligence.category.categoryName} · verify` : "Pending", instantPreview?.listing.categoryId ? "green" : "amber"], ["Shipping", instantPreview?.intelligence?.shipping.estimatedBillableWeightLb ? `Calculated · est. ${instantPreview.intelligence.shipping.estimatedBillableWeightLb} lb billable` : instantShipping, "amber"], ["Handling", instantPreview?.listing.handlingTime ?? "3 business days", "green"], ["Returns", instantPreview?.listing.returns ?? "30 days · buyer-paid", "green"], ["Media", `${instantPhotos.length} total · ${instantSellerItemPhotos.length} actual-item`, instantSellerItemPhotos.length >= (instantPreview?.media.minimumPhotos ?? 1) ? "green" : "amber"], ["International", instantSafety ? "Disabled for airbag route" : "Held until origin", "amber"] ].map(([label,value,tone]) => <div key={label}><Icon name={tone === "green" ? "check" : "alert"}/><span><strong>{label}</strong><small>{value}</small></span></div>)}</div>
                 <div className="smallest-confirmations"><span>{instantSafety ? "Seller confirmations do not replace policy evidence" : instantPhotoFirst ? "Confirm the physical item after adding photos" : "Only confirm what the catalog cannot know"}</span><label className={instantPartConfirmed ? "confirmed" : ""}><input type="checkbox" checked={instantPartConfirmed} onChange={(event) => setInstantPartConfirmed(event.target.checked)}/><span><strong>{instantPreview?.confirmations[0]?.label ?? "This is the exact part I have in hand"}</strong><small>{instantPreview?.confirmations[0]?.detail}</small></span></label><label className={instantConditionConfirmed ? "confirmed" : ""}><input type="checkbox" disabled={instantCondition === "Not specified"} checked={instantConditionConfirmed} onChange={(event) => setInstantConditionConfirmed(event.target.checked)}/><span><strong>{instantPreview?.confirmations[1]?.label ?? `Condition = ${instantCondition}`}</strong><small>{instantPreview?.confirmations[1]?.detail} Open the full editor to change it.</small></span></label></div>
                 <div className={`instant-submit-state ${instantReady ? "ready" : "held"}`}><Icon name={instantReady ? "check" : "alert"}/><span><strong>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Submit disabled — restricted-item review incomplete" : instantPhotoFirst ? "Submit disabled — photos and identification incomplete" : instantCatalogMatch ? "Held — review catalog fitment and add seller photo" : instantHeld ? "Held — unique catalog identity required" : instantDirty ? "Payload changed — rebuild the command" : "Held — two seller facts remain"}</strong><small>{instantReady ? "Gate 1 validates this exact fingerprint; Gate 2 is separate. Actual eBay writes remain disabled." : "Nothing has been sent to eBay."}</small></span></div>
                 <button className="primary full" disabled={!instantReady} onClick={() => navigate("review")}>Review simulated private preflight <Icon name="arrow"/></button>

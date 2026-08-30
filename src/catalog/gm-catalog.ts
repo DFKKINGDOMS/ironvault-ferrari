@@ -85,6 +85,31 @@ export interface GmCatalogIdentityEvidence {
   sourcePages: number[];
 }
 
+export interface GmCatalogCalloutBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  image_width: number;
+  image_height: number;
+  confidence?: number;
+}
+
+export interface GmCatalogCalloutEvidence {
+  state: 'EXACT_ROW_AND_CALLOUT';
+  partNumber: string;
+  pageId: number;
+  calloutId: string;
+  catalogGroup: string | null;
+  description: string | null;
+  rowBox: GmCatalogCalloutBox;
+  rowConfidence: number;
+  calloutBoxes: GmCatalogCalloutBox[];
+  sourceImageUrl: string;
+  annotatedImageUrl: string;
+  method: 'CERTIFIED_ROW_SPATIAL_OCR' | 'CATALOG_DIAGRAM_COORDINATES';
+}
+
 export interface GmCatalogPart {
   partNumber: string;
   manufacturer: string;
@@ -94,6 +119,7 @@ export interface GmCatalogPart {
   catalogGroup: string | null;
   verificationState: string;
   identityEvidence?: GmCatalogIdentityEvidence;
+  calloutEvidence?: GmCatalogCalloutEvidence;
   ebayCategory?: GmCatalogEbayCategory;
   rollup: {
     occurrenceCount: number;
