@@ -22,12 +22,14 @@ describe('Vintage GM private importer', () => {
       'other-1,123456,OTHER BRAND,OTHER,4,1.00,0.1'
     ].join('\n') + '\n');
 
-    const result = spawnSync('python', [
+    const result = spawnSync('python3', [
       'scripts/import-vintage-gm.py',
       '--csv', source,
       '--output', bundle
     ], { cwd: process.cwd(), encoding: 'utf8' });
 
+    expect(result.error, result.error?.message).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       sourceTotalRows: 3,
