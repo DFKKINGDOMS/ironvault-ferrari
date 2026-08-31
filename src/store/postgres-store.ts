@@ -31,6 +31,7 @@ import type {
 import {
   MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
   matchesVintageVehicleApplication,
+  resolveVintageGmIntentFromCatalogModels,
   vintageGmModelSeriesAliases
 } from '../vintage-gm/inventory-question.js';
 import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
@@ -765,6 +766,26 @@ export class PostgresStore implements Store {
     if (!dataset.datasetId || !dataset.active || dataset.status !== 'completed') {
       return { dataset, matches: [], truncated: false };
     }
+    let resolvedIntent = intent;
+    if (intent.model && !intent.partQuery && !intent.partNumber) {
+      const modelRows = await this.pool.query<{ model_name: string }>(
+        `SELECT DISTINCT model.data->>'modelName' AS model_name
+         FROM partquill.vintage_gm_inventory AS inventory
+         JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
+         CROSS JOIN LATERAL jsonb_array_elements(coalesce(catalog.data->'applications','[]'::jsonb)) AS application(data)
+         CROSS JOIN LATERAL jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+         WHERE inventory.dataset_id=$1
+           AND inventory.quantity>0
+           AND nullif(model.data->>'modelName','') IS NOT NULL
+           AND btrim(regexp_replace(lower($2), '[^a-z0-9]+', ' ', 'g'))
+             LIKE btrim(regexp_replace(lower(model.data->>'modelName'), '[^a-z0-9]+', ' ', 'g')) || '%'`,
+        [dataset.datasetId, intent.model]
+      );
+      resolvedIntent = resolveVintageGmIntentFromCatalogModels(
+        intent,
+        modelRows.rows.map((row) => row.model_name)
+      );
+    }
     const result = await this.pool.query<{
       part_number: string;
       product_name: string;
@@ -811,7 +832,7 @@ export class PostgresStore implements Store {
          inventory.source_rows,inventory.record_count,catalog.data AS catalog_data
        FROM grouped_inventory AS inventory
        JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
-       WHERE ($2::integer IS NULL AND $3::text IS NULL AND $4::text IS NULL)
+       WHERE (($2::integer IS NULL AND $3::text IS NULL AND $4::text IS NULL)
           OR EXISTS (
             SELECT 1
             FROM jsonb_array_elements(coalesce(catalog.data->'applications','[]'::jsonb)) AS application(data)
@@ -888,21 +909,55 @@ export class PostgresStore implements Store {
                 )
               )
           )
+       )
+       AND ($7::text IS NULL OR inventory.part_number=$7)
+       AND (
+         jsonb_array_length($8::jsonb)=0
+         OR NOT EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements($8::jsonb) AS concept(data)
+           WHERE NOT EXISTS (
+             SELECT 1
+             FROM jsonb_array_elements_text(concept.data) AS alternative(value)
+             WHERE position(
+               btrim(regexp_replace(lower(alternative.value), '[^a-z0-9]+', ' ', 'g'))
+               IN lower(regexp_replace(concat_ws(' ',
+                 inventory.product_name,
+                 array_to_string(inventory.descriptions, ' '),
+                 catalog.data->>'productType',
+                 catalog.data->>'description',
+                 catalog.data->>'catalogGroup',
+                 (
+                   SELECT string_agg(concat_ws(' ',
+                     application.data->>'partName',
+                     application.data->>'description',
+                     application.data->>'groupHeading',
+                     application.data->>'componentFamily'
+                   ), ' ')
+                   FROM jsonb_array_elements(coalesce(catalog.data->'applications','[]'::jsonb)) AS application(data)
+                 )
+               ), '[^a-z0-9]+', ' ', 'g'))
+             )>0
+           )
+         )
+       )
        ORDER BY inventory.part_number ASC
        LIMIT $5`,
       [
         dataset.datasetId,
-        intent.year,
-        intent.model,
-        intent.make,
+        resolvedIntent.year,
+        resolvedIntent.model,
+        resolvedIntent.make,
         MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1,
-        vintageGmModelSeriesAliases(intent.model, intent.year).map((alias) => alias.toUpperCase())
+        vintageGmModelSeriesAliases(resolvedIntent.model, resolvedIntent.year).map((alias) => alias.toUpperCase()),
+        resolvedIntent.partNumber,
+        JSON.stringify(resolvedIntent.partSearchGroups)
       ]
     );
     const overflow = result.rows.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS;
     const matches = result.rows.slice(0, MAX_VINTAGE_INVENTORY_ANSWER_ROWS).map((row) => {
       const matchedApplications = (row.catalog_data.applications ?? []).filter((application) =>
-        matchesVintageVehicleApplication(application, intent)
+        matchesVintageVehicleApplication(application, resolvedIntent)
       );
       return {
         inventory: {
@@ -924,7 +979,7 @@ export class PostgresStore implements Store {
         matchedApplications
       };
     });
-    return { dataset, matches, truncated: overflow };
+    return { dataset, matches, truncated: overflow, resolvedIntent };
   }
 
   async createItem(item: ItemRecord): Promise<void> {

@@ -1,5 +1,6 @@
-import type { GmCatalogApplication } from '../catalog/gm-catalog.js';
+import type { GmCatalogApplication, GmCatalogPart } from '../catalog/gm-catalog.js';
 import type {
+  VintageGmCatalogInventory,
   VintageGmInventoryAnswer,
   VintageGmInventoryAnswerRow,
   VintageGmInventoryQuestionIntent,
@@ -22,7 +23,8 @@ const knownMakes: ReadonlyArray<{ pattern: RegExp; name: string }> = [
 ];
 
 const modelSeriesAliases: Readonly<Record<string, readonly string[]>> = {
-  corvette: ['Y']
+  corvette: ['Y'],
+  'c k truck': ['C K', 'C', 'K']
 };
 
 function compact(value: string): string {
@@ -75,27 +77,169 @@ function requestedSort(command: string): { sortBy: VintageGmInventorySort; sortD
   };
 }
 
-function vehicleFrom(command: string): { year: number | null; make: string | null; model: string | null } {
+interface PartConcept {
+  canonical: string;
+  patterns: RegExp[];
+  alternatives: string[];
+}
+
+const partConcepts: readonly PartConcept[] = [
+  {
+    canonical: 'wheel lug nut',
+    patterns: [/\b(?:wheel\s+)?lug\s+nuts?\b/i, /\bwheel\s+nuts?\b/i],
+    alternatives: ['lug nut', 'wheel nut', 'nut wheel', 'wheel lug']
+  },
+  {
+    canonical: 'door panel',
+    patterns: [/\bdoor\s+(?:trim\s+)?panels?\b/i],
+    alternatives: ['door panel', 'door trim', 'trim panel door']
+  },
+  {
+    canonical: 'interior',
+    patterns: [/\binterior(?:\s+(?:parts?|trim|components?))?\b/i],
+    alternatives: [
+      'interior', 'instrument panel', 'dashboard', 'dash panel', 'console', 'seat',
+      'headliner', 'carpet', 'garnish', 'interior trim', 'trim panel', 'door panel'
+    ]
+  },
+  {
+    canonical: 'exterior',
+    patterns: [/\bexterior(?:\s+(?:parts?|trim|components?))?\b/i],
+    alternatives: ['exterior', 'body panel', 'bumper', 'fender', 'hood', 'grille', 'molding', 'exterior trim']
+  },
+  {
+    canonical: 'brake',
+    patterns: [/\bbrakes?\b/i],
+    alternatives: ['brake', 'caliper', 'rotor', 'drum', 'master cylinder']
+  },
+  {
+    canonical: 'steering',
+    patterns: [/\bsteering\b/i],
+    alternatives: ['steering', 'steering gear', 'steering column', 'tie rod']
+  },
+  {
+    canonical: 'suspension',
+    patterns: [/\bsuspension\b/i],
+    alternatives: ['suspension', 'control arm', 'spring', 'shock', 'strut']
+  },
+  {
+    canonical: 'engine',
+    patterns: [/\bengine(?:\s+parts?)?\b/i],
+    alternatives: ['engine', 'motor', 'cylinder', 'piston', 'camshaft', 'crankshaft']
+  },
+  {
+    canonical: 'transmission',
+    patterns: [/\btransmissions?\b|\btrans\b/i],
+    alternatives: ['transmission', 'transaxle', 'gearbox']
+  },
+  {
+    canonical: 'electrical',
+    patterns: [/\belectrical\b/i],
+    alternatives: ['electrical', 'switch', 'relay', 'wiring', 'harness', 'lamp']
+  }
+];
+
+const partNoiseWords = new Set([
+  'a', 'an', 'all', 'any', 'available', 'can', 'catalog', 'do', 'every', 'find', 'for',
+  'full', 'give', 'got', 'has', 'have', 'i', 'in', 'inventory', 'inv', 'is', 'list',
+  'locate', 'looking', 'me', 'need', 'of', 'on', 'part', 'parts', 'please', 'search',
+  'show', 'some', 'stock', 'that', 'the', 'to', 'vintage', 'want', 'we', 'what',
+  'which', 'with', 'you'
+]);
+
+function matchedPartConcept(value: string): PartConcept | null {
+  return partConcepts.find((concept) => concept.patterns.some((pattern) => pattern.test(value))) ?? null;
+}
+
+function cleanPartQuery(value: string): string | null {
+  const words = normalizedWords(value).split(' ').filter((word) => word && !partNoiseWords.has(word) && !/^(?:18|19|20)\d{2}$/.test(word));
+  return words.length ? words.join(' ') : null;
+}
+
+function partSearchGroups(partQuery: string | null): string[][] {
+  if (!partQuery) return [];
+  const concept = matchedPartConcept(partQuery);
+  if (concept) return [concept.alternatives.map((value) => normalizedWords(value))];
+  return normalizedWords(partQuery).split(' ').filter((word) => word.length > 1).map((word) => [word]);
+}
+
+function normalizeVehicleModel(value: string, make: string | null): string | null {
+  const compacted = compact(value)
+    .replace(/^(?:all|the|any|a|an)\s+/i, '')
+    .replace(/\b(?:replacement|oem|genuine|new|used)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!compacted || /^(?:gm|general\s+motors|vehicle|car|truck|pickup)$/i.test(compacted)) return null;
+  const normalized = normalizedWords(compacted);
+  if ((make === 'GMC' || make === 'Chevrolet' || make === null) && /^(?:c\s+k|ck)(?:\s+(?:pickup|truck))?$/.test(normalized)) {
+    return 'C/K Truck';
+  }
+  return titleCase(compacted.replace(/\s*[,/]\s*/g, '/'));
+}
+
+function vehicleAndPartFrom(command: string): {
+  year: number | null;
+  make: string | null;
+  model: string | null;
+  vehicleText: string | null;
+  partQuery: string | null;
+} {
   const yearMatch = command.match(/\b((?:18|19|20)\d{2})\b/);
   const year = yearMatch ? Number(yearMatch[1]) : null;
-  const afterYear = yearMatch && yearMatch.index !== undefined
-    ? command.slice(yearMatch.index + yearMatch[0].length)
-    : '';
-  const rawVehicle = afterYear.match(/^\s*(?:model\s+)?(.+?)\s+parts?\b/i)?.[1]
-    ?? afterYear.match(/^\s*(?:model\s+)?(.+?)(?=\s+(?:that|which|from|in\s+stock|available|inventory|at\s+vintage)\b|[?.!,]|$)/i)?.[1]
-    ?? command.match(/\bfor\s+(?:a|an|the)\s+(.+?)(?:\s+parts?\b|[?.!,]|$)/i)?.[1]
-    ?? null;
-  if (!rawVehicle) return { year, make: null, model: null };
+  const makeEntry = knownMakes.find((candidate) => candidate.pattern.test(command));
+  const make = makeEntry?.name ?? null;
+  const concept = matchedPartConcept(command);
 
-  let segment = compact(rawVehicle)
-    .replace(/^(?:all|the|any)\s+/i, '')
-    .replace(/\b(?:replacement|oem|genuine|new|used)\b/gi, ' ');
-  const makeEntry = knownMakes.find((candidate) => candidate.pattern.test(segment));
-  if (makeEntry) segment = compact(segment.replace(makeEntry.pattern, ' '));
-  const model = segment && !/^(?:gm|general\s+motors|vehicle|car|truck)$/i.test(segment)
-    ? titleCase(segment)
-    : null;
-  return { year, make: makeEntry?.name ?? null, model };
+  let vehicleSegment = '';
+  let partCandidate = '';
+  const forVehicle = command.match(/\bfor\s+(?:a|an|the)?\s*((?:18|19|20)\d{2}\b[\s\S]*)/i);
+  if (forVehicle && forVehicle.index !== undefined) {
+    vehicleSegment = forVehicle[1] ?? '';
+    partCandidate = command.slice(0, forVehicle.index);
+  } else if (yearMatch && yearMatch.index !== undefined) {
+    vehicleSegment = command.slice(yearMatch.index);
+  } else {
+    const forNamedVehicle = command.match(/\bfor\s+(?:a|an|the)\s+(.+?)(?=\s+(?:that|which|with|in\s+stock|available|from\s+vintage)\b|[?.!]|$)/i);
+    if (forNamedVehicle && forNamedVehicle.index !== undefined) {
+      vehicleSegment = forNamedVehicle[1] ?? '';
+      partCandidate = command.slice(0, forNamedVehicle.index);
+    }
+  }
+
+  vehicleSegment = vehicleSegment
+    .replace(/\b(?:that|which|with|from)\b[\s\S]*$/i, '')
+    .replace(/\b(?:in\s+stock|on\s+hand|available|sorted?\s+by|order(?:ed)?\s+by)\b[\s\S]*$/i, '')
+    .replace(/\s+parts?\b[\s\S]*$/i, '')
+    .replace(/[?.!]+$/g, '')
+    .trim();
+
+  if (concept) {
+    for (const pattern of concept.patterns) {
+      const match = vehicleSegment.match(pattern);
+      if (match && match.index !== undefined && match.index > 0) {
+        vehicleSegment = vehicleSegment.slice(0, match.index).trim();
+        if (!partCandidate) partCandidate = match[0];
+        break;
+      }
+    }
+  }
+
+  let modelSegment = vehicleSegment
+    .replace(/\b(?:18|19|20)\d{2}\b/g, ' ')
+    .replace(/\b(?:model|year)\b/gi, ' ');
+  if (makeEntry) modelSegment = modelSegment.replace(makeEntry.pattern, ' ');
+  modelSegment = compact(modelSegment);
+
+  const model = normalizeVehicleModel(modelSegment, make);
+  let partQuery = concept?.canonical ?? cleanPartQuery(partCandidate);
+  if (!partQuery && !vehicleSegment) partQuery = cleanPartQuery(command);
+  const vehicleText = [year, make, model].filter(Boolean).join(' ') || null;
+  return { year, make, model, vehicleText, partQuery };
+}
+
+function inventoryPartNumber(command: string): string | null {
+  const raw = command.match(/\b(?:part(?:\s*(?:number|no\.?|#))?|mpn|sku)\s*[:#-]?\s*([a-z0-9][a-z0-9._-]{3,})\b/i)?.[1];
+  return raw ? raw.replace(/[^a-z0-9]/gi, '').toUpperCase() : null;
 }
 
 export function vintageGmModelSeriesAliases(model: string | null, year: number | null): string[] {
@@ -106,29 +250,106 @@ export function vintageGmModelSeriesAliases(model: string | null, year: number |
 
 export function parseVintageGmInventoryQuestion(command: string): VintageGmInventoryQuestionIntent | null {
   const normalized = command.toLowerCase();
-  const inventoryCue = /\b(?:inventory|inv|in\s+stock|on\s+hand|stock\s+list|available|quantity|qty|value|price|cost|how\s+many|has|have)\b/.test(normalized)
-    || /\b(?:all|every|full)\s+(?:the\s+)?parts?\b/.test(normalized);
-  // Inventory wording is authoritative for the Vintage Parts stock dataset, even when the user omits the source name.
-  const sourceMentioned = /\bvintage\s+parts?\b|\bvintage\s+(?:source|inventory|file)\b/.test(normalized) || inventoryCue;
-  const asksForInventory = inventoryCue;
-  const asksForParts = /\bparts?\b|\binventory\b/.test(normalized);
-  const questionOrSet = /\b(?:give|show|find|tell|which|what|how|list|display|sort)\b/.test(normalized) || command.includes('?');
-  const singleListing = /\b(?:list|sell|draft|publish)\s+(?:gm\s+)?part\s*(?:#|number)?\s*[:#-]?\s*[a-z0-9-]{4,}\b/i.test(command)
-    || /\b(?:on\s+ebay|for\s+\$\s*\d)/i.test(command);
-  if (!sourceMentioned || !asksForInventory || !asksForParts || !questionOrSet || singleListing) return null;
+  const singleListing = /\b(?:sell|draft|publish)\b/i.test(command)
+    || /\b(?:on\s+ebay|for\s+\$\s*\d|\$\s*\d)\b/i.test(command)
+    || /\blist\s+(?:a|an|one|this)\s+(?:new|used|nos|genuine|oem|black|white|red|blue|left|right)\b/i.test(command);
+  if (singleListing) return null;
 
-  const vehicle = vehicleFrom(command);
+  const understood = vehicleAndPartFrom(command);
+  const partNumber = inventoryPartNumber(command);
+  if (partNumber) understood.partQuery = null;
+  const sourceMentioned = /\bvintage\s+parts?\b|\bvintage\s+(?:source|inventory|file)\b/.test(normalized);
+  const inventoryCue = /\b(?:inventory|inv|in\s+stock|on\s+hand|stock\s+list|available|quantity|qty|value|price|cost|how\s+many)\b/.test(normalized)
+    || /\b(?:do|what)\s+(?:we|you)\s+have\b|\blooking\s+for\b|\b(?:find|locate|search)\b/.test(normalized)
+    || /\b(?:all|every|full)\s+(?:the\s+)?parts?\b/.test(normalized)
+    || /\bi\s+(?:need|want)\b/.test(normalized);
+  const questionCue = /\b(?:give|show|find|locate|search|tell|which|what|how|list|display|sort|need|want|looking)\b/.test(normalized)
+    || command.includes('?');
+  const vehicleCue = understood.year !== null || understood.make !== null || understood.model !== null;
+  const partCue = understood.partQuery !== null || partNumber !== null || /\bparts?\b/.test(normalized);
+  const compactVehicleOnly = vehicleCue && normalizedWords(command).split(' ').length <= 7;
+  if (!(sourceMentioned || inventoryCue || compactVehicleOnly) || !(questionCue || compactVehicleOnly) || !(vehicleCue || partCue)) {
+    return null;
+  }
+
   const sort = requestedSort(command);
+  const queryMode = partNumber
+    ? 'PART_NUMBER'
+    : vehicleCue && understood.partQuery
+      ? 'VEHICLE_PART'
+      : vehicleCue
+        ? 'VEHICLE_ALL_PARTS'
+        : 'PART_DESCRIPTION';
   return {
     kind: 'VINTAGE_GM_INVENTORY_QUESTION',
     source: 'VINTAGE_PARTS',
-    year: vehicle.year,
-    make: vehicle.make,
-    model: vehicle.model,
+    year: understood.year,
+    make: understood.make,
+    model: understood.model,
+    vehicleText: understood.vehicleText,
+    partQuery: understood.partQuery,
+    partNumber,
+    partSearchGroups: partSearchGroups(understood.partQuery),
+    queryMode,
     inStockOnly: true,
     sortBy: sort.sortBy,
     sortDirection: sort.sortDirection,
     requestedLimit: requestedLimit(command)
+  };
+}
+
+export function matchesVintagePartQuery(
+  catalog: GmCatalogPart,
+  inventory: VintageGmCatalogInventory,
+  intent: VintageGmInventoryQuestionIntent
+): boolean {
+  if (intent.partNumber && normalizedWords(inventory.partNumber) !== normalizedWords(intent.partNumber)) return false;
+  if (intent.partSearchGroups.length === 0) return true;
+  const applicationPartText = (catalog.applications ?? []).map((application) => [
+    application.partName,
+    application.description,
+    application.groupHeading,
+    application.componentFamily
+  ].filter(Boolean).join(' ')).join(' ');
+  const searchable = normalizedWords([
+    inventory.productName,
+    ...inventory.descriptions,
+    catalog.productType,
+    catalog.description,
+    catalog.catalogGroup,
+    applicationPartText
+  ].filter(Boolean).join(' '));
+  return intent.partSearchGroups.every((alternatives) =>
+    alternatives.some((alternative) => includesWords(searchable, alternative))
+  );
+}
+
+export function resolveVintageGmIntentFromCatalogModels(
+  intent: VintageGmInventoryQuestionIntent,
+  catalogModels: readonly string[]
+): VintageGmInventoryQuestionIntent {
+  if (!intent.model || intent.partQuery || intent.partNumber) return intent;
+  const requested = normalizedWords(intent.model);
+  const candidates = catalogModels
+    .map((model) => ({ source: model, normalized: normalizedWords(model) }))
+    .filter((candidate) =>
+      candidate.normalized
+      && !/^(?:car|truck|vehicle|passenger car|all)$/.test(candidate.normalized)
+      && (requested === candidate.normalized || requested.startsWith(candidate.normalized + ' '))
+    )
+    .sort((left, right) => right.normalized.length - left.normalized.length);
+  const selected = candidates[0];
+  if (!selected || selected.normalized === requested) return intent;
+  const remainder = requested.slice(selected.normalized.length).trim();
+  if (!remainder) return intent;
+  const resolvedModel = titleCase(selected.source);
+  return {
+    ...intent,
+    model: resolvedModel,
+    vehicleText: [intent.year, intent.make, resolvedModel].filter(Boolean).join(' '),
+    partQuery: remainder,
+    partSearchGroups: partSearchGroups(remainder),
+    queryMode: 'VEHICLE_PART'
   };
 }
 
@@ -184,6 +405,44 @@ export function matchesVintageVehicleApplication(
     && applicationHasMake(application, intent.make);
 }
 
+function catalogImage(
+  catalog: GmCatalogPart,
+  sourcePages: number[]
+): VintageGmInventoryAnswerRow['catalogImage'] {
+  if (catalog.calloutEvidence?.annotatedImageUrl) {
+    return {
+      state: 'EXACT_CALLOUT',
+      url: catalog.calloutEvidence.annotatedImageUrl,
+      pageId: catalog.calloutEvidence.pageId,
+      calloutId: catalog.calloutEvidence.calloutId,
+      label: 'Exact catalog callout ' + catalog.calloutEvidence.calloutId
+    };
+  }
+  const diagram = (catalog.diagrams ?? []).find((candidate) => candidate.isPrimary && candidate.exactPartDepiction)
+    ?? (catalog.diagrams ?? []).find((candidate) => candidate.exactPartDepiction)
+    ?? (catalog.diagrams ?? []).find((candidate) => candidate.isPrimary);
+  if (diagram) {
+    return {
+      state: 'CATALOG_DIAGRAM',
+      url: '/v1/gm-catalog/pages/' + diagram.pageId + '/image',
+      pageId: diagram.pageId,
+      calloutId: diagram.calloutLabel,
+      label: diagram.calloutLabel ? 'Catalog diagram · callout ' + diagram.calloutLabel : 'Catalog diagram'
+    };
+  }
+  const pageId = sourcePages[0] ?? catalog.rollup.representativePageId;
+  if (pageId) {
+    return {
+      state: 'EVIDENCE_PAGE',
+      url: '/v1/gm-catalog/pages/' + pageId + '/image',
+      pageId,
+      calloutId: null,
+      label: 'Catalog evidence page'
+    };
+  }
+  return { state: 'UNAVAILABLE', url: null, pageId: null, calloutId: null, label: 'Catalog image unavailable' };
+}
+
 function displayDescription(values: string[], fallback: string | null): string {
   const source = values.find((value) => value.trim()) ?? fallback ?? 'Description unavailable';
   return titleCase(source);
@@ -215,13 +474,15 @@ export function buildVintageGmInventoryAnswer(
   intent: VintageGmInventoryQuestionIntent,
   pool: VintageGmInventoryQuestionPool
 ): VintageGmInventoryAnswer {
-  const label = fitmentLabel(intent);
-  const mapped = pool.matches.map<VintageGmInventoryAnswerRow>((match) => {
-    const applications = match.matchedApplications.filter((application) => matchesVintageVehicleApplication(application, intent));
+  const resolvedIntent = pool.resolvedIntent ?? intent;
+  const label = fitmentLabel(resolvedIntent);
+  const mapped = pool.matches.filter((match) => matchesVintagePartQuery(match.catalog, match.inventory, resolvedIntent))
+    .map<VintageGmInventoryAnswerRow>((match) => {
+    const applications = match.matchedApplications.filter((application) => matchesVintageVehicleApplication(application, resolvedIntent));
     const sourcePages = [...new Set(applications.map((application) => application.sourcePageId).filter((page) => page > 0))]
       .sort((left, right) => left - right);
-    const modelDerived = Boolean(intent.model) && applications.some((application) => application.models.some((model) =>
-      includesWords(`${model.modelName} ${model.seriesCode ?? ''}`, intent.model ?? '')
+    const modelDerived = Boolean(resolvedIntent.model) && applications.some((application) => application.models.some((model) =>
+      includesWords(`${model.modelName} ${model.seriesCode ?? ''}`, resolvedIntent.model ?? '')
       && model.verificationState.toLowerCase() !== 'catalog_stated'
     ));
     return {
@@ -237,6 +498,7 @@ export function buildVintageGmInventoryAnswer(
       sourceInventoryValue: match.sourceInventoryValue,
       sourceWeightMin: match.inventory.sourceWeightMin,
       sourceWeightMax: match.inventory.sourceWeightMax,
+      catalogImage: catalogImage(match.catalog, sourcePages),
       fitment: {
         label,
         applicationCount: applications.length,
@@ -244,10 +506,10 @@ export function buildVintageGmInventoryAnswer(
         evidenceState: modelDerived ? 'CATALOG_DERIVED_MODEL' : 'CATALOG_STATED'
       }
     };
-  }).filter((row) => row.fitment.applicationCount > 0 || (!intent.year && !intent.make && !intent.model));
+  }).filter((row) => row.fitment.applicationCount > 0 || (!resolvedIntent.year && !resolvedIntent.make && !resolvedIntent.model));
 
-  const ordered = sortedRows(mapped, intent);
-  const selected = ordered.slice(0, intent.requestedLimit ?? MAX_VINTAGE_INVENTORY_ANSWER_ROWS)
+  const ordered = sortedRows(mapped, resolvedIntent);
+  const selected = ordered.slice(0, resolvedIntent.requestedLimit ?? MAX_VINTAGE_INVENTORY_ANSWER_ROWS)
     .map((row, index) => ({ ...row, rank: index + 1 }));
   const truncated = pool.truncated || selected.length < ordered.length;
   const datasetReady = Boolean(pool.dataset?.active && pool.dataset.status === 'completed');
@@ -259,7 +521,7 @@ export function buildVintageGmInventoryAnswer(
     kind: 'VINTAGE_GM_INVENTORY_ANSWER',
     status: !datasetReady ? 'DATA_NOT_LOADED' : selected.length === 0 ? 'NO_MATCHES' : truncated ? 'TRUNCATED' : 'READY',
     command,
-    intent,
+    intent: resolvedIntent,
     dataset: pool.dataset,
     returnedCount: selected.length,
     summary: {

@@ -26,7 +26,9 @@ import type {
 } from '../vintage-gm/types.js';
 import {
   MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
-  matchesVintageVehicleApplication
+  matchesVintagePartQuery,
+  matchesVintageVehicleApplication,
+  resolveVintageGmIntentFromCatalogModels
 } from '../vintage-gm/inventory-question.js';
 
 function clone<T>(value: T): T {
@@ -303,6 +305,13 @@ export class MemoryStore implements Store {
       .sort((left, right) => (right.completedAt ?? '').localeCompare(left.completedAt ?? ''))[0];
     if (!dataset) return { dataset: await this.getVintageGmStatus(), matches: [], truncated: false };
 
+    const catalogModels = [...this.gmCatalog.values()].flatMap((catalog) =>
+      (catalog.applications ?? []).flatMap((application) =>
+        (application.models ?? []).map((model) => model.modelName)
+      )
+    );
+    const resolvedIntent = resolveVintageGmIntentFromCatalogModels(intent, catalogModels);
+
     const grouped = new Map<string, VintageGmInventoryRecord[]>();
     for (const entry of this.vintageGmInventory.values()) {
       const record = entry.record;
@@ -316,14 +325,14 @@ export class MemoryStore implements Store {
     for (const [partNumber, records] of grouped) {
       const catalog = this.gmCatalog.get(partNumber);
       if (!catalog) continue;
-      const matchedApplications = (catalog.applications ?? []).filter((application) => matchesVintageVehicleApplication(application, intent));
-      if ((intent.year || intent.make || intent.model) && matchedApplications.length === 0) continue;
+      const matchedApplications = (catalog.applications ?? []).filter((application) => matchesVintageVehicleApplication(application, resolvedIntent));
+      if ((resolvedIntent.year || resolvedIntent.make || resolvedIntent.model) && matchedApplications.length === 0) continue;
       const numericMinRecord = (field: 'sourcePrice' | 'sourceWeight') =>
         [...records].sort((left, right) => Number(left[field]) - Number(right[field]))[0]?.[field] ?? '0';
       const numericMaxRecord = (field: 'sourcePrice' | 'sourceWeight') =>
         [...records].sort((left, right) => Number(right[field]) - Number(left[field]))[0]?.[field] ?? '0';
       const first = [...records].sort((left, right) => left.sourceRow - right.sourceRow)[0]!;
-      matches.push({
+      const candidate: VintageGmInventoryQuestionMatch = {
         inventory: {
           partNumber,
           productName: first.productName,
@@ -341,14 +350,17 @@ export class MemoryStore implements Store {
         sourceInventoryValue: records.reduce((total, record) => total + (record.quantity * Number(record.sourcePrice)), 0).toFixed(4),
         catalog: clone(catalog),
         matchedApplications: clone(matchedApplications)
-      });
+      };
+      if (!matchesVintagePartQuery(candidate.catalog, candidate.inventory, resolvedIntent)) continue;
+      matches.push(candidate);
     }
     matches.sort((left, right) => left.inventory.partNumber.localeCompare(right.inventory.partNumber, undefined, { numeric: true }));
     const cap = MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1;
     return {
       dataset: clone(dataset),
       matches: matches.slice(0, cap),
-      truncated: matches.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS
+      truncated: matches.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
+      resolvedIntent
     };
   }
 

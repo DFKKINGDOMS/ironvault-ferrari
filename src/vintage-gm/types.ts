@@ -93,6 +93,11 @@ export interface VintageGmInventoryQuestionIntent {
   year: number | null;
   make: string | null;
   model: string | null;
+  vehicleText: string | null;
+  partQuery: string | null;
+  partNumber: string | null;
+  partSearchGroups: string[][];
+  queryMode: 'VEHICLE_ALL_PARTS' | 'VEHICLE_PART' | 'PART_DESCRIPTION' | 'PART_NUMBER';
   inStockOnly: true;
   sortBy: VintageGmInventorySort;
   sortDirection: VintageGmInventorySortDirection;
@@ -110,6 +115,7 @@ export interface VintageGmInventoryQuestionPool {
   dataset: VintageGmDatasetStatus | null;
   matches: VintageGmInventoryQuestionMatch[];
   truncated: boolean;
+  resolvedIntent?: VintageGmInventoryQuestionIntent;
 }
 
 export type VintageGmInventoryAnswerStatus =
@@ -131,6 +137,13 @@ export interface VintageGmInventoryAnswerRow {
   sourceInventoryValue: string;
   sourceWeightMin: string;
   sourceWeightMax: string;
+  catalogImage: {
+    state: 'EXACT_CALLOUT' | 'CATALOG_DIAGRAM' | 'EVIDENCE_PAGE' | 'UNAVAILABLE';
+    url: string | null;
+    pageId: number | null;
+    calloutId: string | null;
+    label: string;
+  };
   fitment: {
     label: string;
     applicationCount: number;

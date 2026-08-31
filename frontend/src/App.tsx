@@ -370,6 +370,13 @@ type VintageGmInventoryAnswerRow = {
   sourceInventoryValue: string;
   sourceWeightMin: string;
   sourceWeightMax: string;
+  catalogImage: {
+    state: "EXACT_CALLOUT" | "CATALOG_DIAGRAM" | "EVIDENCE_PAGE" | "UNAVAILABLE";
+    url: string | null;
+    pageId: number | null;
+    calloutId: string | null;
+    label: string;
+  };
   fitment: {
     label: string;
     applicationCount: number;
@@ -389,6 +396,11 @@ type VintageGmInventoryAnswer = {
     year: number | null;
     make: string | null;
     model: string | null;
+    vehicleText: string | null;
+    partQuery: string | null;
+    partNumber: string | null;
+    partSearchGroups: string[][];
+    queryMode: "VEHICLE_ALL_PARTS" | "VEHICLE_PART" | "PART_DESCRIPTION" | "PART_NUMBER";
     inStockOnly: true;
     sortBy: VintageGmInventorySort;
     sortDirection: VintageGmInventorySortDirection;
@@ -1492,7 +1504,12 @@ function VintageInventoryAnswerPanel({
   const priceLabel = (row: VintageGmInventoryAnswerRow) => row.sourcePriceMin === row.sourcePriceMax
     ? money(row.sourcePriceMin)
     : `${money(row.sourcePriceMin)}–${money(row.sourcePriceMax)}`;
-  const scopeLabel = [answer.intent.year, answer.intent.make, answer.intent.model].filter(Boolean).join(" ") || "All catalog-supported GM parts";
+  const vehicleScope = answer.intent.vehicleText || [answer.intent.year, answer.intent.make, answer.intent.model].filter(Boolean).join(" ");
+  const scopeLabel = answer.intent.partNumber
+    ? `Part ${answer.intent.partNumber}`
+    : answer.intent.partQuery
+      ? `${answer.intent.partQuery} · ${vehicleScope || "all catalog-supported GM vehicles"}`
+      : vehicleScope || "All catalog-supported GM parts";
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const rows = answer.rows.filter((row) => !needle || `${row.partNumber} ${row.sku} ${row.description} ${row.brands.join(" ")}`.toLowerCase().includes(needle));
@@ -1513,7 +1530,7 @@ function VintageInventoryAnswerPanel({
   const exportCsv = () => {
     const cell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
     const lines = [
-      ["Part number", "SKU", "Description", "Quantity", "Vintage source price min", "Vintage source price max", "Source inventory value", "Fitment", "Catalog evidence pages"].map(cell).join(","),
+      ["Part number", "SKU", "Description", "Quantity", "Vintage source price min", "Vintage source price max", "Source inventory value", "Fitment", "Catalog image", "Catalog evidence pages"].map(cell).join(","),
       ...filtered.map((row) => [
         row.partNumber,
         row.sku,
@@ -1523,6 +1540,7 @@ function VintageInventoryAnswerPanel({
         row.sourcePriceMax,
         row.sourceInventoryValue,
         row.fitment.label,
+        row.catalogImage.url ?? "",
         row.fitment.sourcePages.join(" | ")
       ].map(cell).join(","))
     ];
@@ -1561,7 +1579,10 @@ function VintageInventoryAnswerPanel({
         <thead><tr><th>Part number</th><th>Description / fitment evidence</th><th className="numeric">Qty</th><th className="numeric">Vintage price</th><th className="numeric">Inventory value</th><th>Action</th></tr></thead>
         <tbody>{visible.map((row) => <tr key={row.partNumber}>
           <td><strong>{row.partNumber}</strong><small>SKU {row.sku}</small></td>
-          <td><strong>{row.description}</strong><small>{row.fitment.label} · {row.fitment.applicationCount} catalog application{row.fitment.applicationCount === 1 ? "" : "s"} · {row.fitment.evidenceState === "CATALOG_STATED" ? "catalog stated" : "catalog-derived model scope"}</small>{row.fitment.sourcePages[0] && <a href={`/v1/gm-catalog/pages/${row.fitment.sourcePages[0]}/image`} target="_blank" rel="noreferrer">View source page {row.fitment.sourcePages[0]} <Icon name="arrow"/></a>}</td>
+          <td><div className="inventory-answer-part">
+            {row.catalogImage.url ? <a className="inventory-answer-thumb" href={row.catalogImage.url} target="_blank" rel="noreferrer"><img src={row.catalogImage.url} alt={row.catalogImage.label}/><span>{row.catalogImage.state === "EXACT_CALLOUT" ? "Exact callout" : row.catalogImage.state === "CATALOG_DIAGRAM" ? "Diagram" : "Evidence"}</span></a> : <div className="inventory-answer-thumb unavailable"><Icon name="camera"/><span>No verified image</span></div>}
+            <div className="inventory-answer-copy"><strong>{row.description}</strong><small>{row.fitment.label} · {row.fitment.applicationCount} catalog application{row.fitment.applicationCount === 1 ? "" : "s"} · {row.fitment.evidenceState === "CATALOG_STATED" ? "catalog stated" : "catalog-derived model scope"}</small>{row.catalogImage.url && <a href={row.catalogImage.url} target="_blank" rel="noreferrer">{row.catalogImage.label} <Icon name="arrow"/></a>}</div>
+          </div></td>
           <td className="numeric"><strong>{row.quantity.toLocaleString()}</strong></td>
           <td className="numeric"><strong>{priceLabel(row)}</strong></td>
           <td className="numeric"><strong>{money(row.sourceInventoryValue)}</strong></td>

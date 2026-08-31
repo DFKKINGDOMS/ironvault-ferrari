@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { GmCatalogApplication, GmCatalogPart } from '../src/catalog/gm-catalog.js';
 import {
   buildVintageGmInventoryAnswer,
+  matchesVintagePartQuery,
   matchesVintageVehicleApplication,
-  parseVintageGmInventoryQuestion
+  parseVintageGmInventoryQuestion,
+  resolveVintageGmIntentFromCatalogModels
 } from '../src/vintage-gm/inventory-question.js';
 import type {
   VintageGmCatalogInventory,
@@ -124,6 +126,55 @@ describe('Vintage inventory question intent', () => {
     expect(parseVintageGmInventoryQuestion('show me every part for the 1990 Corvette')).toMatchObject({
       kind: 'VINTAGE_GM_INVENTORY_QUESTION', year: 1990, model: 'Corvette'
     });
+  });
+
+  it('builds a structured vehicle and part query plan from normal seller language', () => {
+    expect(parseVintageGmInventoryQuestion('looking for a 1979 GMC C/K truck interior')).toMatchObject({
+      kind: 'VINTAGE_GM_INVENTORY_QUESTION',
+      year: 1979,
+      make: 'GMC',
+      model: 'C/K Truck',
+      vehicleText: '1979 GMC C/K Truck',
+      partQuery: 'interior',
+      queryMode: 'VEHICLE_PART',
+      inStockOnly: true
+    });
+    expect(parseVintageGmInventoryQuestion('I need a wheel lug nut for a 1978 Monte Carlo')).toMatchObject({
+      year: 1978,
+      make: null,
+      model: 'Monte Carlo',
+      partQuery: 'wheel lug nut',
+      queryMode: 'VEHICLE_PART',
+      partSearchGroups: [expect.arrayContaining(['lug nut', 'wheel nut'])]
+    });
+    expect(parseVintageGmInventoryQuestion('1995 Corvette')).toMatchObject({
+      year: 1995,
+      model: 'Corvette',
+      partQuery: null,
+      queryMode: 'VEHICLE_ALL_PARTS'
+    });
+  });
+
+  it('uses catalog model names to separate an unfamiliar trailing part description', () => {
+    const initial = parseVintageGmInventoryQuestion('1978 Monte Carlo water pump')!;
+    expect(initial.model).toBe('Monte Carlo Water Pump');
+    expect(resolveVintageGmIntentFromCatalogModels(initial, ['Camaro', 'Monte Carlo', 'Corvette'])).toMatchObject({
+      year: 1978,
+      model: 'Monte Carlo',
+      partQuery: 'water pump',
+      partSearchGroups: [['water'], ['pump']],
+      queryMode: 'VEHICLE_PART'
+    });
+  });
+
+  it('matches free-text part concepts against inventory and catalog descriptions', () => {
+    const lugIntent = parseVintageGmInventoryQuestion('I need a wheel lug nut for a 1978 Monte Carlo')!;
+    const interiorIntent = parseVintageGmInventoryQuestion('looking for a 1979 GMC C/K truck interior')!;
+    const lugCatalog = catalog('1000010', 'Nut, Wheel', application('Monte Carlo', 1978));
+    const interiorCatalog = catalog('1000011', 'Instrument Panel Trim', application('C/K Truck', 1979));
+    expect(matchesVintagePartQuery(lugCatalog, inventory('1000010', 'NUT, WHEEL', 4, '2.5000'), lugIntent)).toBe(true);
+    expect(matchesVintagePartQuery(interiorCatalog, inventory('1000011', 'INSTRUMENT PANEL TRIM', 1, '50.0000'), interiorIntent)).toBe(true);
+    expect(matchesVintagePartQuery(catalog('1000012', 'Engine Bracket', application('Monte Carlo', 1978)), inventory('1000012', 'ENGINE BRACKET', 1, '8.0000'), lugIntent)).toBe(false);
   });
 
   it('understands requested value sorting and keeps explicit listing commands on the listing route', () => {
