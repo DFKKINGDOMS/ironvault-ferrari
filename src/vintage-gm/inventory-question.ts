@@ -78,11 +78,12 @@ function requestedSort(command: string): { sortBy: VintageGmInventorySort; sortD
 function vehicleFrom(command: string): { year: number | null; make: string | null; model: string | null } {
   const yearMatch = command.match(/\b((?:18|19|20)\d{2})\b/);
   const year = yearMatch ? Number(yearMatch[1]) : null;
-  if (!yearMatch || yearMatch.index === undefined) return { year, make: null, model: null };
-
-  const afterYear = command.slice(yearMatch.index + yearMatch[0].length);
+  const afterYear = yearMatch && yearMatch.index !== undefined
+    ? command.slice(yearMatch.index + yearMatch[0].length)
+    : '';
   const rawVehicle = afterYear.match(/^\s*(?:model\s+)?(.+?)\s+parts?\b/i)?.[1]
     ?? afterYear.match(/^\s*(?:model\s+)?(.+?)(?=\s+(?:that|which|from|in\s+stock|available|inventory|at\s+vintage)\b|[?.!,]|$)/i)?.[1]
+    ?? command.match(/\bfor\s+(?:a|an|the)\s+(.+?)(?:\s+parts?\b|[?.!,]|$)/i)?.[1]
     ?? null;
   if (!rawVehicle) return { year, make: null, model: null };
 

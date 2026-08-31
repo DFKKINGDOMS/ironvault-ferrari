@@ -110,6 +110,12 @@ describe('Vintage inventory question intent', () => {
     });
   });
 
+  it('extracts a vehicle filter when the year is omitted', () => {
+    expect(parseVintageGmInventoryQuestion('list all parts for a Camaro')).toMatchObject({
+      kind: 'VINTAGE_GM_INVENTORY_QUESTION', year: null, make: null, model: 'Camaro'
+    });
+  });
+
   it('recognizes natural-language full vehicle part requests as inventory queries', () => {
     expect(parseVintageGmInventoryQuestion('list all parts for a 1988 Camaro')).toMatchObject({
       kind: 'VINTAGE_GM_INVENTORY_QUESTION', source: 'VINTAGE_PARTS', year: 1988, make: null, model: 'Camaro',
