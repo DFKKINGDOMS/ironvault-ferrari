@@ -94,7 +94,7 @@ describe('Vintage inventory question intent', () => {
       kind: 'VINTAGE_GM_INVENTORY_QUESTION',
       source: 'VINTAGE_PARTS',
       year: 1990,
-      make: 'Chevrolet',
+      make: null,
       model: 'Corvette',
       inStockOnly: true,
       sortBy: 'QUANTITY',
@@ -136,7 +136,7 @@ describe('Vintage inventory answer', () => {
 
     codedCorvette.division = 'Buick';
     codedCorvette.models[0]!.division = 'Buick';
-    expect(matchesVintageVehicleApplication(codedCorvette, intent)).toBe(false);
+    expect(matchesVintageVehicleApplication(codedCorvette, { ...intent, make: 'Chevrolet' })).toBe(false);
   });
 
   it('returns a read-only sortable inventory answer with exact source value totals', () => {

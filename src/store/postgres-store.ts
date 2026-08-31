@@ -883,7 +883,7 @@ export class PostgresStore implements Store {
         intent.model,
         intent.make,
         MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1,
-        vintageGmModelSeriesAliases(intent.model).map((alias) => alias.toUpperCase())
+        vintageGmModelSeriesAliases(intent.model, intent.year).map((alias) => alias.toUpperCase())
       ]
     );
     const overflow = result.rows.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS;

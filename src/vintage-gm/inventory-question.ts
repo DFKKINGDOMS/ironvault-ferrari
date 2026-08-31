@@ -21,10 +21,6 @@ const knownMakes: ReadonlyArray<{ pattern: RegExp; name: string }> = [
   { pattern: /\bhummer\b/i, name: 'Hummer' }
 ];
 
-const modelMakeAliases: Readonly<Record<string, string>> = {
-  corvette: 'Chevrolet'
-};
-
 const modelSeriesAliases: Readonly<Record<string, readonly string[]>> = {
   corvette: ['Y']
 };
@@ -98,12 +94,12 @@ function vehicleFrom(command: string): { year: number | null; make: string | nul
   const model = segment && !/^(?:gm|general\s+motors|vehicle|car|truck)$/i.test(segment)
     ? titleCase(segment)
     : null;
-  const inferredMake = model ? modelMakeAliases[normalizedWords(model)] ?? null : null;
-  return { year, make: makeEntry?.name ?? inferredMake, model };
+  return { year, make: makeEntry?.name ?? null, model };
 }
 
-export function vintageGmModelSeriesAliases(model: string | null): string[] {
+export function vintageGmModelSeriesAliases(model: string | null, year: number | null): string[] {
   if (!model) return [];
+  if (normalizedWords(model) === 'corvette' && (year === null || year < 1984 || year > 2019)) return [];
   return [...(modelSeriesAliases[normalizedWords(model)] ?? [])];
 }
 
@@ -140,7 +136,7 @@ function applicationHasYear(application: GmCatalogApplication, year: number | nu
   return start !== null && end !== null && start <= year && year <= end;
 }
 
-function applicationHasModel(application: GmCatalogApplication, model: string | null): boolean {
+function applicationHasModel(application: GmCatalogApplication, model: string | null, year: number | null): boolean {
   if (!model) return true;
   const explicitModels = application.models
     .map((candidate) => `${candidate.modelName} ${candidate.seriesCode ?? ''}`)
@@ -151,7 +147,7 @@ function applicationHasModel(application: GmCatalogApplication, model: string | 
     application.modelScope,
     application.division
   ].filter((value): value is string => Boolean(value)).join(' ');
-  const aliases = vintageGmModelSeriesAliases(model).map((alias) => normalizedWords(alias));
+  const aliases = vintageGmModelSeriesAliases(model, year).map((alias) => normalizedWords(alias));
   const aliasMatched = aliases.length > 0 && application.models.some((candidate) => {
     const modelName = normalizedWords(candidate.modelName);
     const seriesCode = normalizedWords(candidate.seriesCode);
@@ -179,7 +175,7 @@ export function matchesVintageVehicleApplication(
     && application.confidence >= 0.8;
   return evidenceUsable
     && applicationHasYear(application, intent.year)
-    && applicationHasModel(application, intent.model)
+    && applicationHasModel(application, intent.model, intent.year)
     && applicationHasMake(application, intent.make);
 }
 
