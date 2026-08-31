@@ -294,7 +294,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.22.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.22.1' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -762,7 +762,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.22.0',
+          version: '0.22.1',
           commandPreview: true,
           vintageGmShortlist: true,
           vintageGmInventoryQuestions: true,

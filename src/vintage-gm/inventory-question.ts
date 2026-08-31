@@ -21,6 +21,14 @@ const knownMakes: ReadonlyArray<{ pattern: RegExp; name: string }> = [
   { pattern: /\bhummer\b/i, name: 'Hummer' }
 ];
 
+const modelMakeAliases: Readonly<Record<string, string>> = {
+  corvette: 'Chevrolet'
+};
+
+const modelSeriesAliases: Readonly<Record<string, readonly string[]>> = {
+  corvette: ['Y']
+};
+
 function compact(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -90,7 +98,13 @@ function vehicleFrom(command: string): { year: number | null; make: string | nul
   const model = segment && !/^(?:gm|general\s+motors|vehicle|car|truck)$/i.test(segment)
     ? titleCase(segment)
     : null;
-  return { year, make: makeEntry?.name ?? null, model };
+  const inferredMake = model ? modelMakeAliases[normalizedWords(model)] ?? null : null;
+  return { year, make: makeEntry?.name ?? inferredMake, model };
+}
+
+export function vintageGmModelSeriesAliases(model: string | null): string[] {
+  if (!model) return [];
+  return [...(modelSeriesAliases[normalizedWords(model)] ?? [])];
 }
 
 export function parseVintageGmInventoryQuestion(command: string): VintageGmInventoryQuestionIntent | null {
@@ -131,14 +145,21 @@ function applicationHasModel(application: GmCatalogApplication, model: string | 
   const explicitModels = application.models
     .map((candidate) => `${candidate.modelName} ${candidate.seriesCode ?? ''}`)
     .filter((value) => normalizedWords(value));
-  if (explicitModels.length > 0) return explicitModels.some((value) => includesWords(value, model));
   const applicationText = [
     application.catalogTitle,
     application.applicationText,
     application.modelScope,
     application.division
   ].filter((value): value is string => Boolean(value)).join(' ');
-  return includesWords(applicationText, model);
+  const aliases = vintageGmModelSeriesAliases(model).map((alias) => normalizedWords(alias));
+  const aliasMatched = aliases.length > 0 && application.models.some((candidate) => {
+    const modelName = normalizedWords(candidate.modelName);
+    const seriesCode = normalizedWords(candidate.seriesCode);
+    return aliases.includes(modelName) || aliases.includes(seriesCode);
+  });
+  return explicitModels.some((value) => includesWords(value, model))
+    || includesWords(applicationText, model)
+    || aliasMatched;
 }
 
 function applicationHasMake(application: GmCatalogApplication, make: string | null): boolean {

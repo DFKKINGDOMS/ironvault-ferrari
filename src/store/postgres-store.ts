@@ -30,7 +30,8 @@ import type {
 } from '../vintage-gm/types.js';
 import {
   MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
-  matchesVintageVehicleApplication
+  matchesVintageVehicleApplication,
+  vintageGmModelSeriesAliases
 } from '../vintage-gm/inventory-question.js';
 import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
 import {
@@ -846,6 +847,15 @@ export class PostgresStore implements Store {
                   FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
                   WHERE lower(concat_ws(' ',model.data->>'modelName',model.data->>'seriesCode')) LIKE '%' || lower($3) || '%'
                 )
+                OR (
+                  cardinality($6::text[])>0
+                  AND EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+                    WHERE upper(btrim(coalesce(model.data->>'modelName','')))=ANY($6::text[])
+                       OR upper(btrim(coalesce(model.data->>'seriesCode','')))=ANY($6::text[])
+                  )
+                )
               )
               AND (
                 $4::text IS NULL
@@ -872,7 +882,8 @@ export class PostgresStore implements Store {
         intent.year,
         intent.model,
         intent.make,
-        MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1
+        MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1,
+        vintageGmModelSeriesAliases(intent.model).map((alias) => alias.toUpperCase())
       ]
     );
     const overflow = result.rows.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS;

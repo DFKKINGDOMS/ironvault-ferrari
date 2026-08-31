@@ -94,7 +94,7 @@ describe('Vintage inventory question intent', () => {
       kind: 'VINTAGE_GM_INVENTORY_QUESTION',
       source: 'VINTAGE_PARTS',
       year: 1990,
-      make: null,
+      make: 'Chevrolet',
       model: 'Corvette',
       inStockOnly: true,
       sortBy: 'QUANTITY',
@@ -124,6 +124,19 @@ describe('Vintage inventory answer', () => {
     expect(matchesVintageVehicleApplication(corvetteA, intent)).toBe(true);
     expect(matchesVintageVehicleApplication(application('Corvette', 1991), intent)).toBe(false);
     expect(matchesVintageVehicleApplication(camaro, intent)).toBe(false);
+  });
+
+  it('resolves the catalog-stated Y series code as Corvette without weakening the year or make gates', () => {
+    const codedCorvette = application('Y', 1990, 50_004);
+    codedCorvette.catalogTitle = 'Chevrolet Passenger Car Parts Catalog';
+    codedCorvette.applicationText = '1990 Y';
+    codedCorvette.modelScope = 'Y';
+    codedCorvette.models[0]!.seriesCode = 'Y';
+    expect(matchesVintageVehicleApplication(codedCorvette, intent)).toBe(true);
+
+    codedCorvette.division = 'Buick';
+    codedCorvette.models[0]!.division = 'Buick';
+    expect(matchesVintageVehicleApplication(codedCorvette, intent)).toBe(false);
   });
 
   it('returns a read-only sortable inventory answer with exact source value totals', () => {
