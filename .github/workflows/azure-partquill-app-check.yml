@@ -43,18 +43,30 @@ jobs:
             -H 'content-type: application/json' \
             --data "$(jq -nc --arg command "$QUESTION" '{command:$command}')" \
             "$URL/v1/seller-ui/command-preview" || true)
+          INVENTORY_1990=$(curl --max-time 120 -sS -o inventory-1990.json -w '%{http_code}' \
+            -H 'content-type: application/json' \
+            --data "$(jq -nc --arg command 'Give me a list of all the 1990 GM parts that Vintage Parts has in stock' '{command:$command}')" \
+            "$URL/v1/seller-ui/command-preview" || true)
+          INVENTORY_ALL=$(curl --max-time 120 -sS -o inventory-all.json -w '%{http_code}' \
+            -H 'content-type: application/json' \
+            --data "$(jq -nc --arg command 'Give me a list of all the GM parts that Vintage Parts has in stock' '{command:$command}')" \
+            "$URL/v1/seller-ui/command-preview" || true)
           echo "health_status=$HEALTH" | tee health-status.txt
           echo "ready_status=$READY" | tee ready-status.txt
           echo "public_health_status=$PUBLIC_HEALTH" | tee public-health-status.txt
           echo "inventory_answer_status=$INVENTORY_ANSWER" | tee inventory-answer-status.txt
           echo "health_body=$(tr -d '\n' < health.json 2>/dev/null || true)"
           echo "ready_body=$(tr -d '\n' < ready.json 2>/dev/null || true)"
-          jq '{kind:.inventoryAnswer.kind,status:.inventoryAnswer.status,returnedCount:.inventoryAnswer.returnedCount,summary:.inventoryAnswer.summary,readOnly:.inventoryAnswer.readOnly,listingDraftCreated:.inventoryAnswer.listingDraftCreated,allowanceConsumed:.inventoryAnswer.allowanceConsumed,sort:.inventoryAnswer.intent.sort}' inventory-answer.json
+          jq '{kind:.inventoryAnswer.kind,status:.inventoryAnswer.status,returnedCount:.inventoryAnswer.returnedCount,summary:.inventoryAnswer.summary,readOnly:.inventoryAnswer.readOnly,listingDraftCreated:.inventoryAnswer.listingDraftCreated,allowanceConsumed:.inventoryAnswer.allowanceConsumed,intent:.inventoryAnswer.intent}' inventory-answer.json
+          jq '{status:.inventoryAnswer.status,returnedCount:.inventoryAnswer.returnedCount,summary:.inventoryAnswer.summary,intent:.inventoryAnswer.intent}' inventory-1990.json
+          jq '{status:.inventoryAnswer.status,returnedCount:.inventoryAnswer.returnedCount,summary:.inventoryAnswer.summary,intent:.inventoryAnswer.intent}' inventory-all.json
 
           test "$HEALTH" = "200"
           test "$READY" = "200"
           test "$PUBLIC_HEALTH" = "200"
           test "$INVENTORY_ANSWER" = "200"
+          test "$INVENTORY_1990" = "200"
+          test "$INVENTORY_ALL" = "200"
           jq -e '.version == "0.22.0"' health.json >/dev/null
           jq -e '.version == "0.22.0"' public-health.json >/dev/null
           jq -e '.sellerUi.version == "0.22.0" and .sellerUi.vintageGmInventoryQuestions == true' ready.json >/dev/null
@@ -66,8 +78,8 @@ jobs:
             and .inventoryAnswer.listingDraftCreated == false
             and .inventoryAnswer.allowanceConsumed == false
             and .inventoryAnswer.noExternalRequestMade == true
-            and .inventoryAnswer.intent.sort.field == "QUANTITY"
-            and .inventoryAnswer.intent.sort.direction == "DESC"
+            and .inventoryAnswer.intent.sortBy == "QUANTITY"
+            and .inventoryAnswer.intent.sortDirection == "DESC"
           ' inventory-answer.json >/dev/null
           jq -e '
             .inventoryAnswer as $answer
@@ -90,6 +102,8 @@ jobs:
             ready.json
             public-health.json
             inventory-answer.json
+            inventory-1990.json
+            inventory-all.json
             revisions.json
             system-logs.txt
             console-logs.txt
