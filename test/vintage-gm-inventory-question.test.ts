@@ -110,6 +110,16 @@ describe('Vintage inventory question intent', () => {
     });
   });
 
+  it('recognizes natural-language full vehicle part requests as inventory queries', () => {
+    expect(parseVintageGmInventoryQuestion('list all parts for a 1988 Camaro')).toMatchObject({
+      kind: 'VINTAGE_GM_INVENTORY_QUESTION', source: 'VINTAGE_PARTS', year: 1988, make: null, model: 'Camaro',
+      inStockOnly: true, sortBy: 'QUANTITY', sortDirection: 'DESC'
+    });
+    expect(parseVintageGmInventoryQuestion('show me every part for the 1990 Corvette')).toMatchObject({
+      kind: 'VINTAGE_GM_INVENTORY_QUESTION', year: 1990, model: 'Corvette'
+    });
+  });
+
   it('understands requested value sorting and keeps explicit listing commands on the listing route', () => {
     expect(parseVintageGmInventoryQuestion(
       'Show all 1990 Chevrolet Corvette parts Vintage Parts has available, sorted by inventory value highest first'

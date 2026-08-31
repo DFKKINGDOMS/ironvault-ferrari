@@ -105,7 +105,8 @@ export function vintageGmModelSeriesAliases(model: string | null, year: number |
 
 export function parseVintageGmInventoryQuestion(command: string): VintageGmInventoryQuestionIntent | null {
   const normalized = command.toLowerCase();
-  const inventoryCue = /\b(?:inventory|inv|in\s+stock|on\s+hand|stock\s+list|available|quantity|qty|value|price|cost|how\s+many|has|have)\b/.test(normalized);
+  const inventoryCue = /\b(?:inventory|inv|in\s+stock|on\s+hand|stock\s+list|available|quantity|qty|value|price|cost|how\s+many|has|have)\b/.test(normalized)
+    || /\b(?:all|every|full)\s+(?:the\s+)?parts?\b/.test(normalized);
   // Inventory wording is authoritative for the Vintage Parts stock dataset, even when the user omits the source name.
   const sourceMentioned = /\bvintage\s+parts?\b|\bvintage\s+(?:source|inventory|file)\b/.test(normalized) || inventoryCue;
   const asksForInventory = inventoryCue;
