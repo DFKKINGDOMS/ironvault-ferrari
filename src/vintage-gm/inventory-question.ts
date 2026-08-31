@@ -148,10 +148,12 @@ function applicationHasModel(application: GmCatalogApplication, model: string | 
     application.division
   ].filter((value): value is string => Boolean(value)).join(' ');
   const aliases = vintageGmModelSeriesAliases(model, year).map((alias) => normalizedWords(alias));
-  const aliasMatched = aliases.length > 0 && application.models.some((candidate) => {
-    const modelText = `${candidate.modelName} ${candidate.seriesCode ?? ''}`;
-    return aliases.some((alias) => includesWords(modelText, alias));
-  });
+  const aliasMatched = aliases.some((alias) =>
+    includesWords(applicationText, alias)
+    || application.models.some((candidate) =>
+      includesWords(`${candidate.modelName} ${candidate.seriesCode ?? ''}`, alias)
+    )
+  );
   return explicitModels.some((value) => includesWords(value, model))
     || includesWords(applicationText, model)
     || aliasMatched;

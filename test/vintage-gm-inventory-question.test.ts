@@ -131,7 +131,7 @@ describe('Vintage inventory answer', () => {
     codedCorvette.catalogTitle = 'Chevrolet Passenger Car Parts Catalog';
     codedCorvette.applicationText = '1990 Y';
     codedCorvette.modelScope = 'Y';
-    codedCorvette.models[0]!.modelName = 'Y Body';
+    codedCorvette.models[0]!.modelName = 'Passenger Car';
     codedCorvette.models[0]!.seriesCode = null;
     expect(matchesVintageVehicleApplication(codedCorvette, intent)).toBe(true);
 

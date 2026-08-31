@@ -851,13 +851,22 @@ export class PostgresStore implements Store {
                   cardinality($6::text[])>0
                   AND EXISTS (
                     SELECT 1
-                    FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
-                    CROSS JOIN unnest($6::text[]) AS series_alias(value)
+                    FROM unnest($6::text[]) AS series_alias(value)
                     WHERE (
                       ' ' || btrim(regexp_replace(lower(concat_ws(' ',
-                        model.data->>'modelName',model.data->>'seriesCode'
+                        application.data->>'catalogTitle',application.data->>'applicationText',
+                        application.data->>'modelScope',application.data->>'division'
                       )), '[^a-z0-9]+', ' ', 'g')) || ' '
                     ) LIKE '% ' || lower(series_alias.value) || ' %'
+                    OR EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+                      WHERE (
+                        ' ' || btrim(regexp_replace(lower(concat_ws(' ',
+                          model.data->>'modelName',model.data->>'seriesCode'
+                        )), '[^a-z0-9]+', ' ', 'g')) || ' '
+                      ) LIKE '% ' || lower(series_alias.value) || ' %'
+                    )
                   )
                 )
               )
