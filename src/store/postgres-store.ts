@@ -852,8 +852,12 @@ export class PostgresStore implements Store {
                   AND EXISTS (
                     SELECT 1
                     FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
-                    WHERE upper(btrim(coalesce(model.data->>'modelName','')))=ANY($6::text[])
-                       OR upper(btrim(coalesce(model.data->>'seriesCode','')))=ANY($6::text[])
+                    CROSS JOIN unnest($6::text[]) AS series_alias(value)
+                    WHERE (
+                      ' ' || btrim(regexp_replace(lower(concat_ws(' ',
+                        model.data->>'modelName',model.data->>'seriesCode'
+                      )), '[^a-z0-9]+', ' ', 'g')) || ' '
+                    ) LIKE '% ' || lower(series_alias.value) || ' %'
                   )
                 )
               )
