@@ -98,8 +98,9 @@ const partConcepts: readonly PartConcept[] = [
     canonical: 'interior',
     patterns: [/\binterior(?:\s+(?:parts?|trim|components?))?\b/i],
     alternatives: [
-      'interior', 'instrument panel', 'dashboard', 'dash panel', 'console', 'seat',
-      'headliner', 'carpet', 'garnish', 'interior trim', 'trim panel', 'door panel'
+      'interior', 'instrument panel', 'dashboard', 'dash panel', 'center console',
+      'seat assembly', 'seat assy', 'seat asm', 'seat trim', 'seat cover',
+      'headliner', 'carpet', 'interior garnish', 'interior trim', 'trim panel', 'door panel'
     ]
   },
   {
@@ -110,7 +111,7 @@ const partConcepts: readonly PartConcept[] = [
   {
     canonical: 'brake',
     patterns: [/\bbrakes?\b/i],
-    alternatives: ['brake', 'caliper', 'rotor', 'drum', 'master cylinder']
+    alternatives: ['brake', 'brake caliper', 'brake rotor', 'brake drum', 'master cylinder']
   },
   {
     canonical: 'steering',
@@ -120,12 +121,12 @@ const partConcepts: readonly PartConcept[] = [
   {
     canonical: 'suspension',
     patterns: [/\bsuspension\b/i],
-    alternatives: ['suspension', 'control arm', 'spring', 'shock', 'strut']
+    alternatives: ['suspension', 'control arm', 'coil spring', 'leaf spring', 'shock absorber', 'strut assembly']
   },
   {
     canonical: 'engine',
     patterns: [/\bengine(?:\s+parts?)?\b/i],
-    alternatives: ['engine', 'motor', 'cylinder', 'piston', 'camshaft', 'crankshaft']
+    alternatives: ['engine', 'engine assembly', 'cylinder head', 'engine piston', 'camshaft', 'crankshaft']
   },
   {
     canonical: 'transmission',
