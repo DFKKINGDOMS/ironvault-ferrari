@@ -50,6 +50,10 @@ import {
   isVintageGmShortlistCommand,
   vintageGmShortlistRequestedCount
 } from '../vintage-gm/shortlist.js';
+import {
+  buildVintageGmInventoryAnswer,
+  parseVintageGmInventoryQuestion
+} from '../vintage-gm/inventory-question.js';
 import { VINTAGE_GM_BRANDS, type VintageGmInventoryRecord } from '../vintage-gm/types.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
@@ -290,7 +294,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.21.2' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.22.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -388,6 +392,20 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const permit = sellerPreviewGuard.acquire(request.ip);
     try {
       const { command } = listingCommandRequestSchema.parse(request.body);
+      const inventoryIntent = parseVintageGmInventoryQuestion(command);
+      if (inventoryIntent) {
+        const pool = store.queryVintageGmInventory
+          ? await store.queryVintageGmInventory(inventoryIntent)
+          : {
+              dataset: await store.getVintageGmStatus?.() ?? null,
+              matches: [],
+              truncated: false
+            };
+        return reply
+          .header('cache-control', 'no-store')
+          .header('x-content-type-options', 'nosniff')
+          .send({ inventoryAnswer: buildVintageGmInventoryAnswer(command, inventoryIntent, pool) });
+      }
       if (isVintageGmShortlistCommand(command)) {
         const requested = vintageGmShortlistRequestedCount(command);
         const pool = store.listVintageGmCatalogMatches
@@ -744,9 +762,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.21.2',
+          version: '0.22.0',
           commandPreview: true,
           vintageGmShortlist: true,
+          vintageGmInventoryQuestions: true,
           publicEbayWritesDisabled: true
         },
         gmCatalog: gmCatalog ?? {

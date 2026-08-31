@@ -354,6 +354,62 @@ type VintageGmShortlist = {
   noExternalRequestMade: true;
 };
 
+type VintageGmInventorySort = "QUANTITY" | "INVENTORY_VALUE" | "UNIT_PRICE" | "PART_NUMBER" | "DESCRIPTION";
+type VintageGmInventorySortDirection = "ASC" | "DESC";
+
+type VintageGmInventoryAnswerRow = {
+  rank: number;
+  partNumber: string;
+  sku: string;
+  description: string;
+  alternateDescriptions: string[];
+  brands: string[];
+  quantity: number;
+  sourcePriceMin: string;
+  sourcePriceMax: string;
+  sourceInventoryValue: string;
+  sourceWeightMin: string;
+  sourceWeightMax: string;
+  fitment: {
+    label: string;
+    applicationCount: number;
+    sourcePages: number[];
+    evidenceState: "CATALOG_STATED" | "CATALOG_DERIVED_MODEL";
+  };
+};
+
+type VintageGmInventoryAnswer = {
+  schemaVersion: "2026-08-31";
+  kind: "VINTAGE_GM_INVENTORY_ANSWER";
+  status: "READY" | "DATA_NOT_LOADED" | "NO_MATCHES" | "TRUNCATED";
+  command: string;
+  intent: {
+    kind: "VINTAGE_GM_INVENTORY_QUESTION";
+    source: "VINTAGE_PARTS";
+    year: number | null;
+    make: string | null;
+    model: string | null;
+    inStockOnly: true;
+    sortBy: VintageGmInventorySort;
+    sortDirection: VintageGmInventorySortDirection;
+    requestedLimit: number | null;
+  };
+  dataset: VintageGmShortlist["dataset"];
+  returnedCount: number;
+  summary: {
+    distinctParts: number;
+    totalUnits: number;
+    sourceInventoryValue: string;
+    complete: boolean;
+  };
+  rows: VintageGmInventoryAnswerRow[];
+  valueDefinition: string;
+  readOnly: true;
+  listingDraftCreated: false;
+  allowanceConsumed: false;
+  noExternalRequestMade: true;
+};
+
 type View =
   | "instant"
   | "inventory"
@@ -1418,6 +1474,105 @@ function VintageGmShortlistPanel({
   </section>;
 }
 
+function VintageInventoryAnswerPanel({
+  answer,
+  onReview,
+  onReset
+}: {
+  answer: VintageGmInventoryAnswer;
+  onReview: (row: VintageGmInventoryAnswerRow) => void;
+  onReset: () => void;
+}) {
+  const [sortBy, setSortBy] = useState<VintageGmInventorySort>(answer.intent.sortBy);
+  const [sortDirection, setSortDirection] = useState<VintageGmInventorySortDirection>(answer.intent.sortDirection);
+  const [filter, setFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 100;
+  const money = (value: string | number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value));
+  const priceLabel = (row: VintageGmInventoryAnswerRow) => row.sourcePriceMin === row.sourcePriceMax
+    ? money(row.sourcePriceMin)
+    : `${money(row.sourcePriceMin)}–${money(row.sourcePriceMax)}`;
+  const scopeLabel = [answer.intent.year, answer.intent.make, answer.intent.model].filter(Boolean).join(" ") || "All catalog-supported GM parts";
+  const filtered = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    const rows = answer.rows.filter((row) => !needle || `${row.partNumber} ${row.sku} ${row.description} ${row.brands.join(" ")}`.toLowerCase().includes(needle));
+    const direction = sortDirection === "ASC" ? 1 : -1;
+    return [...rows].sort((left, right) => {
+      let compared = 0;
+      if (sortBy === "QUANTITY") compared = left.quantity - right.quantity;
+      else if (sortBy === "INVENTORY_VALUE") compared = Number(left.sourceInventoryValue) - Number(right.sourceInventoryValue);
+      else if (sortBy === "UNIT_PRICE") compared = Number(left.sourcePriceMax) - Number(right.sourcePriceMax);
+      else if (sortBy === "DESCRIPTION") compared = left.description.localeCompare(right.description, undefined, { numeric: true, sensitivity: "base" });
+      else compared = left.partNumber.localeCompare(right.partNumber, undefined, { numeric: true, sensitivity: "base" });
+      return compared * direction || left.partNumber.localeCompare(right.partNumber, undefined, { numeric: true });
+    });
+  }, [answer.rows, filter, sortBy, sortDirection]);
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, pages);
+  const visible = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const exportCsv = () => {
+    const cell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const lines = [
+      ["Part number", "SKU", "Description", "Quantity", "Vintage source price min", "Vintage source price max", "Source inventory value", "Fitment", "Catalog evidence pages"].map(cell).join(","),
+      ...filtered.map((row) => [
+        row.partNumber,
+        row.sku,
+        row.description,
+        row.quantity,
+        row.sourcePriceMin,
+        row.sourcePriceMax,
+        row.sourceInventoryValue,
+        row.fitment.label,
+        row.fitment.sourcePages.join(" | ")
+      ].map(cell).join(","))
+    ];
+    const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `vintage-parts-${[answer.intent.year, answer.intent.model].filter(Boolean).join("-").toLowerCase() || "inventory"}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return <section className="inventory-answer" aria-label="Vintage Parts inventory answer">
+    <header className="inventory-answer-head">
+      <div><span>READ-ONLY INVENTORY ANSWER</span><h2>{scopeLabel}</h2><p>{answer.status === "DATA_NOT_LOADED" ? "The active Vintage source snapshot is not available in this environment." : answer.status === "NO_MATCHES" ? "No in-stock exact catalog matches met the requested vehicle and year." : `${answer.returnedCount.toLocaleString()} in-stock part numbers matched the active Vintage source and GM catalog fitment evidence.`}</p></div>
+      <div><Badge tone={answer.status === "READY" ? "green" : answer.status === "TRUNCATED" ? "amber" : "red"}>{answer.status === "READY" ? "Answer complete" : answer.status.replaceAll("_", " ")}</Badge><button className="text-button" onClick={onReset}>Ask another question</button></div>
+    </header>
+
+    <div className="inventory-answer-summary">
+      <article><span>Distinct parts</span><strong>{answer.summary.distinctParts.toLocaleString()}</strong><small>Exact in-stock part-number joins</small></article>
+      <article><span>Total units</span><strong>{answer.summary.totalUnits.toLocaleString()}</strong><small>Quantity in the active Vintage snapshot</small></article>
+      <article><span>Source inventory value</span><strong>{money(answer.summary.sourceInventoryValue)}</strong><small>Quantity × source price; not resale value</small></article>
+      <article><span>Inventory authority</span><strong>Vintage Parts</strong><small>{answer.dataset?.sourceFileName ?? "Active source unavailable"}</small></article>
+    </div>
+
+    <div className="inventory-answer-note"><Icon name="shield"/><div><strong>No listing was created and no launch allowance was used.</strong><p>{answer.valueDefinition}</p></div><span>No external request</span></div>
+
+    {answer.rows.length > 0 ? <>
+      <div className="inventory-answer-controls">
+        <label><span>Filter these results</span><div><Icon name="search"/><input value={filter} placeholder="Part number or description" onChange={(event) => { setFilter(event.target.value); setPage(1); }}/></div></label>
+        <label><span>Sort by</span><select value={sortBy} onChange={(event) => { setSortBy(event.target.value as VintageGmInventorySort); setPage(1); }}><option value="QUANTITY">Quantity</option><option value="INVENTORY_VALUE">Inventory value</option><option value="UNIT_PRICE">Unit price</option><option value="PART_NUMBER">Part number</option><option value="DESCRIPTION">Description</option></select></label>
+        <label><span>Order</span><select value={sortDirection} onChange={(event) => { setSortDirection(event.target.value as VintageGmInventorySortDirection); setPage(1); }}><option value="DESC">Highest → lowest</option><option value="ASC">Lowest → highest</option></select></label>
+        <button onClick={exportCsv}><Icon name="receipt"/> Download CSV</button>
+      </div>
+
+      <div className="inventory-answer-table-wrap"><table className="inventory-answer-table">
+        <thead><tr><th>Part number</th><th>Description / fitment evidence</th><th className="numeric">Qty</th><th className="numeric">Vintage price</th><th className="numeric">Inventory value</th><th>Action</th></tr></thead>
+        <tbody>{visible.map((row) => <tr key={row.partNumber}>
+          <td><strong>{row.partNumber}</strong><small>SKU {row.sku}</small></td>
+          <td><strong>{row.description}</strong><small>{row.fitment.label} · {row.fitment.applicationCount} catalog application{row.fitment.applicationCount === 1 ? "" : "s"} · {row.fitment.evidenceState === "CATALOG_STATED" ? "catalog stated" : "catalog-derived model scope"}</small>{row.fitment.sourcePages[0] && <a href={`/v1/gm-catalog/pages/${row.fitment.sourcePages[0]}/image`} target="_blank" rel="noreferrer">View source page {row.fitment.sourcePages[0]} <Icon name="arrow"/></a>}</td>
+          <td className="numeric"><strong>{row.quantity.toLocaleString()}</strong></td>
+          <td className="numeric"><strong>{priceLabel(row)}</strong></td>
+          <td className="numeric"><strong>{money(row.sourceInventoryValue)}</strong></td>
+          <td><button onClick={() => onReview(row)}>Review listing <Icon name="arrow"/></button></td>
+        </tr>)}</tbody>
+      </table></div>
+      <footer className="inventory-answer-pagination"><span>Showing {filtered.length ? ((safePage - 1) * pageSize + 1).toLocaleString() : 0}–{Math.min(safePage * pageSize, filtered.length).toLocaleString()} of {filtered.length.toLocaleString()}</span><div><button disabled={safePage <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>Previous</button><b>Page {safePage} of {pages}</b><button disabled={safePage >= pages} onClick={() => setPage((current) => Math.min(pages, current + 1))}>Next</button></div></footer>
+    </> : <div className="vintage-shortlist-empty"><Icon name="inventory"/><h3>No in-stock fitment matches found</h3><p>PartQuill kept the answer empty instead of treating a year or model word as proven compatibility.</p></div>}
+  </section>;
+}
+
 export default function Home() {
   const [view, setView] = useState<View>(() => window.location.pathname === "/community-images" ? "community" : "instant");
   const [editorTab, setEditorTab] = useState<EditorTab>("listing");
@@ -1446,6 +1601,7 @@ export default function Home() {
   const [instantConditionConfirmed, setInstantConditionConfirmed] = useState(false);
   const [instantPreview, setInstantPreview] = useState<SellerPreview | null>(null);
   const [instantShortlist, setInstantShortlist] = useState<VintageGmShortlist | null>(null);
+  const [instantInventoryAnswer, setInstantInventoryAnswer] = useState<VintageGmInventoryAnswer | null>(null);
   const [instantLoading, setInstantLoading] = useState(false);
   const [instantDirty, setInstantDirty] = useState(false);
   const [bootstrap, setBootstrap] = useState<SellerBootstrap | null>(null);
@@ -1606,12 +1762,34 @@ export default function Home() {
         body: JSON.stringify({ command })
       });
       if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
-      const payload = await response.json() as { preview?: SellerPreview; shortlist?: VintageGmShortlist };
+      const payload = await response.json() as { preview?: SellerPreview; shortlist?: VintageGmShortlist; inventoryAnswer?: VintageGmInventoryAnswer };
+      if (payload.inventoryAnswer) {
+        setEbayReference(null);
+        setEbayReferenceLoading(false);
+        setInstantPreview(null);
+        setInstantShortlist(null);
+        setInstantInventoryAnswer(payload.inventoryAnswer);
+        setInstantPartConfirmed(false);
+        setInstantConditionConfirmed(false);
+        setInstantDirty(false);
+        setInstantPhotos([]);
+        setFoundPartNumber("");
+        setInstantBuilt(true);
+        showNotice(payload.inventoryAnswer.status === "READY"
+          ? `${payload.inventoryAnswer.returnedCount} in-stock Vintage part numbers found. This was a read-only answer; no listing allowance was used.`
+          : payload.inventoryAnswer.status === "TRUNCATED"
+            ? `${payload.inventoryAnswer.returnedCount} rows returned. Download the current result or narrow the question for a complete answer.`
+            : payload.inventoryAnswer.status === "NO_MATCHES"
+              ? "No catalog-supported in-stock matches met that vehicle question. Nothing was guessed."
+              : "The active Vintage inventory snapshot is not loaded in this environment.");
+        return;
+      }
       if (payload.shortlist) {
         setEbayReference(null);
         setEbayReferenceLoading(false);
         setInstantPreview(null);
         setInstantShortlist(payload.shortlist);
+        setInstantInventoryAnswer(null);
         setInstantPartConfirmed(false);
         setInstantConditionConfirmed(false);
         setInstantDirty(false);
@@ -1625,10 +1803,11 @@ export default function Home() {
             : "No Vintage GM shortlist is active yet. Nothing was guessed or sent externally.");
         return;
       }
-      if (!payload.preview) throw new Error("The backend returned neither a listing preview nor a Vintage GM shortlist.");
+      if (!payload.preview) throw new Error("The backend returned neither a listing preview nor an inventory answer.");
       const preview = payload.preview;
       setEbayReference(null);
       setInstantShortlist(null);
+      setInstantInventoryAnswer(null);
       setInstantPreview(preview);
       setInstantPrice(preview.intent.price ?? "");
       setInstantCondition(preview.intent.condition);
@@ -1678,6 +1857,7 @@ export default function Home() {
     } catch (error) {
       setInstantPreview(null);
       setInstantShortlist(null);
+      setInstantInventoryAnswer(null);
       setInstantBuilt(false);
       showNotice(error instanceof Error ? error.message : "The command preview could not be built.");
     } finally {
@@ -1688,6 +1868,14 @@ export default function Home() {
     setInstantCommand(candidate.listing.reviewCommand);
     setInstantShortlist(null);
     void buildInstantDraft(candidate.listing.reviewCommand);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const reviewInventoryAnswerRow = (row: VintageGmInventoryAnswerRow) => {
+    const sellerPrice = Math.max(0.99, Number(row.sourcePriceMax) || 0.99).toFixed(2);
+    const command = `List GM part ${row.partNumber} for $${sellerPrice}`;
+    setInstantCommand(command);
+    setInstantInventoryAnswer(null);
+    void buildInstantDraft(command);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const openInventoryDraft = async (row: (typeof inventoryRows)[number]) => {
@@ -1827,19 +2015,29 @@ export default function Home() {
 
         {view === "instant" && <section className="view instant-view">
           <div className="instant-intro">
-            <div><span>PARTQUILL · PRIMARY SELLER ACTION</span><h1>What do you want to list?</h1><p>One instruction creates the complete seller draft. PartQuill fills everything it can prove and asks only for what it cannot.</p></div>
+            <div><span>PARTQUILL · COMMAND &amp; RESEARCH WORKSPACE</span><h1>What do you want PartQuill to do?</h1><p>List a part or ask an inventory question. PartQuill routes the instruction, shows the evidence, and never turns a question into a draft.</p></div>
             <Badge tone={bootstrap?.backendConnected ? "green" : "slate"}>{bootstrap?.backendConnected ? "Private pilot · backend connected" : "Connecting"}</Badge>
           </div>
 
           <div className="command-deck">
             <span className="command-corner command-corner-a"/><span className="command-corner command-corner-b"/><span className="command-corner command-corner-c"/><span className="command-corner command-corner-d"/>
-            <div className="command-label"><span className="command-mark">PQ</span><div><strong>Tell PartQuill exactly what to do</strong><small>Use a part number or describe the item. Include your price and any instructions.</small></div></div>
+            <div className="command-label"><span className="command-mark">PQ</span><div><strong>Tell PartQuill exactly what you need</strong><small>Use a part number, describe an item, or ask what is in inventory by vehicle, quantity, price, or value.</small></div></div>
             <div className="command-input-row">
-              <textarea aria-label="Instant listing command" value={instantCommand} onChange={(event) => setInstantCommand(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void buildInstantDraft(); } }}/>
-              <button disabled={instantLoading} onClick={() => void buildInstantDraft()}>{instantLoading ? "Building safely…" : "Build my listing"} <Icon name={instantLoading ? "more" : "arrow"}/></button>
+              <textarea aria-label="PartQuill command or inventory question" value={instantCommand} onChange={(event) => setInstantCommand(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void buildInstantDraft(); } }}/>
+              <button disabled={instantLoading} onClick={() => void buildInstantDraft()}>{instantLoading ? "Working safely…" : "Run command"} <Icon name={instantLoading ? "more" : "arrow"}/></button>
             </div>
-            <div className="command-tools"><div><button onClick={() => navigate("new")}><Icon name="camera"/> Add item photos</button><button onClick={() => showNotice("Barcode and label scanning remain supporting evidence; they cannot establish fitment alone.")}><Icon name="search"/> Scan a label</button><button onClick={() => navigate("settings")}><Icon name="settings"/> Seller defaults</button></div><span>Press Enter to build · Shift + Enter for a new line</span></div>
-            {instantBuilt && (instantShortlist ? <div className="command-extracted" aria-label="Extracted Vintage GM shortlist intent">
+            <div className="command-tools"><div><button onClick={() => navigate("new")}><Icon name="camera"/> Add item photos</button><button onClick={() => showNotice("Barcode and label scanning remain supporting evidence; they cannot establish fitment alone.")}><Icon name="search"/> Scan a label</button><button onClick={() => navigate("settings")}><Icon name="settings"/> Seller defaults</button></div><span>Press Enter to run · Shift + Enter for a new line</span></div>
+            {instantBuilt && (instantInventoryAnswer ? <div className="command-extracted" aria-label="Extracted inventory question intent">
+              <span>PartQuill heard</span>
+              <b className="route-green">Read-only inventory question</b>
+              {instantInventoryAnswer.intent.year && <b>Year {instantInventoryAnswer.intent.year}</b>}
+              {instantInventoryAnswer.intent.make && <b>Make {instantInventoryAnswer.intent.make}</b>}
+              {instantInventoryAnswer.intent.model && <b>Model {instantInventoryAnswer.intent.model}</b>}
+              <b>Vintage Parts · in stock</b>
+              <b>Sort {instantInventoryAnswer.intent.sortBy.replaceAll("_", " ").toLowerCase()}</b>
+              <b>{instantInventoryAnswer.returnedCount} matching part numbers</b>
+              <b>No draft · no allowance used</b>
+            </div> : instantShortlist ? <div className="command-extracted" aria-label="Extracted Vintage GM shortlist intent">
               <span>PartQuill heard</span>
               <b className="route-green">Find {instantShortlist.requestedCount} Vintage GM parts</b>
               <b>Join exact GM catalog keys</b>
@@ -1863,15 +2061,15 @@ export default function Home() {
               <b>{instantPreview?.noExternalRequestMade ? "No external request" : "Checking"}</b>
               <button onClick={() => navigate("new")}>Use fields instead <Icon name="arrow"/></button>
             </div>)}
-            <div className="command-examples"><span>Try:</span>{["Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence", "List part 58487514 for $9.99", "List a used black dashboard for $49.99", "List a 1990 Corvette airbag for $49.99"].map((example) => <button key={example} onClick={() => { setInstantCommand(example); setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); }}>{example}</button>)}</div>
+            <div className="command-examples"><span>Try:</span>{["Give me all 1990 Corvette parts that Vintage Parts has in stock", "Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence", "List part 58487514 for $9.99", "List a used black dashboard for $49.99"].map((example) => <button key={example} onClick={() => { setInstantCommand(example); setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantInventoryAnswer(null); }}>{example}</button>)}</div>
           </div>
 
-          {!instantShortlist && <div className="builder-rail" aria-label="Automatic listing build stages">
+          {!instantShortlist && !instantInventoryAnswer && <div className="builder-rail" aria-label="Automatic listing build stages">
             {instantStages.map(([number,label,copy,complete]) => <div key={number} className={instantBuilt && complete ? "complete" : ""}><b>{number}</b><span><strong>{label}</strong><small>{copy}</small></span><Icon name={instantBuilt && complete ? "check" : "more"}/></div>)}
           </div>}
 
-          {instantShortlist ? <VintageGmShortlistPanel shortlist={instantShortlist} onReview={reviewVintageCandidate} onReset={() => { setInstantBuilt(false); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : !instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your prefilled review will appear here.</h2><p>Run the command above to see the complete approval experience.</p></div> : <>
-            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
+          {instantInventoryAnswer ? <VintageInventoryAnswerPanel key={instantInventoryAnswer.command} answer={instantInventoryAnswer} onReview={reviewInventoryAnswerRow} onReset={() => { setInstantBuilt(false); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : instantShortlist ? <VintageGmShortlistPanel shortlist={instantShortlist} onReview={reviewVintageCandidate} onReset={() => { setInstantBuilt(false); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : !instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your answer or prefilled review will appear here.</h2><p>Run the command above to ask inventory questions or build a seller draft.</p></div> : <>
+            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantInventoryAnswer(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
 
             <div className="instant-draft-grid">
               <div className="instant-draft-main">

@@ -1,4 +1,4 @@
-import type { GmCatalogPart } from '../catalog/gm-catalog.js';
+import type { GmCatalogApplication, GmCatalogPart } from '../catalog/gm-catalog.js';
 import type { GmCatalogMappingState } from '../catalog/gm-catalog-quality.js';
 
 export const VINTAGE_GM_BRANDS = [
@@ -76,6 +76,89 @@ export interface VintageGmCatalogMatch {
 export interface VintageGmCatalogMatchPool {
   dataset: VintageGmDatasetStatus | null;
   matches: VintageGmCatalogMatch[];
+}
+
+export type VintageGmInventorySort =
+  | 'QUANTITY'
+  | 'INVENTORY_VALUE'
+  | 'UNIT_PRICE'
+  | 'PART_NUMBER'
+  | 'DESCRIPTION';
+
+export type VintageGmInventorySortDirection = 'ASC' | 'DESC';
+
+export interface VintageGmInventoryQuestionIntent {
+  kind: 'VINTAGE_GM_INVENTORY_QUESTION';
+  source: 'VINTAGE_PARTS';
+  year: number | null;
+  make: string | null;
+  model: string | null;
+  inStockOnly: true;
+  sortBy: VintageGmInventorySort;
+  sortDirection: VintageGmInventorySortDirection;
+  requestedLimit: number | null;
+}
+
+export interface VintageGmInventoryQuestionMatch {
+  inventory: VintageGmCatalogInventory;
+  sourceInventoryValue: string;
+  catalog: GmCatalogPart;
+  matchedApplications: GmCatalogApplication[];
+}
+
+export interface VintageGmInventoryQuestionPool {
+  dataset: VintageGmDatasetStatus | null;
+  matches: VintageGmInventoryQuestionMatch[];
+  truncated: boolean;
+}
+
+export type VintageGmInventoryAnswerStatus =
+  | 'READY'
+  | 'DATA_NOT_LOADED'
+  | 'NO_MATCHES'
+  | 'TRUNCATED';
+
+export interface VintageGmInventoryAnswerRow {
+  rank: number;
+  partNumber: string;
+  sku: string;
+  description: string;
+  alternateDescriptions: string[];
+  brands: string[];
+  quantity: number;
+  sourcePriceMin: string;
+  sourcePriceMax: string;
+  sourceInventoryValue: string;
+  sourceWeightMin: string;
+  sourceWeightMax: string;
+  fitment: {
+    label: string;
+    applicationCount: number;
+    sourcePages: number[];
+    evidenceState: 'CATALOG_STATED' | 'CATALOG_DERIVED_MODEL';
+  };
+}
+
+export interface VintageGmInventoryAnswer {
+  schemaVersion: '2026-08-31';
+  kind: 'VINTAGE_GM_INVENTORY_ANSWER';
+  status: VintageGmInventoryAnswerStatus;
+  command: string;
+  intent: VintageGmInventoryQuestionIntent;
+  dataset: VintageGmDatasetStatus | null;
+  returnedCount: number;
+  summary: {
+    distinctParts: number;
+    totalUnits: number;
+    sourceInventoryValue: string;
+    complete: boolean;
+  };
+  rows: VintageGmInventoryAnswerRow[];
+  valueDefinition: 'Sum of active Vintage source quantity multiplied by its source unit price; not resale or eBay market value.';
+  readOnly: true;
+  listingDraftCreated: false;
+  allowanceConsumed: false;
+  noExternalRequestMade: true;
 }
 
 export type VintageGmShortlistStatus =

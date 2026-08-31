@@ -69,7 +69,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.21.2',
+      version: '0.22.0',
       backendConnected: true,
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       defaults: {
@@ -303,6 +303,84 @@ describe('HTTP contract', () => {
       gates: { publicEbayWrite: 'DISABLED' },
       noExternalRequestMade: true
     });
+    expect(stageOffer).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('answers a Vintage Parts vehicle inventory question without creating a listing draft', async () => {
+    const h = harness({ ALLOW_EBAY_WRITES: false });
+    const sourceApplication = gm5459066.applications[0]!;
+    const corvetteApplication = {
+      ...sourceApplication,
+      division: 'Chevrolet',
+      catalogTitle: '1990 Chevrolet Corvette Parts Catalog',
+      applicationText: '1990 Corvette',
+      yearStart: 1990,
+      yearEnd: 1990,
+      sourcePageId: 50_101,
+      confidence: 0.97,
+      verificationState: 'catalog_stated',
+      models: [{
+        ...sourceApplication.models[0]!,
+        year: 1990,
+        division: 'Chevrolet',
+        modelName: 'Corvette',
+        confidence: 0.92,
+        verificationState: 'catalog_derived_candidate',
+        sourcePageId: 50_101
+      }]
+    };
+    const corvetteCatalog: GmCatalogPart = {
+      ...gm5459066,
+      divisions: ['Chevrolet'],
+      applications: [corvetteApplication]
+    };
+    await h.store.importGmCatalogRecords([corvetteCatalog], { datasetId: 'gm-inventory-question-http', complete: true });
+    await h.store.importVintageGmRecords([{
+      sourceRow: 378,
+      productName: '2585-5459066',
+      sku: '5459066',
+      partNumber: '5459066',
+      brand: 'GM NA',
+      description: 'ELEMENT CLEANER MORAINE',
+      quantity: 4,
+      sourcePrice: '9.3750',
+      sourceWeight: '0.9000',
+      normalizationState: 'NORMALIZED_EXACT_KEY',
+      normalizationIssue: null
+    }], {
+      datasetId: 'vintage-inventory-question-http',
+      sourceSha256: 'e'.repeat(64),
+      sourceFileName: 'Products_Vintage_Full_Original.csv',
+      sourceTotalRows: 788_581,
+      expectedGmRows: 1,
+      complete: true
+    });
+    const stageOffer = vi.spyOn(h.gateway, 'stageOffer');
+    const publish = vi.spyOn(h.gateway, 'publish');
+    app = await buildApp(h);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'Give me a list of all the 1990 Corvette parts that Vintage Parts has in stock' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      inventoryAnswer: {
+        kind: 'VINTAGE_GM_INVENTORY_ANSWER',
+        status: 'READY',
+        returnedCount: 1,
+        summary: { distinctParts: 1, totalUnits: 4, sourceInventoryValue: '37.5000' },
+        rows: [expect.objectContaining({ partNumber: '5459066', quantity: 4, sourceInventoryValue: '37.5000' })],
+        readOnly: true,
+        listingDraftCreated: false,
+        allowanceConsumed: false,
+        noExternalRequestMade: true
+      }
+    });
+    expect(response.json().preview).toBeUndefined();
     expect(stageOffer).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });

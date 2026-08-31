@@ -19,8 +19,15 @@ import type {
   VintageGmCatalogMatchPool,
   VintageGmDatasetStatus,
   VintageGmImportOptions,
+  VintageGmInventoryQuestionIntent,
+  VintageGmInventoryQuestionMatch,
+  VintageGmInventoryQuestionPool,
   VintageGmInventoryRecord
 } from '../vintage-gm/types.js';
+import {
+  MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
+  matchesVintageVehicleApplication
+} from '../vintage-gm/inventory-question.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -288,6 +295,61 @@ export class MemoryStore implements Store {
       || right.catalog.rollup.pageCount - left.catalog.rollup.pageCount
       || left.inventory.partNumber.localeCompare(right.inventory.partNumber));
     return { dataset: clone(dataset), matches: matches.slice(0, Math.max(1, limit)) };
+  }
+
+  async queryVintageGmInventory(intent: VintageGmInventoryQuestionIntent): Promise<VintageGmInventoryQuestionPool> {
+    const dataset = [...this.vintageGmDatasets.values()]
+      .filter((candidate) => candidate.active && candidate.status === 'completed')
+      .sort((left, right) => (right.completedAt ?? '').localeCompare(left.completedAt ?? ''))[0];
+    if (!dataset) return { dataset: await this.getVintageGmStatus(), matches: [], truncated: false };
+
+    const grouped = new Map<string, VintageGmInventoryRecord[]>();
+    for (const entry of this.vintageGmInventory.values()) {
+      const record = entry.record;
+      if (entry.datasetId !== dataset.datasetId || !record.partNumber || record.quantity <= 0) continue;
+      const records = grouped.get(record.partNumber) ?? [];
+      records.push(record);
+      grouped.set(record.partNumber, records);
+    }
+
+    const matches: VintageGmInventoryQuestionMatch[] = [];
+    for (const [partNumber, records] of grouped) {
+      const catalog = this.gmCatalog.get(partNumber);
+      if (!catalog) continue;
+      const matchedApplications = (catalog.applications ?? []).filter((application) => matchesVintageVehicleApplication(application, intent));
+      if ((intent.year || intent.make || intent.model) && matchedApplications.length === 0) continue;
+      const numericMinRecord = (field: 'sourcePrice' | 'sourceWeight') =>
+        [...records].sort((left, right) => Number(left[field]) - Number(right[field]))[0]?.[field] ?? '0';
+      const numericMaxRecord = (field: 'sourcePrice' | 'sourceWeight') =>
+        [...records].sort((left, right) => Number(right[field]) - Number(left[field]))[0]?.[field] ?? '0';
+      const first = [...records].sort((left, right) => left.sourceRow - right.sourceRow)[0]!;
+      matches.push({
+        inventory: {
+          partNumber,
+          productName: first.productName,
+          sku: first.sku,
+          brands: [...new Set(records.map((record) => record.brand))].sort(),
+          descriptions: [...new Set(records.map((record) => record.description).filter(Boolean))],
+          quantity: records.reduce((total, record) => total + record.quantity, 0),
+          sourcePriceMin: numericMinRecord('sourcePrice'),
+          sourcePriceMax: numericMaxRecord('sourcePrice'),
+          sourceWeightMin: numericMinRecord('sourceWeight'),
+          sourceWeightMax: numericMaxRecord('sourceWeight'),
+          sourceRows: records.map((record) => record.sourceRow).sort((left, right) => left - right),
+          recordCount: records.length
+        },
+        sourceInventoryValue: records.reduce((total, record) => total + (record.quantity * Number(record.sourcePrice)), 0).toFixed(4),
+        catalog: clone(catalog),
+        matchedApplications: clone(matchedApplications)
+      });
+    }
+    matches.sort((left, right) => left.inventory.partNumber.localeCompare(right.inventory.partNumber, undefined, { numeric: true }));
+    const cap = MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1;
+    return {
+      dataset: clone(dataset),
+      matches: matches.slice(0, cap),
+      truncated: matches.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS
+    };
   }
 
   async createItem(item: ItemRecord): Promise<void> {

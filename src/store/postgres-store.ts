@@ -24,8 +24,14 @@ import type {
   VintageGmCatalogMatchPool,
   VintageGmDatasetStatus,
   VintageGmImportOptions,
+  VintageGmInventoryQuestionIntent,
+  VintageGmInventoryQuestionPool,
   VintageGmInventoryRecord
 } from '../vintage-gm/types.js';
+import {
+  MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
+  matchesVintageVehicleApplication
+} from '../vintage-gm/inventory-question.js';
 import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
 import {
   MIGRATION_TABLE_NAMES,
@@ -751,6 +757,150 @@ export class PostgresStore implements Store {
       catalog: row.catalog_data
     }));
     return { dataset, matches };
+  }
+
+  async queryVintageGmInventory(intent: VintageGmInventoryQuestionIntent): Promise<VintageGmInventoryQuestionPool> {
+    const dataset = await this.getVintageGmStatus();
+    if (!dataset.datasetId || !dataset.active || dataset.status !== 'completed') {
+      return { dataset, matches: [], truncated: false };
+    }
+    const result = await this.pool.query<{
+      part_number: string;
+      product_name: string;
+      sku: string;
+      brands: string[];
+      descriptions: string[];
+      quantity: number;
+      source_price_min: string;
+      source_price_max: string;
+      source_inventory_value: string;
+      source_weight_min: string;
+      source_weight_max: string;
+      source_rows: number[];
+      record_count: number;
+      catalog_data: GmCatalogPart;
+    }>(
+      `WITH grouped_inventory AS (
+         SELECT
+           inventory.part_number,
+           min(inventory.product_name) AS product_name,
+           min(inventory.sku) AS sku,
+           array_agg(DISTINCT inventory.brand ORDER BY inventory.brand) AS brands,
+           array_agg(DISTINCT inventory.description ORDER BY inventory.description)
+             FILTER (WHERE inventory.description<>'') AS descriptions,
+           sum(inventory.quantity)::integer AS quantity,
+           min(inventory.source_price)::text AS source_price_min,
+           max(inventory.source_price)::text AS source_price_max,
+           sum(inventory.quantity::numeric * inventory.source_price)::text AS source_inventory_value,
+           min(inventory.source_weight)::text AS source_weight_min,
+           max(inventory.source_weight)::text AS source_weight_max,
+           array_agg(inventory.source_row ORDER BY inventory.source_row) AS source_rows,
+           count(*)::integer AS record_count
+         FROM partquill.vintage_gm_inventory AS inventory
+         WHERE inventory.dataset_id=$1
+           AND inventory.part_number IS NOT NULL
+           AND inventory.quantity>0
+         GROUP BY inventory.part_number
+       )
+       SELECT
+         inventory.part_number,inventory.product_name,inventory.sku,inventory.brands,
+         coalesce(inventory.descriptions,ARRAY[]::text[]) AS descriptions,
+         inventory.quantity,inventory.source_price_min,inventory.source_price_max,
+         inventory.source_inventory_value,inventory.source_weight_min,inventory.source_weight_max,
+         inventory.source_rows,inventory.record_count,catalog.data AS catalog_data
+       FROM grouped_inventory AS inventory
+       JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
+       WHERE ($2::integer IS NULL AND $3::text IS NULL AND $4::text IS NULL)
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(coalesce(catalog.data->'applications','[]'::jsonb)) AS application(data)
+            WHERE lower(coalesce(application.data->>'verificationState',''))='catalog_stated'
+              AND CASE
+                WHEN coalesce(application.data->>'confidence','') ~ '^(?:0(?:\\.\\d+)?|1(?:\\.0+)?)$'
+                THEN (application.data->>'confidence')::numeric >= 0.8
+                ELSE false
+              END
+              AND (
+                $2::integer IS NULL
+                OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+                  WHERE coalesce(model.data->>'year','') ~ '^(?:18|19|20)\\d{2}$'
+                    AND (model.data->>'year')::integer=$2
+                )
+                OR (
+                  coalesce(application.data->>'yearStart',application.data->>'yearEnd','') ~ '^(?:18|19|20)\\d{2}$'
+                  AND coalesce(application.data->>'yearEnd',application.data->>'yearStart','') ~ '^(?:18|19|20)\\d{2}$'
+                  AND coalesce(application.data->>'yearStart',application.data->>'yearEnd')::integer <= $2
+                  AND coalesce(application.data->>'yearEnd',application.data->>'yearStart')::integer >= $2
+                )
+              )
+              AND (
+                $3::text IS NULL
+                OR lower(concat_ws(' ',
+                  application.data->>'catalogTitle',application.data->>'applicationText',
+                  application.data->>'modelScope',application.data->>'division'
+                )) LIKE '%' || lower($3) || '%'
+                OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+                  WHERE lower(concat_ws(' ',model.data->>'modelName',model.data->>'seriesCode')) LIKE '%' || lower($3) || '%'
+                )
+              )
+              AND (
+                $4::text IS NULL
+                OR lower(coalesce(application.data->>'division','')) LIKE '%' || lower($4) || '%'
+                OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+                  WHERE lower(coalesce(model.data->>'division','')) LIKE '%' || lower($4) || '%'
+                )
+                OR (
+                  nullif(application.data->>'division','') IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(coalesce(application.data->'models','[]'::jsonb)) AS model(data)
+                    WHERE nullif(model.data->>'division','') IS NOT NULL
+                  )
+                )
+              )
+          )
+       ORDER BY inventory.part_number ASC
+       LIMIT $5`,
+      [
+        dataset.datasetId,
+        intent.year,
+        intent.model,
+        intent.make,
+        MAX_VINTAGE_INVENTORY_ANSWER_ROWS + 1
+      ]
+    );
+    const overflow = result.rows.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS;
+    const matches = result.rows.slice(0, MAX_VINTAGE_INVENTORY_ANSWER_ROWS).map((row) => {
+      const matchedApplications = (row.catalog_data.applications ?? []).filter((application) =>
+        matchesVintageVehicleApplication(application, intent)
+      );
+      return {
+        inventory: {
+          partNumber: row.part_number,
+          productName: row.product_name,
+          sku: row.sku,
+          brands: row.brands,
+          descriptions: row.descriptions,
+          quantity: row.quantity,
+          sourcePriceMin: row.source_price_min,
+          sourcePriceMax: row.source_price_max,
+          sourceWeightMin: row.source_weight_min,
+          sourceWeightMax: row.source_weight_max,
+          sourceRows: row.source_rows,
+          recordCount: row.record_count
+        },
+        sourceInventoryValue: row.source_inventory_value,
+        catalog: row.catalog_data,
+        matchedApplications
+      };
+    });
+    return { dataset, matches, truncated: overflow };
   }
 
   async createItem(item: ItemRecord): Promise<void> {

@@ -15,6 +15,8 @@ import type {
   VintageGmCatalogMatchPool,
   VintageGmDatasetStatus,
   VintageGmImportOptions,
+  VintageGmInventoryQuestionIntent,
+  VintageGmInventoryQuestionPool,
   VintageGmInventoryRecord
 } from '../vintage-gm/types.js';
 import type {
@@ -64,6 +66,7 @@ export interface Store {
   importVintageGmRecords?(records: VintageGmInventoryRecord[], options: VintageGmImportOptions): Promise<VintageGmDatasetStatus>;
   getVintageGmStatus?(): Promise<VintageGmDatasetStatus>;
   listVintageGmCatalogMatches?(limit: number): Promise<VintageGmCatalogMatchPool>;
+  queryVintageGmInventory?(intent: VintageGmInventoryQuestionIntent): Promise<VintageGmInventoryQuestionPool>;
   getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined>;
   saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void>;
   deleteEbayReferenceCache(partNumber: string): Promise<void>;
