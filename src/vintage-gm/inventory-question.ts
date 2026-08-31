@@ -105,8 +105,10 @@ export function vintageGmModelSeriesAliases(model: string | null, year: number |
 
 export function parseVintageGmInventoryQuestion(command: string): VintageGmInventoryQuestionIntent | null {
   const normalized = command.toLowerCase();
-  const sourceMentioned = /\bvintage\s+parts?\b|\bvintage\s+(?:source|inventory|file)\b/.test(normalized);
-  const asksForInventory = /\b(?:in\s+stock|available|inventory|quantity|qty|value|price|cost|how\s+many|has|have)\b/.test(normalized);
+  const inventoryCue = /\b(?:inventory|inv|in\s+stock|on\s+hand|stock\s+list|available|quantity|qty|value|price|cost|how\s+many|has|have)\b/.test(normalized);
+  // Inventory wording is authoritative for the Vintage Parts stock dataset, even when the user omits the source name.
+  const sourceMentioned = /\bvintage\s+parts?\b|\bvintage\s+(?:source|inventory|file)\b/.test(normalized) || inventoryCue;
+  const asksForInventory = inventoryCue;
   const asksForParts = /\bparts?\b|\binventory\b/.test(normalized);
   const questionOrSet = /\b(?:give|show|find|tell|which|what|how|list|display|sort)\b/.test(normalized) || command.includes('?');
   const singleListing = /\b(?:list|sell|draft|publish)\s+(?:gm\s+)?part\s*(?:#|number)?\s*[:#-]?\s*[a-z0-9-]{4,}\b/i.test(command)

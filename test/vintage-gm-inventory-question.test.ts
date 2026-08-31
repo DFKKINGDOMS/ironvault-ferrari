@@ -103,6 +103,13 @@ describe('Vintage inventory question intent', () => {
     });
   });
 
+  it('recognizes abbreviated inventory wording without requiring the source phrase', () => {
+    expect(parseVintageGmInventoryQuestion('give me the full inv parts list for a 1990 corvette')).toMatchObject({
+      kind: 'VINTAGE_GM_INVENTORY_QUESTION', source: 'VINTAGE_PARTS', year: 1990, make: null, model: 'Corvette',
+      inStockOnly: true, sortBy: 'QUANTITY', sortDirection: 'DESC'
+    });
+  });
+
   it('understands requested value sorting and keeps explicit listing commands on the listing route', () => {
     expect(parseVintageGmInventoryQuestion(
       'Show all 1990 Chevrolet Corvette parts Vintage Parts has available, sorted by inventory value highest first'
