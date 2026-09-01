@@ -1,0 +1,49 @@
+name: Diagnose PartQuill Azure revision
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-revision-diagnose.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Capture revision state and startup logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          APP="ca-partquill-web-westus3"
+          LATEST=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName -o tsv)
+          {
+            echo "latest=$LATEST"
+            az containerapp revision list --resource-group "$RG" --name "$APP" --query "[].{name:name,active:properties.active,health:properties.healthState,running:properties.runningState,traffic:properties.trafficWeight,created:properties.createdTime}" -o table
+            echo
+            echo "Latest revision logs:"
+            az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$LATEST" --tail 100 --follow false 2>&1 || true
+          } | tee azure-revision-diagnose.txt
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-revision-diagnose
+          path: azure-revision-diagnose.txt
+          if-no-files-found: ignore
+          retention-days: 7
