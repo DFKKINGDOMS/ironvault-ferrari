@@ -129,14 +129,24 @@ jobs:
             --output tsv)
           echo "::add-mask::$IMAGE_STORAGE_SAS"
 
+          FOUNDRY_RG=$(az resource list \
+            --name "$FOUNDRY_RESOURCE" \
+            --resource-type Microsoft.CognitiveServices/accounts \
+            --query '[0].resourceGroup' \
+            --output tsv)
+          if [ -z "$FOUNDRY_RG" ]; then
+            echo "Azure Foundry resource $FOUNDRY_RESOURCE was not found anywhere in this subscription." >&2
+            exit 1
+          fi
+          echo "Using Azure Foundry resource group: $FOUNDRY_RG"
           FOUNDRY_KEY=$(az cognitiveservices account keys list \
-            --resource-group "$RG" \
+            --resource-group "$FOUNDRY_RG" \
             --name "$FOUNDRY_RESOURCE" \
             --query key1 \
             --output tsv)
           echo "::add-mask::$FOUNDRY_KEY"
           PROJECT_ENDPOINT=$(az resource list \
-            --resource-group "$RG" \
+            --resource-group "$FOUNDRY_RG" \
             --resource-type Microsoft.CognitiveServices/accounts/projects \
             --query "[?contains(name, '${FOUNDRY_PROJECT}')].properties.endpoint | [0]" \
             --output tsv 2>/dev/null || true)
