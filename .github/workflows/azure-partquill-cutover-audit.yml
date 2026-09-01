@@ -100,8 +100,12 @@ jobs:
              and .gmCatalog.availableParts >= $expected
              and .ebay.writesEnabled == false
              and .persistence == "postgres"
-             and .sellerUi.version == "0.20.0"
-             and .imageStudio.provider == "disabled"' \
+             and .sellerUi.version == "0.23.0"
+             and .imageStudio.provider == "azure-local"
+             and .imageStudio.activated == true
+             and .imageStudio.storage == "azure-blob"
+             and .epcImage.activated == true
+             and .epcImage.ruleVersion == "eurospares-clean-epc-v1.0"' \
             cutover-audit/ready.json >/dev/null
           jq -e '.. | strings | select(contains("HOSE PORTED PURGE SOL"))' \
             cutover-audit/part-10110988.json >/dev/null
@@ -109,7 +113,7 @@ jobs:
           jq -e '
             ([.safetyEnv[] | select(.name == "ALLOW_EBAY_WRITES" and .value == "false")] | length) == 1
             and ([.safetyEnv[] | select(.name == "MIGRATION_GITHUB_OIDC_ENABLED" and .value == "false")] | length) == 1
-            and ([.safetyEnv[] | select(.name == "PARTQUILL_AI_PROVIDER" and .value == "disabled")] | length) == 1
+            and ([.safetyEnv[] | select(.name == "PARTQUILL_AI_PROVIDER" and .value == "azure-local")] | length) == 1
           ' cutover-audit/container-app-summary.json >/dev/null
 
           KEY=$(az storage account keys list \

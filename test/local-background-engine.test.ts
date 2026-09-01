@@ -77,4 +77,31 @@ describe('conservative local background editor', () => {
       route: 'HERO_PREMIUM'
     })).rejects.toThrow('background is too complex');
   });
+
+  it('routes a complex background to the configured Azure image fallback', async () => {
+    const source = await sharp({
+      create: { width: 120, height: 120, channels: 3, background: '#111111' }
+    }).png().toBuffer();
+    let fallbackCalled = false;
+    const engine = new ConservativeBackgroundEngine(
+      { available: true, compare: async () => passedQa },
+      {
+        available: true,
+        edit: async () => {
+          fallbackCalled = true;
+          return { bytes: source, mediaType: 'image/png', model: 'gpt-image-1-mini', quality: 'low' };
+        }
+      }
+    );
+    const result = await engine.edit({
+      source,
+      mediaType: 'image/png',
+      filename: 'complex.png',
+      background: 'PURE_WHITE',
+      watermarkStatus: 'NONE',
+      route: 'HERO_PREMIUM'
+    });
+    expect(fallbackCalled).toBe(true);
+    expect(result.model).toBe('gpt-image-1-mini');
+  });
 });

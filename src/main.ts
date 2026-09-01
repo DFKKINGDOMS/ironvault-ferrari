@@ -5,6 +5,7 @@ import { LiveEbayGateway } from './ebay/live-gateway.js';
 import { MockEbayGateway } from './ebay/mock-gateway.js';
 import { buildApp } from './http/app.js';
 import { StudioFileStore } from './image-studio/file-store.js';
+import { AzureBlobImageJobStore } from './image-studio/azure-blob-store.js';
 import { DisabledImageEngine, OpenAiImageEngine } from './image-studio/openai-engine.js';
 import { ImageStudioService } from './image-studio/service.js';
 import { TokenVault } from './security/token-vault.js';
@@ -20,6 +21,8 @@ import { DisabledCommunityModerator, OpenAiCommunityModerator } from './communit
 import { DisabledCommunityArchive, GitHubCommunityArchive } from './community/github-archive.js';
 import { ConservativeBackgroundEngine } from './image-studio/local-background-engine.js';
 import { startEbayCategoryTaxonomySync } from './ebay/category-taxonomy-sync.js';
+import { AzureEpcQaEngine, DisabledEpcQaEngine } from './epc-image/azure-qa.js';
+import { EpcImageService } from './epc-image/service.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -51,7 +54,10 @@ const aiOptions = config.PARTQUILL_AI_PROVIDER === 'azure-local'
   ? {
       baseUrl: `${config.AZURE_FOUNDRY_ENDPOINT?.replace(/\/$/, '')}/openai/v1`,
       authMode: 'api-key' as const,
-      reviewModel: config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT
+      reviewModel: config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT,
+      premiumImageModel: config.AZURE_FOUNDRY_IMAGE_DEPLOYMENT,
+      economyImageModel: config.AZURE_FOUNDRY_IMAGE_DEPLOYMENT,
+      supportsBackgroundControl: true
     }
   : config.PARTQUILL_AI_PROVIDER === 'azure'
   ? {
@@ -69,19 +75,39 @@ const completeAiEngine = Boolean(aiKey
   && (config.PARTQUILL_AI_PROVIDER !== 'azure-local'
     || (config.AZURE_FOUNDRY_ENDPOINT && config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT)));
 const comparisonEngine = completeAiEngine ? new OpenAiImageEngine(aiKey, fetch, aiOptions) : new DisabledImageEngine();
+const azureImageFallback = completeAiEngine && config.PARTQUILL_AI_PROVIDER === 'azure-local' && config.AZURE_FOUNDRY_IMAGE_DEPLOYMENT
+  ? new OpenAiImageEngine(aiKey, fetch, aiOptions)
+  : undefined;
 const selectedImageEngine = config.PARTQUILL_AI_PROVIDER === 'azure-local'
-  ? new ConservativeBackgroundEngine(comparisonEngine)
+  ? new ConservativeBackgroundEngine(comparisonEngine, azureImageFallback)
   : comparisonEngine;
 const imageEngine = config.IMAGE_STUDIO_MODE === 'live' && completeAiEngine
   ? selectedImageEngine
   : new DisabledImageEngine();
+const imageJobStore = config.IMAGE_STUDIO_STORAGE_MODE === 'azure-blob'
+  ? new AzureBlobImageJobStore(
+      config.IMAGE_STUDIO_STORAGE_ACCOUNT_URL!,
+      config.IMAGE_STUDIO_STORAGE_CONTAINER!,
+      config.IMAGE_STUDIO_STORAGE_SAS!,
+      config.IMAGE_STUDIO_STORAGE_PREFIX
+    )
+  : new StudioFileStore(config.IMAGE_STUDIO_STORAGE_DIR);
 const imageStudio = new ImageStudioService(
-  new StudioFileStore(config.IMAGE_STUDIO_STORAGE_DIR),
+  imageJobStore,
   imageEngine,
   config.IMAGE_STUDIO_MAX_IMAGES,
   config.IMAGE_STUDIO_CONCURRENCY
 );
 await imageStudio.initialize();
+const epcQa = completeAiEngine && config.PARTQUILL_AI_PROVIDER === 'azure-local'
+  ? new AzureEpcQaEngine(
+      aiKey,
+      `${config.AZURE_FOUNDRY_ENDPOINT?.replace(/\/$/, '')}/openai/v1`,
+      config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT
+    )
+  : new DisabledEpcQaEngine();
+const epcImage = new EpcImageService(imageJobStore, epcQa);
+await epcImage.initialize();
 const communityImages = config.COMMUNITY_IMAGES_ENABLED
   ? new CommunityImageService(
       store,
@@ -121,6 +147,7 @@ const app = await buildApp({
   store,
   service,
   imageStudio,
+  epcImage,
   ...(communityImages ? { communityImages } : {}),
   ebayReference,
   ...(tokenVault ? { tokenVault } : {})

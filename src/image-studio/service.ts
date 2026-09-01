@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { DomainError } from '../domain/errors.js';
 import { quoteStudioBatch } from './cost-model.js';
-import type { StudioFileStore } from './file-store.js';
+import type { ImageJobStore } from './file-store.js';
 import type {
   EditResult,
   ImageEditEngine,
@@ -59,7 +59,7 @@ export interface CreateStudioJobInput {
 
 export class ImageStudioService {
   constructor(
-    private readonly files: StudioFileStore,
+    private readonly files: ImageJobStore,
     private readonly engine: ImageEditEngine,
     private readonly maxImages = 24,
     private readonly concurrency = 3,
@@ -140,7 +140,7 @@ export class ImageStudioService {
   }
 
   async getJob(jobId: string): Promise<StudioJobRecord> {
-    const job = await this.files.getJob(jobId);
+    const job = await this.files.getJob<StudioJobRecord>(jobId);
     if (!job) throw new DomainError('Image Studio job not found', 'STUDIO_JOB_NOT_FOUND', 404);
     return job;
   }

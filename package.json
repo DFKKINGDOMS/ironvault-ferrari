@@ -1,6 +1,6 @@
 {
   "name": "partquill-api",
-  "version": "0.22.1",
+  "version": "0.23.0",
   "private": true,
   "description": "Evidence-gated eBay Motors listing pilot API for PartQuill",
   "type": "module",
@@ -24,6 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.33.0",
     "@fastify/cors": "^11.1.0",
     "@fastify/multipart": "^9.2.1",
     "@fastify/static": "^10.1.3",

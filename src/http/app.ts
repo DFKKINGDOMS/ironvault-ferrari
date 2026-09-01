@@ -55,6 +55,8 @@ import {
   parseVintageGmInventoryQuestion
 } from '../vintage-gm/inventory-question.js';
 import { VINTAGE_GM_BRANDS, type VintageGmInventoryRecord } from '../vintage-gm/types.js';
+import type { EpcImageService } from '../epc-image/service.js';
+import type { EpcArtifactKind, EpcJobRecord } from '../epc-image/types.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -172,6 +174,7 @@ export interface AppDependencies {
   service: PartQuillService;
   tokenVault?: TokenVault;
   imageStudio?: ImageStudioService;
+  epcImage?: EpcImageService;
   ebayReference?: EbayReferenceService;
   communityImages?: CommunityImageService;
 }
@@ -187,8 +190,30 @@ function publicStudioJob(job: StudioJobRecord) {
   };
 }
 
+function publicEpcJob(job: EpcJobRecord) {
+  const {
+    sourceImagePath: _sourceImagePath,
+    cleanBaseImagePath: _cleanBaseImagePath,
+    interactiveImagePath: _interactiveImagePath,
+    thumbnailImagePath: _thumbnailImagePath,
+    calloutMapPath: _calloutMapPath,
+    ...publicJob
+  } = job;
+  const artifact = (kind: EpcArtifactKind) => `/v1/epc-image/jobs/${job.id}/artifacts/${kind}`;
+  return {
+    ...publicJob,
+    artifacts: {
+      source: artifact('source'),
+      ...(job.cleanBaseImagePath ? { cleanBase: artifact('clean-base') } : {}),
+      ...(job.interactiveImagePath ? { interactive: artifact('interactive') } : {}),
+      ...(job.thumbnailImagePath ? { thumbnail: artifact('thumbnail') } : {}),
+      ...(job.calloutMapPath ? { calloutMap: artifact('callout-map') } : {})
+    }
+  };
+}
+
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio, ebayReference, communityImages } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, epcImage, ebayReference, communityImages } = dependencies;
   const veroProfiles = new EbayVeroProfileService();
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
@@ -265,7 +290,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/gm-catalog/parts/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
     if (
-      request.url.startsWith('/v1/image-studio/') &&
+      (request.url.startsWith('/v1/image-studio/') || request.url.startsWith('/v1/epc-image/')) &&
       config.IMAGE_STUDIO_ACCESS_TOKEN &&
       request.headers['x-partquill-studio-token'] === config.IMAGE_STUDIO_ACCESS_TOKEN
     ) {
@@ -294,7 +319,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.22.1' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.23.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -748,7 +773,13 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           provider: config.PARTQUILL_AI_PROVIDER,
           activated: imageStudio?.activated ?? false,
           maxImages: config.IMAGE_STUDIO_MAX_IMAGES,
-          storage: config.IMAGE_STUDIO_STORAGE_DIR
+          storage: config.IMAGE_STUDIO_STORAGE_MODE
+        },
+        epcImage: {
+          activated: epcImage?.activated ?? false,
+          ruleVersion: 'eurospares-clean-epc-v1.0',
+          canvas: { width: 1470, height: 1070 },
+          storage: config.IMAGE_STUDIO_STORAGE_MODE
         },
         communityImages: {
           enabled: Boolean(communityImages),
@@ -762,7 +793,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           listingPayloadEligible: false
         },
         sellerUi: {
-          version: '0.22.1',
+          version: '0.23.0',
           commandPreview: true,
           vintageGmShortlist: true,
           vintageGmInventoryQuestions: true,
@@ -938,6 +969,73 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (!imageStudio) throw new DomainError('Image Studio is unavailable', 'STUDIO_UNAVAILABLE', 503);
     const { jobId } = z.object({ jobId: z.string().uuid() }).parse(request.params);
     return reply.code(202).send({ job: publicStudioJob(await imageStudio.retry(jobId)) });
+  });
+
+  app.post('/v1/epc-image/jobs', async (request, reply) => {
+    if (!epcImage) throw new DomainError('EPC Image Pipeline is unavailable', 'EPC_IMAGE_UNAVAILABLE', 503);
+    const fields = new Map<string, string>();
+    let upload: { filename: string; mediaType: string; bytes: Uint8Array } | undefined;
+    for await (const part of request.parts()) {
+      if (part.type === 'file') {
+        if (part.fieldname !== 'image' || upload) {
+          await part.toBuffer();
+          throw new DomainError('provide exactly one EPC source using the image field', 'INVALID_EPC_IMAGE_FIELD', 400);
+        }
+        const mediaType = z.enum(['image/jpeg', 'image/png', 'image/webp']).parse(part.mimetype);
+        upload = { filename: part.filename || 'epc-source', mediaType, bytes: await part.toBuffer() };
+      } else {
+        fields.set(part.fieldname, String(part.value));
+      }
+    }
+    if (!upload) throw new DomainError('one EPC source image is required', 'EPC_IMAGE_REQUIRED', 400);
+    const raw = Object.fromEntries(fields);
+    const metadata = z.object({
+      brand: z.enum(['FERRARI', 'LAMBORGHINI', 'ASTON_MARTIN', 'OTHER']),
+      diagramId: z.string().trim().min(1).max(160),
+      rightsConfirmed: z.enum(['true', 'false']).transform((value) => value === 'true'),
+      watermarkStatus: z.enum(['NONE', 'OWNED_OR_AUTHORIZED', 'SUSPECTED_THIRD_PARTY']).default('NONE'),
+      lineThreshold: z.coerce.number().int().min(120).max(235).default(190),
+      callouts: z.string().min(2).max(100_000).transform((value, context) => {
+        try {
+          return z.array(z.object({
+            ref: z.string().trim().min(1).max(24),
+            x: z.number().finite().min(0),
+            y: z.number().finite().min(0),
+            radius: z.number().finite().min(6).max(60).optional(),
+            sku: z.string().trim().min(1).max(96).optional()
+          })).min(1).max(500).parse(JSON.parse(value));
+        } catch {
+          context.addIssue({ code: 'custom', message: 'callouts must be valid JSON hotspot records' });
+          return z.NEVER;
+        }
+      })
+    }).parse(raw);
+    const job = await epcImage.createJob({
+      ...metadata,
+      filename: upload.filename,
+      mediaType: upload.mediaType,
+      source: upload.bytes
+    });
+    return reply.code(job.status === 'BLOCKED' ? 409 : 202).send({ job: publicEpcJob(job) });
+  });
+
+  app.get('/v1/epc-image/jobs/:jobId', async (request) => {
+    if (!epcImage) throw new DomainError('EPC Image Pipeline is unavailable', 'EPC_IMAGE_UNAVAILABLE', 503);
+    const { jobId } = z.object({ jobId: z.string().uuid() }).parse(request.params);
+    return { job: publicEpcJob(await epcImage.getJob(jobId)) };
+  });
+
+  app.get('/v1/epc-image/jobs/:jobId/artifacts/:kind', async (request, reply) => {
+    if (!epcImage) throw new DomainError('EPC Image Pipeline is unavailable', 'EPC_IMAGE_UNAVAILABLE', 503);
+    const { jobId, kind } = z.object({
+      jobId: z.string().uuid(),
+      kind: z.enum(['source', 'clean-base', 'interactive', 'thumbnail', 'callout-map'])
+    }).parse(request.params);
+    const artifact = await epcImage.readArtifact(jobId, kind);
+    return reply
+      .header('content-type', artifact.mediaType)
+      .header('cache-control', kind === 'source' ? 'private, immutable, max-age=31536000' : 'private, max-age=3600')
+      .send(Buffer.from(artifact.bytes));
   });
 
   app.post('/v1/community/submissions', { bodyLimit: 110 * 1024 * 1024 }, async (request, reply) => {

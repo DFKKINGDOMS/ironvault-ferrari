@@ -3,13 +3,31 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import type { StudioJobRecord } from './types.js';
 
+export interface ImageJobManifest {
+  id: string;
+}
+
+export interface ImageJobStore {
+  initialize(): Promise<void>;
+  jobDirectory(jobId: string): string;
+  artifactPath(jobId: string, group: string, filename: string): string;
+  originalPath(jobId: string, imageId: string, mediaType: string): string;
+  resultPath(jobId: string, imageId: string, mediaType: string): string;
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>;
+  replaceBytes(path: string, bytes: Uint8Array): Promise<void>;
+  saveJob<T extends ImageJobManifest>(job: T): Promise<void>;
+  getJob<T extends ImageJobManifest>(jobId: string): Promise<T | undefined>;
+  readBytes(path: string): Promise<Uint8Array>;
+  resultMediaType(path: string): string;
+}
+
 function safeExtension(mediaType: string): string {
   if (mediaType === 'image/png') return '.png';
   if (mediaType === 'image/webp') return '.webp';
   return '.jpg';
 }
 
-export class StudioFileStore {
+export class StudioFileStore implements ImageJobStore {
   readonly root: string;
   private readonly saveChains = new Map<string, Promise<void>>();
 
@@ -23,6 +41,10 @@ export class StudioFileStore {
 
   jobDirectory(jobId: string): string {
     return join(this.root, jobId);
+  }
+
+  artifactPath(jobId: string, group: string, filename: string): string {
+    return join(this.jobDirectory(jobId), group, filename);
   }
 
   originalPath(jobId: string, imageId: string, mediaType: string): string {
@@ -45,7 +67,7 @@ export class StudioFileStore {
     await rename(temporary, path);
   }
 
-  async saveJob(job: StudioJobRecord): Promise<void> {
+  async saveJob<T extends ImageJobManifest>(job: T): Promise<void> {
     const previous = this.saveChains.get(job.id) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {
       const path = join(this.jobDirectory(job.id), 'manifest.json');
@@ -62,10 +84,10 @@ export class StudioFileStore {
     }
   }
 
-  async getJob(jobId: string): Promise<StudioJobRecord | undefined> {
+  async getJob<T extends ImageJobManifest = StudioJobRecord>(jobId: string): Promise<T | undefined> {
     try {
       const raw = await readFile(join(this.jobDirectory(jobId), 'manifest.json'), 'utf8');
-      return JSON.parse(raw) as StudioJobRecord;
+      return JSON.parse(raw) as T;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;

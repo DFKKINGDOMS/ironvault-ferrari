@@ -84,50 +84,58 @@ function backgroundMask(data: Buffer, width: number, height: number): Buffer {
 export class ConservativeBackgroundEngine implements ImageEditEngine {
   readonly available: boolean;
 
-  constructor(private readonly comparator: Pick<ImageEditEngine, 'available' | 'compare'>) {
+  constructor(
+    private readonly comparator: Pick<ImageEditEngine, 'available' | 'compare'>,
+    private readonly fallback?: Pick<ImageEditEngine, 'available' | 'edit'>
+  ) {
     this.available = comparator.available;
   }
 
   async edit(input: EditRequest): Promise<EditResult> {
-    const prepared = await sharp(input.source, { limitInputPixels: MAX_INPUT_PIXELS })
-      .rotate()
-      .resize({ width: ANALYSIS_EDGE, height: ANALYSIS_EDGE, fit: 'inside', withoutEnlargement: true })
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const { width, height } = prepared.info;
-    const alpha = backgroundMask(prepared.data, width, height);
-    const feathered = await sharp(alpha, { raw: { width, height, channels: 1 } })
-      .blur(0.65)
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const rgba = Buffer.from(prepared.data);
-    for (let index = 0; index < width * height; index += 1) {
-      const offset = index * 4;
-      const alphaValue = feathered.data[index * feathered.info.channels]!;
-      rgba[offset + 3] = alphaValue;
-      if (alphaValue === 0) {
-        rgba[offset] = 0;
-        rgba[offset + 1] = 0;
-        rgba[offset + 2] = 0;
+    try {
+      const prepared = await sharp(input.source, { limitInputPixels: MAX_INPUT_PIXELS })
+        .rotate()
+        .resize({ width: ANALYSIS_EDGE, height: ANALYSIS_EDGE, fit: 'inside', withoutEnlargement: true })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const { width, height } = prepared.info;
+      const alpha = backgroundMask(prepared.data, width, height);
+      const feathered = await sharp(alpha, { raw: { width, height, channels: 1 } })
+        .blur(0.65)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const rgba = Buffer.from(prepared.data);
+      for (let index = 0; index < width * height; index += 1) {
+        const offset = index * 4;
+        const alphaValue = feathered.data[index * feathered.info.channels]!;
+        rgba[offset + 3] = alphaValue;
+        if (alphaValue === 0) {
+          rgba[offset] = 0;
+          rgba[offset + 1] = 0;
+          rgba[offset + 2] = 0;
+        }
       }
+
+      const foreground = await sharp(rgba, { raw: { width, height, channels: 4 } })
+        .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .resize({ width: OBJECT_EDGE, height: OBJECT_EDGE, fit: 'inside', withoutEnlargement: true })
+        .png()
+        .toBuffer({ resolveWithObject: true });
+      const left = Math.floor((CANVAS_EDGE - foreground.info.width) / 2);
+      const top = Math.floor((CANVAS_EDGE - foreground.info.height) / 2);
+      const bytes = await sharp({
+        create: { width: CANVAS_EDGE, height: CANVAS_EDGE, channels: 3, background: '#ffffff' }
+      })
+        .composite([{ input: foreground.data, left, top }])
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+
+      return { bytes, mediaType: 'image/png', model: 'partquill-local-background-v1', quality: 'pixel-preserving' };
+    } catch (error) {
+      if (this.fallback?.available) return this.fallback.edit(input);
+      throw error;
     }
-
-    const foreground = await sharp(rgba, { raw: { width, height, channels: 4 } })
-      .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .resize({ width: OBJECT_EDGE, height: OBJECT_EDGE, fit: 'inside', withoutEnlargement: true })
-      .png()
-      .toBuffer({ resolveWithObject: true });
-    const left = Math.floor((CANVAS_EDGE - foreground.info.width) / 2);
-    const top = Math.floor((CANVAS_EDGE - foreground.info.height) / 2);
-    const bytes = await sharp({
-      create: { width: CANVAS_EDGE, height: CANVAS_EDGE, channels: 3, background: '#ffffff' }
-    })
-      .composite([{ input: foreground.data, left, top }])
-      .png({ compressionLevel: 9 })
-      .toBuffer();
-
-    return { bytes, mediaType: 'image/png', model: 'partquill-local-background-v1', quality: 'pixel-preserving' };
   }
 
   compare(source: Uint8Array, sourceMediaType: string, candidate: EditResult): Promise<QaResult> {
