@@ -50,8 +50,7 @@ jobs:
           STORAGE_ACCOUNT="pqdata50230827"
           MEDIA_CONTAINER="partquill-gm-scans"
           IMAGE_CONTAINER="partquill-image-studio"
-          FOUNDRY_RESOURCE="knjw1-9703-resource"
-          FOUNDRY_PROJECT="knjw1-9703"
+          FOUNDRY_RESOURCE="partquill-ai-50230827"
           ACR="partquill50230827"
           ACR_SERVER="partquill50230827.azurecr.io"
           IMAGE_TAG="azure-${GITHUB_SHA}"
@@ -129,34 +128,45 @@ jobs:
             --output tsv)
           echo "::add-mask::$IMAGE_STORAGE_SAS"
 
-          FOUNDRY_RG=$(az resource list \
-            --name "$FOUNDRY_RESOURCE" \
-            --resource-type Microsoft.CognitiveServices/accounts \
-            --query '[0].resourceGroup' \
-            --output tsv)
-          if [ -z "$FOUNDRY_RG" ]; then
-            echo "Azure Foundry resource $FOUNDRY_RESOURCE was not found anywhere in this subscription." >&2
-            exit 1
+          FOUNDRY_RG="$RG"
+          if ! az cognitiveservices account show --resource-group "$FOUNDRY_RG" --name "$FOUNDRY_RESOURCE" >/dev/null 2>&1; then
+            az cognitiveservices account create \
+              --name "$FOUNDRY_RESOURCE" \
+              --resource-group "$FOUNDRY_RG" \
+              --kind AIServices \
+              --sku S0 \
+              --location "$LOCATION" \
+              --custom-domain "$FOUNDRY_RESOURCE" \
+              --assign-identity \
+              --allow-project-management true \
+              --output none
           fi
-          echo "Using Azure Foundry resource group: $FOUNDRY_RG"
+          REVIEW_MODEL="gpt-5-mini"
+          if ! az cognitiveservices account deployment show \
+            --resource-group "$FOUNDRY_RG" \
+            --name "$FOUNDRY_RESOURCE" \
+            --deployment-name "$REVIEW_MODEL" >/dev/null 2>&1; then
+            az cognitiveservices account deployment create \
+              --resource-group "$FOUNDRY_RG" \
+              --name "$FOUNDRY_RESOURCE" \
+              --deployment-name "$REVIEW_MODEL" \
+              --model-name "$REVIEW_MODEL" \
+              --model-version "2025-08-07" \
+              --model-format OpenAI \
+              --sku-capacity 10 \
+              --sku-name GlobalStandard \
+              --output none
+          fi
           FOUNDRY_KEY=$(az cognitiveservices account keys list \
             --resource-group "$FOUNDRY_RG" \
             --name "$FOUNDRY_RESOURCE" \
             --query key1 \
             --output tsv)
           echo "::add-mask::$FOUNDRY_KEY"
-          PROJECT_ENDPOINT=$(az resource list \
-            --resource-group "$FOUNDRY_RG" \
-            --resource-type Microsoft.CognitiveServices/accounts/projects \
-            --query "[?contains(name, '${FOUNDRY_PROJECT}')].properties.endpoint | [0]" \
-            --output tsv 2>/dev/null || true)
-          REVIEW_MODEL="gpt-5-mini"
           FOUNDRY_BASE_ROOT=""
           for CANDIDATE in \
-            "${PROJECT_ENDPOINT%/}/openai/v1" \
             "https://${FOUNDRY_RESOURCE}.openai.azure.com/openai/v1"
           do
-            [ "$CANDIDATE" = "/openai/v1" ] && continue
             REVIEW_STATUS=$(curl --silent --show-error --max-time 60 \
               --output /tmp/foundry-review-probe.json \
               --write-out '%{http_code}' \
