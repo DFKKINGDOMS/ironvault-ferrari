@@ -18,7 +18,9 @@ export class AzureBlobImageJobStore implements ImageJobStore {
   }
 
   async initialize(): Promise<void> {
-    await this.container.createIfNotExists();
+    // Infrastructure creates the private container. A container-scoped SAS can
+    // read/write blobs but must not be used to create the container itself.
+    await this.container.getProperties();
   }
 
   jobDirectory(jobId: string): string {
