@@ -70,7 +70,19 @@ jobs:
             --vnet-name "$VNET" \
             --name "$APP_SUBNET" \
             --service-endpoints Microsoft.Storage \
+            --no-wait \
             --output none
+          for attempt in $(seq 1 30); do
+            STORAGE_ENDPOINT=$(az network vnet subnet show \
+              --resource-group "$RG" \
+              --vnet-name "$VNET" \
+              --name "$APP_SUBNET" \
+              --query "serviceEndpoints[?service=='Microsoft.Storage'].service | [0]" \
+              --output tsv 2>/dev/null || true)
+            [ "$STORAGE_ENDPOINT" = "Microsoft.Storage" ] && break
+            sleep 5
+          done
+          test "$STORAGE_ENDPOINT" = "Microsoft.Storage"
           az storage account network-rule add \
             --resource-group "$RG" \
             --account-name "$STORAGE_ACCOUNT" \
