@@ -284,12 +284,6 @@ jobs:
             exit 1
           fi
 
-          az containerapp ingress traffic set \
-            --resource-group "$RG" \
-            --name "$APP" \
-            --revision-weight "$LATEST_REVISION=100" \
-            --output none
-
           az containerapp ingress enable             --resource-group "$RG"             --name "$APP"             --type external             --target-port 3000             --transport auto             --allow-insecure false             --output none
 
           FQDN=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.fqdn -o tsv)
