@@ -140,8 +140,18 @@ jobs:
             --permissions racwdl \
             --expiry "$IMAGE_SAS_EXPIRY" \
             --https-only \
-            --output tsv)
+              --output tsv)
           echo "::add-mask::$IMAGE_STORAGE_SAS"
+          printf '{"probe":"partquill-image-storage"}\n' >/tmp/image-storage-probe.json
+          az storage blob upload \
+            --account-name "$IMAGE_STORAGE_ACCOUNT" \
+            --container-name "$IMAGE_CONTAINER" \
+            --name system/sas-write-probe.json \
+            --file /tmp/image-storage-probe.json \
+            --sas-token "$IMAGE_STORAGE_SAS" \
+            --overwrite \
+            --only-show-errors \
+            --output none
 
           FOUNDRY_RG="$RG"
           if ! az cognitiveservices account show --resource-group "$FOUNDRY_RG" --name "$FOUNDRY_RESOURCE" >/dev/null 2>&1; then
@@ -306,12 +316,24 @@ jobs:
             sleep 10
           done
 
+          printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=' | base64 -d >/tmp/image-studio-smoke.png
+          STUDIO_SMOKE_STATUS=$(curl --connect-timeout 5 --max-time 30 -sS \
+            -o image-studio-smoke.json \
+            -w '%{http_code}' \
+            -H "X-PartQuill-Studio-Token: $IMAGE_STUDIO_ACCESS_TOKEN" \
+            -F sellerId=azure-deploy-smoke \
+            -F background=PURE_WHITE \
+            -F rightsConfirmed=true \
+            -F watermarkStatus=NONE \
+            -F images=@/tmp/image-studio-smoke.png "$URL/v1/image-studio/jobs" || true)
+
           {
             echo "url=$URL"
             echo "health_status=$HEALTH_STATUS"
             echo "ready_status=$READY_STATUS"
             echo "catalog_scan_138445_status=$CATALOG_SCAN_STATUS"
             echo "catalog_scan_138445_type=$CATALOG_SCAN_TYPE"
+            echo "image_studio_smoke_status=$STUDIO_SMOKE_STATUS"
             echo "image=$IMAGE"
             echo "principal_id=$PRINCIPAL_ID"
             echo "subnet_id=$SUBNET_ID"
@@ -323,6 +345,7 @@ jobs:
           test "$READY_STATUS" = "200"
           test "$CATALOG_SCAN_STATUS" = "200"
           [[ "$CATALOG_SCAN_TYPE" == image/* ]]
+          test "$STUDIO_SMOKE_STATUS" = "202"
           jq -e '.version == "0.23.0"' health.json >/dev/null
           jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true' ready.json >/dev/null
 
