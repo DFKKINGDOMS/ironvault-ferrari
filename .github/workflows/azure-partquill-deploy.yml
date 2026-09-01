@@ -65,6 +65,18 @@ jobs:
             az network vnet subnet create               --resource-group "$RG"               --vnet-name "$VNET"               --name "$APP_SUBNET"               --address-prefixes "$APP_PREFIX"               --delegations Microsoft.App/environments               --output none
           fi
           SUBNET_ID=$(az network vnet subnet show --resource-group "$RG" --vnet-name "$VNET" --name "$APP_SUBNET" --query id -o tsv)
+          az network vnet subnet update \
+            --resource-group "$RG" \
+            --vnet-name "$VNET" \
+            --name "$APP_SUBNET" \
+            --service-endpoints Microsoft.Storage \
+            --output none
+          az storage account network-rule add \
+            --resource-group "$RG" \
+            --account-name "$STORAGE_ACCOUNT" \
+            --vnet-name "$VNET" \
+            --subnet "$APP_SUBNET" \
+            --output none
 
           if ! az containerapp env show --resource-group "$RG" --name "$PRIVATE_ENV" >/dev/null 2>&1; then
             LOG_ID=$(az monitor log-analytics workspace show --resource-group "$RG" --workspace-name log-partquill-westus3 --query customerId -o tsv)
