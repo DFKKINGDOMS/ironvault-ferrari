@@ -47,9 +47,15 @@ const schema = z
     AZURE_FOUNDRY_ENDPOINT: z.string().url().optional(),
     AZURE_FOUNDRY_API_KEY: z.string().optional(),
     AZURE_FOUNDRY_REVIEW_DEPLOYMENT: z.string().min(1).optional(),
+    AZURE_FOUNDRY_IMAGE_DEPLOYMENT: z.string().min(1).optional(),
     IMAGE_STUDIO_MODE: z.enum(['preview', 'live']).default('preview'),
     IMAGE_STUDIO_ACCESS_TOKEN: z.string().min(16).optional(),
+    IMAGE_STUDIO_STORAGE_MODE: z.enum(['local', 'azure-blob']).default('local'),
     IMAGE_STUDIO_STORAGE_DIR: z.string().default('.partquill-image-studio'),
+    IMAGE_STUDIO_STORAGE_ACCOUNT_URL: z.string().url().optional(),
+    IMAGE_STUDIO_STORAGE_CONTAINER: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/).optional(),
+    IMAGE_STUDIO_STORAGE_SAS: z.string().min(16).optional(),
+    IMAGE_STUDIO_STORAGE_PREFIX: z.string().regex(/^[A-Za-z0-9._/-]+$/).default('image-studio'),
     IMAGE_STUDIO_MAX_IMAGES: z.coerce.number().int().min(1).max(24).default(24),
     IMAGE_STUDIO_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3),
     COMMUNITY_IMAGES_ENABLED: booleanString,
@@ -159,6 +165,16 @@ const schema = z
           path: ['IMAGE_STUDIO_ACCESS_TOKEN'],
           message: 'production live Image Studio requires a private pilot access token'
         });
+      }
+    }
+    if (env.IMAGE_STUDIO_STORAGE_MODE === 'azure-blob') {
+      const required = [
+        ['IMAGE_STUDIO_STORAGE_ACCOUNT_URL', env.IMAGE_STUDIO_STORAGE_ACCOUNT_URL],
+        ['IMAGE_STUDIO_STORAGE_CONTAINER', env.IMAGE_STUDIO_STORAGE_CONTAINER],
+        ['IMAGE_STUDIO_STORAGE_SAS', env.IMAGE_STUDIO_STORAGE_SAS]
+      ] as const;
+      for (const [path, value] of required) {
+        if (!value) context.addIssue({ code: 'custom', path: [path], message: `Azure image storage requires ${path}` });
       }
     }
     if (env.COMMUNITY_IMAGES_ENABLED && env.NODE_ENV === 'production' && !env.DATABASE_URL) {
