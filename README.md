@@ -29,6 +29,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Seller-photo requirement, explicit physical-part and condition confirmations, green/amber/red fitment legend, VIN recovery entry point, and a visible “Find the correct part” buyer-assistance path.
 - Safe “Send to eBay” handoff that opens only `https://www.ebay.com/`; no account sign-in, listing payload or eBay write is performed.
 - Existing connected Image Studio preserved at `/image-studio`.
+- Azure-backed EPC image pipeline available at `/v1/epc-image/jobs` for the locked Ferrari/Lamborghini/Aston Martin cleanup rule.
 - Free community Parts Image Wiki at `/community-images`, with up to 50 JPEG, PNG or WebP images per contribution, an exact part number for every image, owner/permission attestation, a rights-cleared archive license and public contributor credit.
 - Community originals remain quarantined in PostgreSQL. Review rejects people, faces, hands, body parts, explicit or illegal material, unrelated scenes, marketplace promotional graphics, watermarks, overlays and visible part-number conflicts before editing.
 - The default quota-independent `chatgpt-manual` route gives an authorized owner a two-hour, source-bound handoff code for the connected PartQuill ChatGPT Image Studio. ChatGPT applies the exact Ferrari preservation prompt and returns the finished file directly to private derivative review. The handoff is one-use; returning a file never publishes it.
