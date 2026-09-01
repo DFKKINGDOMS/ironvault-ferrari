@@ -140,3 +140,36 @@ it is never presented as durable production storage.
 14. Store uploaded ChatGPT file IDs in widget state and automatically send the exact preservation prompt in the same conversation.
 15. Return completed file references only to the matching job and state `eBay_write_performed=false`.
 16. Keep automatic free-route result return labeled test-required until a live ChatGPT host completes the two-image round trip.
+
+## Azure production routing
+
+Production stores originals, derivatives and manifests in the private
+`partquill-image-studio` Azure Blob container. The application uses
+`gpt-5-mini` through the `knjw1-9703` Microsoft Foundry project for source
+comparison. Product photographs take the conservative Sharp-based background
+route first; only sources that cannot be isolated safely are eligible for the
+optional Azure `gpt-image-1-mini` fallback. A failed or unavailable fallback is
+held for review and never redirected to ChatGPT credits.
+
+## Eurospares EPC image route
+
+`POST /v1/epc-image/jobs` is the separate Ferrari, Lamborghini, Aston Martin and
+future Eurospares-brand route. It enforces `eurospares-clean-epc-v1.0` and the
+canonical reference SHA-256
+`a5ccd78f88e8992bdbcfe26581fd533d19efbb3ee8da1f7b53a89cebcda7be8b`.
+
+The multipart request contains one `image`, `brand`, `diagramId`,
+`rightsConfirmed=true`, `watermarkStatus`, and a JSON `callouts` array with
+`ref`, source-image `x`/`y`, optional `radius`, and optional `sku` values. It
+produces:
+
+- immutable source;
+- 1470×1070 pure-white black-line clean base without orange circles;
+- 1470×1070 interactive image with one thin `#ff6a00` ring per hotspot;
+- clean 420×306 thumbnail without circles;
+- transformed hotspot/REF/SKU JSON;
+- SHA-256 values and Azure `gpt-5-mini` three-image QA decision.
+
+Suspected third-party watermark removal is blocked before processing. Failed
+geometry, line, number, background, watermark or ring QA is held for manual
+review rather than silently accepted.
