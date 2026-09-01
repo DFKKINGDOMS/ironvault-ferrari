@@ -172,7 +172,7 @@ jobs:
               --write-out '%{http_code}' \
               --header "api-key: $FOUNDRY_KEY" \
               --header 'content-type: application/json' \
-              --data "{\"model\":\"${REVIEW_MODEL}\",\"max_output_tokens\":12,\"input\":\"Reply OK\"}" \
+              --data "{\"model\":\"${REVIEW_MODEL}\",\"max_output_tokens\":16,\"input\":\"Reply OK\"}" \
               "$CANDIDATE/responses" || true)
             if [ "$REVIEW_STATUS" = "200" ]; then
               FOUNDRY_BASE_ROOT="${CANDIDATE%/openai/v1}"
