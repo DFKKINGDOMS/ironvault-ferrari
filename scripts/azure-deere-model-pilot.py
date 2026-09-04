@@ -84,6 +84,37 @@ def normalize_monochrome(source: Image.Image) -> Image.Image:
     return gray.convert("RGB")
 
 
+def fit_on_white_canvas(source: Image.Image, canvas_size: int = 1024, fill_ratio: float = 0.84) -> Image.Image:
+    """Center all visible artwork on a white square with deterministic margins.
+
+    Image generation sometimes returns a good machine only a few pixels from an
+    edge.  Reframing is lossless with respect to the generated subject: every
+    non-background pixel is retained, uniformly scaled, and centered.  It never
+    invents or removes machine geometry, so the semantic vision gate still has
+    to approve the result.
+    """
+    gray = source.convert("L")
+    foreground_mask = gray.point(lambda value: 255 if value < 246 else 0)
+    bounds = foreground_mask.getbbox()
+    if bounds is None:
+        return Image.new("RGB", (canvas_size, canvas_size), "white")
+
+    crop = source.crop(bounds)
+    target = int(canvas_size * fill_ratio)
+    scale = min(target / crop.width, target / crop.height)
+    fitted_size = (
+        max(1, round(crop.width * scale)),
+        max(1, round(crop.height * scale)),
+    )
+    crop = crop.resize(fitted_size, Image.Resampling.LANCZOS)
+    # Resampling can reintroduce near-white compression values at the crop edge.
+    crop = normalize_monochrome(crop)
+    canvas = Image.new("RGB", (canvas_size, canvas_size), "white")
+    position = ((canvas_size - crop.width) // 2, (canvas_size - crop.height) // 2)
+    canvas.paste(crop, position)
+    return canvas
+
+
 def pixel_qc(image: Image.Image) -> tuple[bool, dict]:
     width, height = image.size
     if width != height or min(width, height) < 1024:
@@ -163,9 +194,37 @@ Verified configuration: {row['machineType']}.
 Return JSON only with keys: pass (boolean), reason (string), exact_machine_type (boolean), exactly_one_machine (boolean), full_machine_visible (boolean), correct_wheel_track_or_row_geometry (boolean), white_background (boolean), monochrome_only (boolean), no_text_logo_badge_or_pseudotext (boolean), blank_panels_and_sidewalls (boolean), no_boxes_callouts_leaders_arrows_or_floating_parts (boolean), centered_with_even_margins (boolean).
 
 PASS only if every boolean after reason is true. Reject generic or wrong machine families, incorrect wheel/track/row count, implausible geometry, extra implements not in the verified configuration, any branding or pseudo-writing, any crop, any colored mark, and any inset/callout/diagram decoration."""
+    properties = {
+        "pass": {"type": "boolean"},
+        "reason": {"type": "string"},
+        "exact_machine_type": {"type": "boolean"},
+        "exactly_one_machine": {"type": "boolean"},
+        "full_machine_visible": {"type": "boolean"},
+        "correct_wheel_track_or_row_geometry": {"type": "boolean"},
+        "white_background": {"type": "boolean"},
+        "monochrome_only": {"type": "boolean"},
+        "no_text_logo_badge_or_pseudotext": {"type": "boolean"},
+        "blank_panels_and_sidewalls": {"type": "boolean"},
+        "no_boxes_callouts_leaders_arrows_or_floating_parts": {"type": "boolean"},
+        "centered_with_even_margins": {"type": "boolean"},
+    }
     payload = {
         "model": os.environ.get("AZURE_FOUNDRY_REVIEW_DEPLOYMENT", "gpt-5-mini"),
-        "max_output_tokens": 500,
+        "max_output_tokens": 1600,
+        "reasoning": {"effort": "low"},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "deere_locked_visual_qc",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": list(properties),
+                    "additionalProperties": False,
+                },
+            }
+        },
         "input": [{
             "role": "user",
             "content": [
@@ -215,8 +274,11 @@ def main() -> None:
         accepted = None
         for attempt in range(1, args.attempts + 1):
             try:
-                image = normalize_monochrome(generate(row))
+                image = fit_on_white_canvas(normalize_monochrome(generate(row)))
                 pixel_pass, pixels = pixel_qc(image)
+                diagnostics = out / "diagnostics"
+                diagnostics.mkdir(exist_ok=True)
+                image.save(diagnostics / f"{slug}-attempt-{attempt}.png", "PNG", optimize=True)
                 if not pixel_pass:
                     failures.append({"attempt": attempt, "pixel": pixels})
                     continue
