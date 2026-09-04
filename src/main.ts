@@ -23,6 +23,7 @@ import { ConservativeBackgroundEngine } from './image-studio/local-background-en
 import { startEbayCategoryTaxonomySync } from './ebay/category-taxonomy-sync.js';
 import { AzureEpcQaEngine, DisabledEpcQaEngine } from './epc-image/azure-qa.js';
 import { EpcImageService } from './epc-image/service.js';
+import { DeereCollectionPilotStore } from './deere-collection-pilot/store.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -99,6 +100,7 @@ const imageStudio = new ImageStudioService(
   config.IMAGE_STUDIO_CONCURRENCY
 );
 await imageStudio.initialize();
+const deereCollectionPilot = new DeereCollectionPilotStore(imageJobStore);
 const epcQa = completeAiEngine && config.PARTQUILL_AI_PROVIDER === 'azure-local'
   ? new AzureEpcQaEngine(
       aiKey,
@@ -148,6 +150,7 @@ const app = await buildApp({
   service,
   imageStudio,
   epcImage,
+  deereCollectionPilot,
   ...(communityImages ? { communityImages } : {}),
   ebayReference,
   ...(tokenVault ? { tokenVault } : {})
