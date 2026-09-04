@@ -22,6 +22,10 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: partquill-azure-production-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
