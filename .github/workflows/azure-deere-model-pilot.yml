@@ -1,6 +1,9 @@
 name: Generate Azure Deere Model Pilot
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/azure-deere-model-pilot.yml']
   workflow_dispatch:
 
 permissions:
