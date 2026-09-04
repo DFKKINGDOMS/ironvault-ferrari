@@ -43,20 +43,54 @@ jobs:
           echo "::add-mask::$FOUNDRY_KEY"
           echo "::add-mask::$STORAGE_KEY"
 
-          az storage blob download \
-            --account-name "$STORAGE_ACCOUNT" \
-            --account-key "$STORAGE_KEY" \
-            --container-name "$CONTAINER" \
-            --name system/azure-image-provider.json \
-            --file /tmp/azure-image-provider.json \
-            --overwrite --only-show-errors --output none
-          IMAGE_MODEL="$(jq -r '.model // empty' /tmp/azure-image-provider.json)"
-          test -n "$IMAGE_MODEL"
+          IMAGE_RESOURCE=''
+          IMAGE_RESOURCE_GROUP=''
+          IMAGE_MODEL=''
+          while IFS=$'\t' read -r ACCOUNT ACCOUNT_RG; do
+            DEPLOYMENTS="$(az cognitiveservices account deployment list \
+              --resource-group "$ACCOUNT_RG" --name "$ACCOUNT" --output json 2>/dev/null || echo '[]')"
+            DEPLOYMENT="$(jq -r '
+              ([.[] | select((.properties.model.name // "") == "gpt-image-1-mini")][0].name) //
+              ([.[] | select((.properties.model.name // "") | startswith("gpt-image-"))][0].name) // empty
+            ' <<<"$DEPLOYMENTS")"
+            if [ -n "$DEPLOYMENT" ]; then
+              IMAGE_RESOURCE="$ACCOUNT"
+              IMAGE_RESOURCE_GROUP="$ACCOUNT_RG"
+              IMAGE_MODEL="$DEPLOYMENT"
+              break
+            fi
+          done < <(az cognitiveservices account list \
+            --query "[?kind=='OpenAI' || kind=='AIServices'].[name,resourceGroup]" --output tsv)
+
+          if [ -z "$IMAGE_MODEL" ]; then
+            IMAGE_VERSION="$(az cognitiveservices account list-models \
+              --resource-group "$RG" --name "$FOUNDRY_RESOURCE" --output json \
+              | jq -r '[.[] | select((.name // .model.name // "") == "gpt-image-1-mini") | (.version // .model.version // empty)] | sort | last // empty')"
+            test -n "$IMAGE_VERSION"
+            az cognitiveservices account deployment create \
+              --resource-group "$RG" \
+              --name "$FOUNDRY_RESOURCE" \
+              --deployment-name gpt-image-1-mini \
+              --model-name gpt-image-1-mini \
+              --model-version "$IMAGE_VERSION" \
+              --model-format OpenAI \
+              --sku-name GlobalStandard \
+              --sku-capacity 1 \
+              --output none
+            IMAGE_RESOURCE="$FOUNDRY_RESOURCE"
+            IMAGE_RESOURCE_GROUP="$RG"
+            IMAGE_MODEL='gpt-image-1-mini'
+          fi
+          IMAGE_KEY="$(az cognitiveservices account keys list \
+            --resource-group "$IMAGE_RESOURCE_GROUP" --name "$IMAGE_RESOURCE" --query key1 -o tsv)"
+          echo "::add-mask::$IMAGE_KEY"
 
           python -m pip install --quiet --disable-pip-version-check pillow requests
           export AZURE_FOUNDRY_ENDPOINT="https://${FOUNDRY_RESOURCE}.openai.azure.com"
           export AZURE_FOUNDRY_API_KEY="$FOUNDRY_KEY"
           export AZURE_FOUNDRY_REVIEW_DEPLOYMENT="$REVIEW_MODEL"
+          export AZURE_IMAGE_ENDPOINT="https://${IMAGE_RESOURCE}.openai.azure.com"
+          export AZURE_IMAGE_API_KEY="$IMAGE_KEY"
           export AZURE_FOUNDRY_IMAGE_DEPLOYMENT="$IMAGE_MODEL"
           rm -rf /tmp/deere-model-pilot-v1
           mkdir -p /tmp/deere-model-pilot-v1
