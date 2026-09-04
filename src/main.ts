@@ -149,6 +149,7 @@ const app = await buildApp({
   store,
   service,
   imageStudio,
+  imageJobStore,
   epcImage,
   deereCollectionPilot,
   ...(communityImages ? { communityImages } : {}),
