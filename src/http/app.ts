@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import staticFiles from '@fastify/static';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z, ZodError } from 'zod';
 import type { AppConfig } from '../config.js';
@@ -420,7 +420,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   const proxyDeereWorkerAi = async (
     operation: 'responses' | 'images/generations',
     request: { headers: { authorization?: string }; body: unknown },
-    reply: Parameters<Parameters<FastifyInstance['post']>[2]>[1]
+    reply: FastifyReply
   ) => {
     if (!await authenticateDeereWorker(request.headers.authorization)) {
       return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'trusted Deere worker OIDC token required' } });
