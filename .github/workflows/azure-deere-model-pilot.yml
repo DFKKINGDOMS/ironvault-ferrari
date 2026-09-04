@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Temporary push trigger is retained only until this approval batch succeeds.
+  # Temporary push trigger is retained only until this corrected approval batch succeeds.
   group: azure-deere-model-pilot-v1
   cancel-in-progress: false
 
