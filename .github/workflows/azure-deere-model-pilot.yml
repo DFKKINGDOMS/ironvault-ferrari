@@ -11,6 +11,7 @@ permissions:
   contents: read
 
 concurrency:
+  # Temporary push trigger is retained only until this approval batch succeeds.
   group: azure-deere-model-pilot-v1
   cancel-in-progress: false
 
@@ -131,11 +132,11 @@ jobs:
           echo 'Azure Deere pilot manifest did not become readable from the deployed review endpoint.' >&2
           exit 1
 
-      - name: Preserve pilot manifest for diagnostics
+      - name: Preserve pilot output for diagnostics and owner review
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: azure-deere-model-pilot-v1
-          path: /tmp/deere-model-pilot-v1/manifest.json
+          path: /tmp/deere-model-pilot-v1
           if-no-files-found: ignore
           retention-days: 14
