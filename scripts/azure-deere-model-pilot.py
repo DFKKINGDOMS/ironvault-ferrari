@@ -22,15 +22,15 @@ import requests
 from PIL import Image
 
 
-def endpoint(path: str) -> str:
-    root = os.environ["AZURE_FOUNDRY_ENDPOINT"].rstrip("/")
+def azure_endpoint(root: str, path: str) -> str:
+    root = root.rstrip("/")
     if not root.endswith("/openai/v1"):
         root += "/openai/v1"
     return f"{root}/{path.lstrip('/')}"
 
 
-def headers() -> dict[str, str]:
-    return {"api-key": os.environ["AZURE_FOUNDRY_API_KEY"], "content-type": "application/json"}
+def azure_headers(key: str) -> dict[str, str]:
+    return {"api-key": key, "content-type": "application/json"}
 
 
 def prompt_for(row: dict) -> str:
@@ -55,7 +55,12 @@ def generate(row: dict) -> Image.Image:
         "quality": "high",
         "n": 1,
     }
-    response = requests.post(endpoint("images/generations"), headers=headers(), json=payload, timeout=300)
+    response = requests.post(
+        azure_endpoint(os.environ["AZURE_IMAGE_ENDPOINT"], "images/generations"),
+        headers=azure_headers(os.environ["AZURE_IMAGE_API_KEY"]),
+        json=payload,
+        timeout=300,
+    )
     response.raise_for_status()
     data = response.json()
     first = (data.get("data") or [{}])[0]
@@ -169,7 +174,12 @@ PASS only if every boolean after reason is true. Reject generic or wrong machine
             ],
         }],
     }
-    response = requests.post(endpoint("responses"), headers=headers(), json=payload, timeout=180)
+    response = requests.post(
+        azure_endpoint(os.environ["AZURE_FOUNDRY_ENDPOINT"], "responses"),
+        headers=azure_headers(os.environ["AZURE_FOUNDRY_API_KEY"]),
+        json=payload,
+        timeout=180,
+    )
     response.raise_for_status()
     decision = parse_json(response_text(response.json()))
     checks = [
