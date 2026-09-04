@@ -81,7 +81,10 @@ def normalize_monochrome(source: Image.Image) -> Image.Image:
     gray = background.convert("L")
     # Compression haze in the nominally white background is removed without
     # flattening intentional technical shading inside the machine.
-    gray = gray.point(lambda value: 255 if value >= 248 else value)
+    # The image endpoint can return low-contrast paper grain in otherwise
+    # empty background areas.  Whiten that haze while preserving substantive
+    # linework and grayscale machine shading.
+    gray = gray.point(lambda value: 255 if value >= 242 else value)
     return gray.convert("RGB")
 
 
