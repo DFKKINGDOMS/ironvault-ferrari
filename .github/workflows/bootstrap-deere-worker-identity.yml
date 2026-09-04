@@ -29,62 +29,18 @@ jobs:
           tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
           subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
 
-      - name: Create a least-privilege identity for the unattended Deere worker
+      - name: Trust the Shopify repository with the existing Azure worker identity
         shell: bash
         run: |
           set -euo pipefail
-          RG='rg-partquill-platform-westus3'
-          LOCATION='westus3'
-          IDENTITY='id-ironvault-deere-worker'
-          FOUNDRY='partquill-ai-50230827'
-          STORAGE='pqimages50230827'
-
-          if ! az identity show --resource-group "$RG" --name "$IDENTITY" >/dev/null 2>&1; then
-            az identity create --resource-group "$RG" --name "$IDENTITY" --location "$LOCATION" --output none
-          fi
-
-          CLIENT_ID="$(az identity show --resource-group "$RG" --name "$IDENTITY" --query clientId -o tsv)"
-          PRINCIPAL_ID="$(az identity show --resource-group "$RG" --name "$IDENTITY" --query principalId -o tsv)"
+          CLIENT_ID='b1c0f635-65a8-4d64-b496-d2feb8927740'
           SUBJECT='repo:DFKKINGDOMS/ironvault-fitment-pro:ref:refs/heads/main'
-
-          if ! az identity federated-credential show \
-            --resource-group "$RG" \
-            --identity-name "$IDENTITY" \
-            --name github-ironvault-fitment-main >/dev/null 2>&1; then
-            az identity federated-credential create \
-              --resource-group "$RG" \
-              --identity-name "$IDENTITY" \
-              --name github-ironvault-fitment-main \
-              --issuer https://token.actions.githubusercontent.com \
-              --subject "$SUBJECT" \
-              --audiences api://AzureADTokenExchange \
-              --output none
+          APP_OBJECT_ID="$(az ad app show --id "$CLIENT_ID" --query id -o tsv)"
+          EXISTING="$(az ad app federated-credential list --id "$APP_OBJECT_ID" --query "[?subject=='$SUBJECT'].id | [0]" -o tsv)"
+          if [ -z "$EXISTING" ]; then
+            PARAMETERS="$(jq -nc --arg subject "$SUBJECT" '{name:"github-ironvault-fitment-main",issuer:"https://token.actions.githubusercontent.com",subject:$subject,description:"Unattended Deere image audit worker",audiences:["api://AzureADTokenExchange"]}')"
+            az ad app federated-credential create --id "$APP_OBJECT_ID" --parameters "$PARAMETERS" --output none
           fi
-
-          FOUNDRY_SCOPE="$(az cognitiveservices account show --resource-group "$RG" --name "$FOUNDRY" --query id -o tsv)"
-          STORAGE_SCOPE="$(az storage account show --resource-group "$RG" --name "$STORAGE" --query id -o tsv)"
-
-          assign_role() {
-            local role="$1" scope="$2"
-            for attempt in $(seq 1 12); do
-              if az role assignment list --assignee-object-id "$PRINCIPAL_ID" --scope "$scope" --query "[?roleDefinitionName=='$role'].id | [0]" -o tsv | grep -q .; then
-                return 0
-              fi
-              if az role assignment create \
-                --assignee-object-id "$PRINCIPAL_ID" \
-                --assignee-principal-type ServicePrincipal \
-                --role "$role" \
-                --scope "$scope" \
-                --output none; then
-                return 0
-              fi
-              sleep 10
-            done
-            return 1
-          }
-
-          assign_role 'Cognitive Services OpenAI User' "$FOUNDRY_SCOPE"
-          assign_role 'Storage Blob Data Contributor' "$STORAGE_SCOPE"
 
           mkdir -p ops
           jq -n \
