@@ -75,6 +75,7 @@ def generate(row: dict) -> Image.Image:
 
 
 def normalize_monochrome(source: Image.Image) -> Image.Image:
+    source = source.convert("RGBA")
     background = Image.new("RGBA", source.size, (255, 255, 255, 255))
     background.alpha_composite(source)
     gray = background.convert("L")
