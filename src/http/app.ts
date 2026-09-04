@@ -20,6 +20,7 @@ import type { PartQuillService } from '../services/partquill-service.js';
 import type { Store } from '../store/store.js';
 import { quoteStudioBatch } from '../image-studio/cost-model.js';
 import type { ImageStudioService } from '../image-studio/service.js';
+import type { ImageJobStore } from '../image-studio/file-store.js';
 import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.js';
 import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
@@ -36,6 +37,7 @@ import type { CommunityImageService } from '../community/service.js';
 import { EbayVeroProfileService } from '../ebay/vero-profile-service.js';
 import { MIGRATION_TABLE_NAMES } from '../store/migration-transfer.js';
 import {
+  verifyGithubDeereWorkerOidcToken,
   verifyGithubMediaMigrationOidcToken,
   verifyGithubMigrationOidcToken
 } from '../security/github-migration-oidc.js';
@@ -177,6 +179,7 @@ export interface AppDependencies {
   imageStudio?: ImageStudioService;
   epcImage?: EpcImageService;
   deereCollectionPilot?: DeereCollectionPilotStore;
+  imageJobStore?: ImageJobStore;
   ebayReference?: EbayReferenceService;
   communityImages?: CommunityImageService;
 }
@@ -214,8 +217,66 @@ function publicEpcJob(job: EpcJobRecord) {
   };
 }
 
+const DEERE_WORKER_STATE_ID = 'deere-collection-production-v3';
+const DEERE_WORKER_LOCK_VERSION = 'ironvault-deere-exact-model-monochrome-v3';
+const deereWorkerStateSchema = z.object({
+  id: z.string().optional(),
+  version: z.number().int().positive(),
+  lockVersion: z.literal(DEERE_WORKER_LOCK_VERSION),
+  collections: z.record(z.string(), z.unknown()),
+  runs: z.array(z.unknown()).max(120),
+  updatedAt: z.string().optional(),
+  totalEligibleCollections: z.number().int().nonnegative().optional()
+}).passthrough();
+
+function deereWorkerBearer(authorization: string | undefined): string | undefined {
+  if (!authorization?.startsWith('Bearer ')) return undefined;
+  const token = authorization.slice('Bearer '.length).trim();
+  return token || undefined;
+}
+
+function deereWorkerAzureUrl(config: AppConfig, operation: 'responses' | 'images/generations'): string {
+  if (!config.AZURE_FOUNDRY_ENDPOINT) throw new Error('Azure Foundry endpoint is not configured');
+  const root = config.AZURE_FOUNDRY_ENDPOINT.replace(/\/$/, '');
+  return `${root}/openai/v1/${operation}`;
+}
+
+function validatedDeereWorkerAiPayload(
+  config: AppConfig,
+  operation: 'responses' | 'images/generations',
+  body: unknown
+): Record<string, unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('JSON object body required');
+  const payload = { ...(body as Record<string, unknown>) };
+  const bytes = Buffer.byteLength(JSON.stringify(payload));
+  if (bytes > 25 * 1024 * 1024) throw new Error('request exceeds Deere worker limit');
+  if (payload.stream === true || payload.background === true || payload.tools !== undefined) {
+    throw new Error('streaming, background mode, and tools are disabled for the Deere worker');
+  }
+
+  if (operation === 'responses') {
+    const model = config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT;
+    if (!model || payload.model !== model) throw new Error('unapproved Deere review deployment');
+    if (!Array.isArray(payload.input) || payload.input.length < 1) throw new Error('review input is required');
+    const maxOutput = Number(payload.max_output_tokens ?? 0);
+    if (!Number.isInteger(maxOutput) || maxOutput < 1 || maxOutput > 5_000) {
+      throw new Error('max_output_tokens must be between 1 and 5000');
+    }
+  } else {
+    const model = config.AZURE_FOUNDRY_IMAGE_DEPLOYMENT;
+    if (!model || payload.model !== model) throw new Error('unapproved Deere image deployment');
+    if (typeof payload.prompt !== 'string' || payload.prompt.length < 40 || payload.prompt.length > 16_000) {
+      throw new Error('image prompt length is outside the Deere worker contract');
+    }
+    if (payload.n !== 1 || payload.size !== '1024x1024' || !['low', 'medium', 'high'].includes(String(payload.quality))) {
+      throw new Error('image request must use one 1024x1024 approved-quality image');
+    }
+  }
+  return payload;
+}
+
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio, epcImage, deereCollectionPilot, ebayReference, communityImages } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, imageJobStore, epcImage, deereCollectionPilot, ebayReference, communityImages } = dependencies;
   const veroProfiles = new EbayVeroProfileService();
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
@@ -287,6 +348,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (request.method === 'POST' && request.url === '/internal/vintage-gm/import') return;
     if (request.url.startsWith('/internal/migration/')) return;
+    if (request.url.startsWith('/v1/internal/deere-worker/')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
     if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/gm-catalog/pages/')) return;
@@ -321,6 +383,81 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     request.log.error(error);
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'unexpected server error' } });
   });
+
+  const authenticateDeereWorker = async (authorization: string | undefined): Promise<boolean> =>
+    verifyGithubDeereWorkerOidcToken(deereWorkerBearer(authorization));
+
+  app.get('/v1/internal/deere-worker/state', { bodyLimit: 16 * 1024 }, async (request, reply) => {
+    if (!await authenticateDeereWorker(request.headers.authorization)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'trusted Deere worker OIDC token required' } });
+    }
+    if (!imageJobStore) {
+      return reply.code(503).send({ error: { code: 'STATE_STORE_UNAVAILABLE', message: 'Deere worker state store is unavailable' } });
+    }
+    const state = await imageJobStore.getJob<Record<string, unknown> & { id: string }>(DEERE_WORKER_STATE_ID);
+    return reply.header('cache-control', 'no-store').send(state ?? {
+      id: DEERE_WORKER_STATE_ID,
+      version: 1,
+      lockVersion: DEERE_WORKER_LOCK_VERSION,
+      collections: {},
+      runs: []
+    });
+  });
+
+  app.put('/v1/internal/deere-worker/state', { bodyLimit: 12 * 1024 * 1024 }, async (request, reply) => {
+    if (!await authenticateDeereWorker(request.headers.authorization)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'trusted Deere worker OIDC token required' } });
+    }
+    if (!imageJobStore) {
+      return reply.code(503).send({ error: { code: 'STATE_STORE_UNAVAILABLE', message: 'Deere worker state store is unavailable' } });
+    }
+    const state = deereWorkerStateSchema.parse(request.body);
+    const stored = { ...state, id: DEERE_WORKER_STATE_ID };
+    await imageJobStore.saveJob(stored);
+    return reply.header('cache-control', 'no-store').send({ saved: true, id: DEERE_WORKER_STATE_ID, updatedAt: stored.updatedAt ?? null });
+  });
+
+  const proxyDeereWorkerAi = async (
+    operation: 'responses' | 'images/generations',
+    request: { headers: { authorization?: string }; body: unknown },
+    reply: Parameters<Parameters<FastifyInstance['post']>[2]>[1]
+  ) => {
+    if (!await authenticateDeereWorker(request.headers.authorization)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'trusted Deere worker OIDC token required' } });
+    }
+    if (!config.AZURE_FOUNDRY_API_KEY) {
+      return reply.code(503).send({ error: { code: 'AZURE_UNAVAILABLE', message: 'Azure Foundry credential is unavailable' } });
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = validatedDeereWorkerAiPayload(config, operation, request.body);
+    } catch (error) {
+      return reply.code(400).send({ error: { code: 'INVALID_DEERE_WORKER_REQUEST', message: (error as Error).message } });
+    }
+    const upstream = await fetch(deereWorkerAzureUrl(config, operation), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'api-key': config.AZURE_FOUNDRY_API_KEY },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(operation === 'responses' ? 300_000 : 600_000)
+    });
+    const upstreamText = await upstream.text();
+    let upstreamBody: unknown;
+    try {
+      upstreamBody = JSON.parse(upstreamText);
+    } catch {
+      upstreamBody = { error: { code: 'AZURE_INVALID_RESPONSE', message: upstreamText.slice(0, 1_000) } };
+    }
+    return reply
+      .code(upstream.status)
+      .header('cache-control', 'no-store')
+      .header('x-content-type-options', 'nosniff')
+      .send(upstreamBody);
+  };
+
+  app.post('/v1/internal/deere-worker/ai/responses', { bodyLimit: 25 * 1024 * 1024 }, async (request, reply) =>
+    proxyDeereWorkerAi('responses', request, reply));
+  app.post('/v1/internal/deere-worker/ai/images/generations', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) =>
+    proxyDeereWorkerAi('images/generations', request, reply));
 
   app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.23.0' }));
   app.get('/', async (_request, reply) => reply
