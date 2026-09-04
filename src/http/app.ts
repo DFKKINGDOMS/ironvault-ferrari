@@ -57,6 +57,7 @@ import {
 import { VINTAGE_GM_BRANDS, type VintageGmInventoryRecord } from '../vintage-gm/types.js';
 import type { EpcImageService } from '../epc-image/service.js';
 import type { EpcArtifactKind, EpcJobRecord } from '../epc-image/types.js';
+import type { DeereCollectionPilotStore } from '../deere-collection-pilot/store.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -175,6 +176,7 @@ export interface AppDependencies {
   tokenVault?: TokenVault;
   imageStudio?: ImageStudioService;
   epcImage?: EpcImageService;
+  deereCollectionPilot?: DeereCollectionPilotStore;
   ebayReference?: EbayReferenceService;
   communityImages?: CommunityImageService;
 }
@@ -213,7 +215,7 @@ function publicEpcJob(job: EpcJobRecord) {
 }
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio, epcImage, ebayReference, communityImages } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, epcImage, deereCollectionPilot, ebayReference, communityImages } = dependencies;
   const veroProfiles = new EbayVeroProfileService();
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
@@ -278,6 +280,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'GET' && request.url.startsWith('/v1/seller-ui/vero-profiles')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/reference-assets/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/community-assets/')) return;
+    if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/deere-model-pilot/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/community/submissions/')) return;
     if (request.method === 'POST' && request.url === '/v1/community/submissions') return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
@@ -751,6 +754,33 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const { rows } = migrationImportSchema.parse(request.body);
     return reply.header('cache-control', 'no-store').send(await store.importMigrationRows(table, rows));
   });
+  app.get('/v1/deere-model-pilot/latest', async (_request, reply) => {
+    if (!deereCollectionPilot) {
+      return reply.code(404).send({ error: { code: 'DEERE_PILOT_UNAVAILABLE', message: 'Deere model pilot is unavailable' } });
+    }
+    const batch = await deereCollectionPilot.publicLatest();
+    if (!batch) {
+      return reply.code(404).send({ error: { code: 'DEERE_PILOT_NOT_FOUND', message: 'No Deere model pilot batch is available' } });
+    }
+    return reply.header('cache-control', 'public,max-age=30').send({ batch });
+  });
+
+  app.get('/v1/deere-model-pilot/images/:slug', async (request, reply) => {
+    if (!deereCollectionPilot) {
+      return reply.code(404).send({ error: { code: 'DEERE_PILOT_UNAVAILABLE', message: 'Deere model pilot is unavailable' } });
+    }
+    const { slug } = z.object({ slug: z.string().regex(/^[a-z0-9-]{1,80}$/) }).parse(request.params);
+    const bytes = await deereCollectionPilot.readImage(slug);
+    if (!bytes) {
+      return reply.code(404).send({ error: { code: 'DEERE_PILOT_IMAGE_NOT_FOUND', message: 'Deere pilot image is unavailable' } });
+    }
+    return reply
+      .header('cache-control', 'public,max-age=3600')
+      .header('x-content-type-options', 'nosniff')
+      .type('image/png')
+      .send(Buffer.from(bytes));
+  });
+
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();

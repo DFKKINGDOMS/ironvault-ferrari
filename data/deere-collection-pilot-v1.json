@@ -1,0 +1,53 @@
+{
+  "batchId": "deere-model-pilot-v1",
+  "approvalState": "AWAITING_OWNER_APPROVAL",
+  "shopifyWritePerformed": false,
+  "skipped": [
+    {"collectionTitle":"John Deere 10 Parts","reason":"Ambiguous: authoritative catalog identifies 10P Poly Cart, not exact model 10."},
+    {"collectionTitle":"John Deere 100 Parts","reason":"Ambiguous: exact standalone model/configuration not established from authoritative Deere documentation."},
+    {"collectionTitle":"John Deere 1010 Parts","reason":"Ambiguous: 1010 exists in multiple wheeled and crawler configurations; collection does not identify one exact machine."},
+    {"collectionTitle":"John Deere 1025 Parts","reason":"Ambiguous: distinct 1025R collection exists; exact unsuffixed 1025 machine type is not established."}
+  ],
+  "models": [
+    {
+      "collectionId":"gid://shopify/Collection/299032084567",
+      "collectionTitle":"John Deere 1015 Parts",
+      "handle":"john-deere-1015-parts",
+      "model":"1015",
+      "machineType":"four-row integral precision planter with seed and fertilizer hoppers, drive wheels, row units, opening discs and press wheels",
+      "sourceUrl":"https://www.deere.com/latin-america/es/plantaci%C3%B3n-y-siembra/1015/"
+    },
+    {
+      "collectionId":"gid://shopify/Collection/299031396439",
+      "collectionTitle":"John Deere 1023E Parts",
+      "handle":"john-deere-1023e-parts",
+      "model":"1023E",
+      "machineType":"sub-compact utility tractor with four conventional tires, open operator station and folding rollover protection structure; no loader or implement",
+      "sourceUrl":"https://www.deere.com/en-us/products-and-solutions/tractors/compact-tractors/1023e-sub-compact-tractor-mdi1m0xw"
+    },
+    {
+      "collectionId":"gid://shopify/Collection/299031429207",
+      "collectionTitle":"John Deere 1025R Parts",
+      "handle":"john-deere-1025r-parts",
+      "model":"1025R",
+      "machineType":"sub-compact utility tractor with four conventional tires, open operator station and folding rollover protection structure; no loader or implement",
+      "sourceUrl":"https://www.deere.com/en-us/products-and-solutions/tractors/compact-tractors/1025r-sub-compact-tractor-mdi4mexw"
+    },
+    {
+      "collectionId":"gid://shopify/Collection/299031461975",
+      "collectionTitle":"John Deere 1026R Parts",
+      "handle":"john-deere-1026r-parts",
+      "model":"1026R",
+      "machineType":"compact utility tractor with four conventional tires, open operator station and folding rollover protection structure; no loader or implement",
+      "sourceUrl":"https://techpubs.deere.com/api/preview/get/TM188519"
+    },
+    {
+      "collectionId":"gid://shopify/Collection/299032248407",
+      "collectionTitle":"John Deere 1050C Parts",
+      "handle":"john-deere-1050c-parts",
+      "model":"1050C",
+      "machineType":"large crawler bulldozer with two continuous tracks, enclosed cab, front dozer blade and rear counterweight; no separate implement or second object",
+      "sourceUrl":"https://www.deere.com/en-us/john-deere-news/75-years-of-dozer-innovation"
+    }
+  ]
+}
