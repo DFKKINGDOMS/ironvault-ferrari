@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: partquill-azure-astra-enterprise
+  group: partquill-azure-astra-enterprise-v2
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
