@@ -35,6 +35,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     IMAGE_STUDIO_STORAGE_PREFIX: 'image-studio',
     IMAGE_STUDIO_MAX_IMAGES: 24,
     IMAGE_STUDIO_CONCURRENCY: 3,
+    SHOPIFY_MEDIA_ENABLED: false,
     COMMUNITY_IMAGES_ENABLED: false,
     COMMUNITY_EDIT_MODE: 'chatgpt-manual',
     COMMUNITY_IMAGE_MAX_IMAGES: 50,

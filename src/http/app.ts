@@ -60,6 +60,7 @@ import { VINTAGE_GM_BRANDS, type VintageGmInventoryRecord } from '../vintage-gm/
 import type { EpcImageService } from '../epc-image/service.js';
 import type { EpcArtifactKind, EpcJobRecord } from '../epc-image/types.js';
 import type { DeereCollectionPilotStore } from '../deere-collection-pilot/store.js';
+import type { ShopifyMediaCatalog } from '../shopify-media/catalog.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -69,6 +70,10 @@ const ebayReferenceParams = z.object({
 });
 const ebayReferenceImageParams = ebayReferenceParams.extend({
   index: z.coerce.number().int().min(0).max(2)
+});
+const shopifyMediaImageParams = z.object({
+  partNumber: z.string().trim().min(5).max(64).regex(/^[A-Za-z0-9]+$/),
+  assetId: z.string().regex(/^[a-f0-9]{16,64}$/)
 });
 const referenceAssetParams = z.object({
   fileName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]*(?:_[0-9]+)?\.png$/)
@@ -182,6 +187,7 @@ export interface AppDependencies {
   imageJobStore?: ImageJobStore;
   ebayReference?: EbayReferenceService;
   communityImages?: CommunityImageService;
+  shopifyMedia?: ShopifyMediaCatalog;
 }
 
 function publicStudioJob(job: StudioJobRecord) {
@@ -276,7 +282,7 @@ function validatedDeereWorkerAiPayload(
 }
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio, imageJobStore, epcImage, deereCollectionPilot, ebayReference, communityImages } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, imageJobStore, epcImage, deereCollectionPilot, ebayReference, communityImages, shopifyMedia } = dependencies;
   const veroProfiles = new EbayVeroProfileService();
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
@@ -351,6 +357,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.url.startsWith('/v1/internal/deere-worker/')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/catalog/images/')) return;
+    if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/shopify-media/parts/')) return;
     if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/gm-catalog/pages/')) return;
     if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/gm-catalog/parts/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/image-studio/quote')) return;
@@ -503,6 +510,11 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         editMode: communityImages?.editMode ?? config.COMMUNITY_EDIT_MODE,
         chatGptManualActive: communityImages?.chatGptManualActive ?? false,
         gitArchiveConnected: communityImages?.archiveActivated ?? false
+      },
+      shopifyMedia: {
+        enabled: Boolean(shopifyMedia),
+        profile: 'ferrari-product-photo-v1',
+        actualItemConfirmationRequired: true
       }
     }));
   app.get('/v1/seller-ui/ebay-categories', async (request, reply) => {
@@ -614,10 +626,18 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           request.log.warn({ error }, 'eBay category suggestion unavailable; using held PartQuill candidate');
         }
       }
+      let merchantMedia = null;
+      if (intent.partNumber && shopifyMedia) {
+        try {
+          merchantMedia = await shopifyMedia.lookup(intent.partNumber);
+        } catch (error) {
+          request.log.warn({ error, partNumber: intent.partNumber }, 'Shopify merchant media lookup unavailable; seller photo gate remains active');
+        }
+      }
       return reply
         .header('cache-control', 'no-store')
         .header('x-content-type-options', 'nosniff')
-        .send({ preview: buildSellerCommandPreview(command, gmCatalog, intelligence, mapping) });
+        .send({ preview: buildSellerCommandPreview(command, gmCatalog, intelligence, mapping, merchantMedia) });
     } finally {
       permit.release();
     }
@@ -918,12 +938,30 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       .send(Buffer.from(bytes));
   });
 
+  app.get('/v1/shopify-media/parts/:partNumber/images/:assetId', async (request, reply) => {
+    if (!shopifyMedia) {
+      return reply.code(404).send({ error: { code: 'SHOPIFY_MEDIA_UNAVAILABLE', message: 'Merchant media is unavailable' } });
+    }
+    const { partNumber, assetId } = shopifyMediaImageParams.parse(request.params);
+    const bytes = await shopifyMedia.readImage(partNumber, assetId);
+    if (!bytes) {
+      return reply.code(404).send({ error: { code: 'SHOPIFY_MEDIA_NOT_FOUND', message: 'No QA-passed merchant image matches this exact part key' } });
+    }
+    return reply
+      .header('cache-control', 'public,max-age=3600,immutable')
+      .header('content-security-policy', "default-src 'none'; sandbox")
+      .header('x-content-type-options', 'nosniff')
+      .type('image/jpeg')
+      .send(Buffer.from(bytes));
+  });
+
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
-      const [gmCatalog, vintageGm] = await Promise.all([
+      const [gmCatalog, vintageGm, shopifyMediaStatus] = await Promise.all([
         store.getGmCatalogStatus?.(),
-        store.getVintageGmStatus?.()
+        store.getVintageGmStatus?.(),
+        shopifyMedia?.status().catch(() => null)
       ]);
       return {
         ready: true,
@@ -958,6 +996,15 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           gitArchiveConnected: communityImages?.archiveActivated ?? false,
           requiresHumanReview: true,
           listingPayloadEligible: false
+        },
+        shopifyMedia: {
+          enabled: Boolean(shopifyMedia),
+          source: 'SHOPIFY_MERCHANT_MEDIA',
+          profile: 'ferrari-product-photo-v1',
+          originalsImmutable: true,
+          derivativesMetadataStripped: true,
+          actualItemConfirmationRequired: true,
+          status: shopifyMediaStatus
         },
         sellerUi: {
           version: '0.23.0',

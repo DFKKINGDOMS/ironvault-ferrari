@@ -16,6 +16,16 @@ function requireText(relativePath, expected, explanation) {
   }
 }
 
+function requireOrder(relativePath, expectedInOrder, explanation) {
+  const contents = read(relativePath);
+  let cursor = 0;
+  for (const expected of expectedInOrder) {
+    const index = contents.indexOf(expected, cursor);
+    if (index < 0) throw new Error(`${relativePath}: ${explanation}`);
+    cursor = index + expected.length;
+  }
+}
+
 const forbiddenPersonalIdentity = ['Kurt', 'White'].join(' ');
 const personalIdentitySearch = spawnSync(
   'git',
@@ -64,6 +74,38 @@ requireText(
   'frontend/src/App.tsx',
   'bootstrap?.workspace?.displayName',
   'the account surface must use server-configured workspace identity'
+);
+requireText(
+  'src/shopify-media/types.ts',
+  "SHOPIFY_MEDIA_SOURCE_DOMAIN = 'discontinued-auto-parts.myshopify.com'",
+  'the Shopify media worker must remain locked to the authorized source store'
+);
+requireText(
+  'src/shopify-media/types.ts',
+  'requiresActualItemConfirmation: true',
+  'archive media must never silently satisfy the actual-item photo gate'
+);
+requireText(
+  'src/shopify-media/ferrari-quality.ts',
+  "metadataStripped: true",
+  'Ferrari derivatives must retain an executable metadata-removal gate'
+);
+requireText(
+  'src/shopify-media/catalog.ts',
+  'sourceStore: SHOPIFY_MEDIA_PUBLIC_SOURCE',
+  'the public media response must not expose the internal Shopify source identity'
+);
+requireOrder(
+  'src/shopify-media/worker.ts',
+  [
+    'if (isTextQuarantined(candidate.filename, candidate.alt))',
+    'const response = await fetchWithAllowedRedirects(',
+    "const dedupePath = store.artifactPath(SHOPIFY_MEDIA_JOB_ID, 'dedupe'",
+    'if (classification.classification !== \'PRODUCT_PHOTO\'',
+    "const originalPath = store.artifactPath(SHOPIFY_MEDIA_JOB_ID, 'originals'",
+    'await writeOnce(store, originalPath, sourceBytes)'
+  ],
+  'logos and duplicates must be rejected before an immutable original can enter Azure'
 );
 
 process.stdout.write('Enterprise guardrails verified: neutral identity, fail-closed eBay writes, exact approvals, and evidence boundaries are intact.\n');

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import type { StudioJobRecord } from './types.js';
 
@@ -14,10 +15,12 @@ export interface ImageJobStore {
   originalPath(jobId: string, imageId: string, mediaType: string): string;
   resultPath(jobId: string, imageId: string, mediaType: string): string;
   writeBytes(path: string, bytes: Uint8Array): Promise<void>;
+  writeFile(path: string, sourcePath: string): Promise<void>;
   replaceBytes(path: string, bytes: Uint8Array): Promise<void>;
   saveJob<T extends ImageJobManifest>(job: T): Promise<void>;
   getJob<T extends ImageJobManifest>(jobId: string): Promise<T | undefined>;
   readBytes(path: string): Promise<Uint8Array>;
+  readToFile(path: string, destinationPath: string): Promise<void>;
   resultMediaType(path: string): string;
 }
 
@@ -60,6 +63,11 @@ export class StudioFileStore implements ImageJobStore {
     await writeFile(path, bytes, { flag: 'wx' });
   }
 
+  async writeFile(path: string, sourcePath: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    await copyFile(sourcePath, path, constants.COPYFILE_EXCL);
+  }
+
   async replaceBytes(path: string, bytes: Uint8Array): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     const temporary = `${path}.tmp`;
@@ -96,6 +104,11 @@ export class StudioFileStore implements ImageJobStore {
 
   async readBytes(path: string): Promise<Uint8Array> {
     return readFile(path);
+  }
+
+  async readToFile(path: string, destinationPath: string): Promise<void> {
+    await mkdir(dirname(destinationPath), { recursive: true });
+    await copyFile(path, destinationPath);
   }
 
   resultMediaType(path: string): string {

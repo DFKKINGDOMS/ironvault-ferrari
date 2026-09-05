@@ -10,7 +10,7 @@ const passedQa: QaResult = {
 };
 
 describe('conservative local background editor', () => {
-  it('preserves foreground pixels and places the part on a pure-white 1600px canvas', async () => {
+  it('preserves foreground pixels and places the part on a pure-white 2000px canvas', async () => {
     let compared = false;
     const engine = new ConservativeBackgroundEngine({
       available: true,
@@ -42,13 +42,14 @@ describe('conservative local background editor', () => {
       const offset = (y * decoded.info.width + x) * decoded.info.channels;
       return Array.from(decoded.data.subarray(offset, offset + 3));
     };
-    expect(decoded.info.width).toBe(1_600);
-    expect(decoded.info.height).toBe(1_600);
+    expect(decoded.info.width).toBe(2_000);
+    expect(decoded.info.height).toBe(2_000);
     expect(pixel(0, 0)).toEqual([255, 255, 255]);
-    expect(pixel(800, 800)[0]).toBeGreaterThan(170);
-    expect(pixel(800, 800)[1]).toBeLessThan(50);
-    expect(result.model).toBe('partquill-local-background-v1');
-    expect(result.quality).toBe('pixel-preserving');
+    expect(pixel(1_000, 1_000)[0]).toBeGreaterThan(170);
+    expect(pixel(1_000, 1_000)[1]).toBeLessThan(50);
+    expect(result.model).toBe('partquill-local-background-v2');
+    expect(result.quality).toBe('pixel-preserving-2000px');
+    expect(result.mediaType).toBe('image/png');
     await engine.compare(source, 'image/png', result);
     expect(compared).toBe(true);
   });

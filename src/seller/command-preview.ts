@@ -6,6 +6,7 @@ import { buildCatalogListingIntelligence, type CatalogListingIntelligence } from
 import { buildTariffIntelligence, type TariffIntelligence } from '../catalog/tariff-intelligence.js';
 import type { AppConfig } from '../config.js';
 import { applyEbayBrandTitlePolicy, EBAY_INTELLECTUAL_PROPERTY_POLICY_URL, EBAY_VERO_PROFILE_INDEX_URL, type BrandTitlePolicyResult } from '../ebay/brand-title-policy.js';
+import type { PublicShopifyMediaMatch } from '../shopify-media/types.js';
 
 export const listingCommandRequestSchema = z.object({
   command: z.string().trim().min(3).max(500)
@@ -106,6 +107,7 @@ export interface SellerCommandPreview {
       source: 'FIRST_PARTY_CATALOG_CALLOUT';
       rightsState: 'FIRST_PARTY_CATALOG_EVIDENCE';
     } | null;
+    merchantMedia: PublicShopifyMediaMatch | null;
   };
   intelligence: CatalogListingIntelligence | null;
   tariff: TariffIntelligence | null;
@@ -499,7 +501,8 @@ export function buildSellerCommandPreview(
   command: string,
   gmCatalog?: GmCatalogPart,
   suppliedIntelligence?: CatalogListingIntelligence,
-  suppliedMapping?: GmCatalogMappingAssessment
+  suppliedMapping?: GmCatalogMappingAssessment,
+  merchantMedia: PublicShopifyMediaMatch | null = null
 ): SellerCommandPreview {
   const intent = parseListingCommand(command);
   const mapping = suppliedMapping ?? assessGmCatalogMapping(gmCatalog, intent.partNumber);
@@ -773,11 +776,15 @@ export function buildSellerCommandPreview(
         ? 'Readable OEM label + seller photos required'
         : isPhotoFirst
           ? 'Three seller-owned item views required'
-          : 'Seller-owned item photo required',
+          : merchantMedia?.assets.length
+            ? 'Exact-key merchant image ready for confirmation'
+            : 'Seller-owned item photo required',
       sourceDetail: isSafetyReview
         ? 'PartQuill will not identify or assemble this restricted item from the typed description alone.'
         : isPhotoFirst
           ? 'The photos become the primary item evidence; typed year, make and model words remain unverified seller hints.'
+          : merchantMedia?.assets.length
+            ? `${merchantMedia.assets.length} exact-keyed merchant image${merchantMedia.assets.length === 1 ? '' : 's'} passed the Ferrari source-comparison rules. Confirm that an image depicts the exact physical item before it can satisfy the seller-photo gate.`
           : catalogMatch
             ? `${catalogMatch.diagrams.length} related diagram reference${catalogMatch.diagrams.length === 1 ? '' : 's'} and ${catalogMatch.applications.length} catalog row reference${catalogMatch.applications.length === 1 ? '' : 's'} are attached. They are evidence, not seller-item photographs.`
             : 'Licensed catalog media may assist presentation later, but a placeholder can never enter a listing payload.',
@@ -808,7 +815,8 @@ export function buildSellerCommandPreview(
         calloutId: catalogMatch.calloutEvidence.calloutId,
         source: 'FIRST_PARTY_CATALOG_CALLOUT' as const,
         rightsState: 'FIRST_PARTY_CATALOG_EVIDENCE' as const
-      } : null
+      } : null,
+      merchantMedia
     },
     intelligence,
     tariff,

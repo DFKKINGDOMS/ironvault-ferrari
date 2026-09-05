@@ -4875,6 +4875,81 @@ input:focus-visible {
   z-index: 1;
 }
 
+.merchant-media-thumb {
+  background: #fff;
+  border-color: #86ad96;
+}
+
+.merchant-media-thumb img {
+  mix-blend-mode: normal;
+}
+
+.merchant-media-thumb > span {
+  color: var(--green);
+}
+
+.merchant-media-thumb > button {
+  position: relative;
+  z-index: 1;
+  margin-top: 5px;
+  padding: 8px 10px;
+  color: #fff;
+  background: var(--green);
+  border: 1px solid var(--green);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.merchant-media-thumb > button:disabled {
+  color: #315b41;
+  background: var(--green-pale);
+  cursor: default;
+}
+
+.merchant-media-options {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid #9fc9b8;
+  background: #edf7f2;
+}
+
+.merchant-media-options > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.merchant-media-options > div:first-child strong { color: #174d3c; font-size: 10px; }
+.merchant-media-options > div:first-child small { color: #527465; font-size: 8px; }
+
+.merchant-media-options > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 7px;
+}
+
+.merchant-media-options button {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid #b8d7ca;
+  background: #fff;
+  text-align: left;
+}
+
+.merchant-media-options button:disabled { cursor: default; opacity: .68; }
+.merchant-media-options img { width: 42px; height: 42px; object-fit: contain; background: #fff; }
+.merchant-media-options button span { min-width: 0; }
+.merchant-media-options button strong,
+.merchant-media-options button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.merchant-media-options button strong { color: #174d3c; font-size: 8px; }
+.merchant-media-options button small { margin-top: 2px; color: #527465; font-size: 7px; }
+
 .catalog-evidence-jump {
   width: 100%;
   display: grid;
