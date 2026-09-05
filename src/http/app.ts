@@ -1409,6 +1409,17 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return { item: await service.approvePublic(itemId, input.actorId, input.payloadHash, input.feeEstimateId) };
   });
 
+  app.post('/v1/items/:itemId/fees/refresh', async (request) => {
+    const { itemId } = itemParams.parse(request.params);
+    const input = z.object({
+      actorId: z.string().min(1).max(200),
+      payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
+      payloadVersion: z.number().int().positive(),
+      feeEstimateId: z.string().min(1).max(200).nullable()
+    }).strict().parse(request.body);
+    return service.refreshFees(itemId, input.actorId, input);
+  });
+
   app.post('/v1/items/:itemId/publish', async (request) => {
     const { itemId } = itemParams.parse(request.params);
     const { actorId } = z.object({ actorId: z.string().min(1) }).parse(request.body);

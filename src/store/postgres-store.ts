@@ -16,7 +16,9 @@ import type {
   SellerAcknowledgement,
   StoredImage
 } from '../domain/types.js';
-import type { EbayLeafCategory, Store } from './store.js';
+import type { EbayLeafCategory, ReviewTransition, Store } from './store.js';
+import { payloadHash } from '../domain/canonical.js';
+import { DomainError } from '../domain/errors.js';
 import type { EbayReferenceCacheRecord } from '../ebay/reference-types.js';
 import type { CommunityImageRecord, CommunitySubmissionRecord, StoredCommunityImage } from '../community/types.js';
 import type {
@@ -1002,6 +1004,50 @@ export class PostgresStore implements Store {
       item,
       item.updatedAt
     ]);
+  }
+
+  async commitReviewTransition(transition: ReviewTransition): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const currentItem = await client.query<JsonRow<ItemRecord>>(
+        'SELECT record FROM items WHERE id = $1 FOR UPDATE', [transition.expectedItem.id]
+      );
+      const currentListing = await client.query<JsonRow<ListingRecord>>(
+        'SELECT record FROM listings WHERE item_id = $1 FOR UPDATE', [transition.expectedItem.id]
+      );
+      if (payloadHash(currentItem.rows[0]?.record ?? null) !== payloadHash(transition.expectedItem) ||
+          payloadHash(currentListing.rows[0]?.record ?? null) !== payloadHash(transition.expectedListing ?? null)) {
+        throw new DomainError('The review changed. Reload the item before retrying.', 'REVIEW_STATE_CHANGED');
+      }
+      const { item, listing, approval, audit } = transition;
+      await client.query('UPDATE items SET record = $2, updated_at = $3 WHERE id = $1', [item.id, item, item.updatedAt]);
+      if (listing) {
+        await client.query(
+          `INSERT INTO listings(id, item_id, seller_id, offer_id, record, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (item_id) DO UPDATE SET offer_id = EXCLUDED.offer_id,
+             record = EXCLUDED.record, updated_at = EXCLUDED.updated_at`,
+          [listing.id, listing.itemId, listing.sellerId, listing.offerId, listing, listing.createdAt, listing.updatedAt]
+        );
+      }
+      if (approval) {
+        await client.query(
+          'INSERT INTO approvals(id, item_id, stage, payload_hash, record, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
+          [approval.id, approval.itemId, approval.stage, approval.payloadHash, approval, approval.createdAt]
+        );
+      }
+      await client.query(
+        'INSERT INTO audit_events(id, seller_id, item_id, action, outcome, record, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [audit.id, audit.sellerId, audit.itemId, audit.action, audit.outcome, audit, audit.createdAt]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listItems(sellerId: string): Promise<ItemRecord[]> {

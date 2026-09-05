@@ -123,6 +123,7 @@ export interface ListingRecord {
   };
   remoteSnapshot: unknown;
   lastApprovedPayloadHash: string;
+  stagedPayloadVersion?: number;
   createdAt: string;
   updatedAt: string;
 }

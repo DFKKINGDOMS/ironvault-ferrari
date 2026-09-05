@@ -32,12 +32,22 @@ export interface EbayLeafCategory {
   categoryPath: string;
 }
 
+export interface ReviewTransition {
+  expectedItem: ItemRecord;
+  expectedListing: ListingRecord | undefined;
+  item: ItemRecord;
+  listing?: ListingRecord;
+  approval?: ApprovalRecord;
+  audit: AuditEvent;
+}
+
 export interface Store {
   ping?(): Promise<void>;
   close?(): Promise<void>;
   createItem(item: ItemRecord): Promise<void>;
   getItem(itemId: string): Promise<ItemRecord | undefined>;
   saveItem(item: ItemRecord): Promise<void>;
+  commitReviewTransition(transition: ReviewTransition): Promise<void>;
   listItems(sellerId: string): Promise<ItemRecord[]>;
   addEvidence(record: EvidenceRecord): Promise<void>;
   listEvidence(itemId: string): Promise<EvidenceRecord[]>;
