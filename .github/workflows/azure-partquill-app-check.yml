@@ -68,8 +68,12 @@ jobs:
           jq -e '.sellerUi.version == "0.24.0" and .sellerUi.vintageGmInventoryQuestions == true and .sellerUi.astraAssistant == true and .sellerUi.questionsAreReadOnly == true and .sellerUi.explicitListingRequestRequired == true' ready.json >/dev/null
           jq -e '
             .inventoryAnswer.kind == "VINTAGE_GM_INVENTORY_ANSWER"
-            and (.inventoryAnswer.status == "READY" or .inventoryAnswer.status == "TRUNCATED")
+            and .inventoryAnswer.status == "PARTIAL_CATALOG_COVERAGE"
             and .inventoryAnswer.returnedCount > 0
+            and .inventoryAnswer.summary.complete == false
+            and .inventoryAnswer.catalogCoverage.complete == false
+            and .inventoryAnswer.catalogCoverage.limitsVehicleResults == true
+            and .inventoryAnswer.catalogCoverage.matchedInventoryKeys < .inventoryAnswer.catalogCoverage.totalInventoryKeys
             and .inventoryAnswer.readOnly == true
             and .inventoryAnswer.listingDraftCreated == false
             and .inventoryAnswer.allowanceConsumed == false
