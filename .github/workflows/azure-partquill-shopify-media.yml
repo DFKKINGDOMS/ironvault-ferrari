@@ -1,6 +1,9 @@
 name: Sync Import Export Shopify media to Azure
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -60,6 +63,7 @@ jobs:
 
   deploy:
     name: Deploy resumable Azure media worker
+    if: github.event_name != 'pull_request'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 120
