@@ -71,6 +71,11 @@ describe('HTTP contract', () => {
     expect(bootstrap.json()).toMatchObject({
       version: '0.23.0',
       backendConnected: true,
+      workspace: {
+        displayName: 'PartQuill Workspace',
+        accountLabel: 'Organization account',
+        initials: 'PQ'
+      },
       ebay: { writesEnabled: false, handoffUrl: 'https://www.ebay.com/' },
       defaults: {
         minimumPrice: '0.99',

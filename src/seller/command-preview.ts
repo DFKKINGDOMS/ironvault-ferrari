@@ -880,6 +880,11 @@ export function buildSellerUiBootstrap(config: AppConfig) {
     version: '0.23.0',
     mode: 'private-pilot',
     backendConnected: true,
+    workspace: {
+      displayName: config.PARTQUILL_WORKSPACE_NAME,
+      accountLabel: config.PARTQUILL_WORKSPACE_LABEL,
+      initials: config.PARTQUILL_WORKSPACE_INITIALS
+    },
     ebay: {
       environment: config.EBAY_ENV,
       mode: config.EBAY_MODE,
