@@ -1,3 +1,5 @@
+import { responseOutputText, reviewImageDataUrl } from '../image-studio/review-payload.js';
+
 type JsonObject = Record<string, unknown>;
 
 export type MediaVisualClass =
@@ -30,24 +32,6 @@ A physical logo, stamped mark, molded mark, label, serial number, or part number
 Return ONLY JSON:
 {"classification":"PRODUCT_PHOTO","confidence":0.99,"reason":"short evidence-based reason"}`;
 
-function dataUrl(bytes: Uint8Array, mediaType: string): string {
-  return `data:${mediaType};base64,${Buffer.from(bytes).toString('base64')}`;
-}
-
-function outputText(payload: JsonObject): string {
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  for (const row of output) {
-    if (!row || typeof row !== 'object') continue;
-    const content = Array.isArray((row as JsonObject).content) ? (row as JsonObject).content as unknown[] : [];
-    for (const part of content) {
-      if (part && typeof part === 'object' && typeof (part as JsonObject).text === 'string') {
-        return String((part as JsonObject).text);
-      }
-    }
-  }
-  return '';
-}
-
 function parsedJson(text: string): JsonObject {
   const trimmed = text.trim();
   try {
@@ -67,28 +51,31 @@ export class AstraMediaPolicy {
     private readonly fetcher: typeof fetch = fetch
   ) {}
 
-  async classify(bytes: Uint8Array, mediaType: string, filename: string, alt?: string | null): Promise<MediaClassification> {
+  async classify(bytes: Uint8Array, _mediaType: string, filename: string, alt?: string | null): Promise<MediaClassification> {
+    const reviewImage = await reviewImageDataUrl(bytes);
     const response = await this.fetcher(`${this.baseUrl.replace(/\/$/, '')}/responses`, {
       method: 'POST',
       headers: { 'api-key': this.apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: this.model,
-        max_output_tokens: 220,
+        reasoning: { effort: 'low' },
+        max_output_tokens: 1_200,
         input: [{
           role: 'user',
           content: [
             { type: 'input_text', text: `${CLASSIFIER_PROMPT}\n\nFilename: ${filename}\nAlt text: ${alt ?? '(none)'}` },
-            { type: 'input_image', image_url: dataUrl(bytes, mediaType), detail: 'high' }
+            { type: 'input_image', image_url: reviewImage, detail: 'high' }
           ]
         }]
-      })
+      }),
+      signal: AbortSignal.timeout(180_000)
     });
     const payload = await response.json().catch(() => ({})) as JsonObject;
     if (!response.ok) {
       const error = payload.error as JsonObject | undefined;
       throw new Error(typeof error?.message === 'string' ? error.message : `Astra classifier failed with ${response.status}`);
     }
-    const decision = parsedJson(outputText(payload));
+    const decision = parsedJson(responseOutputText(payload));
     const allowed = new Set<MediaVisualClass>([
       'PRODUCT_PHOTO',
       'LOGO_OR_BRANDING',

@@ -112,6 +112,7 @@ const BULK_DOCUMENT = `{
 }`;
 
 interface WorkerState extends ShopifyMediaPipelineStatus {
+  releaseSha?: string;
   exportPath?: string;
   assetCursor: number;
   queuePass?: ShopifyMediaQueuePass;
@@ -719,6 +720,11 @@ async function worker(): Promise<void> {
   );
   await store.initialize();
   const state = await store.getJob<WorkerState>(SHOPIFY_MEDIA_JOB_ID) || initialState();
+  const releaseSha = String(process.env.SHOPIFY_MEDIA_RELEASE_SHA || '').trim().toLowerCase();
+  if (releaseSha && !/^[0-9a-f]{40}$/.test(releaseSha)) {
+    throw new Error('CONFIGURATION: SHOPIFY_MEDIA_RELEASE_SHA must be an exact 40-character Git commit SHA');
+  }
+  state.releaseSha = releaseSha || state.releaseSha;
   if (!state.queuePass) {
     state.queuePass = 'MAPPED';
     state.assetCursor = 0;

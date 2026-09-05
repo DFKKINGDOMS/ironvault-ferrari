@@ -1,4 +1,5 @@
 import { buildStudioPrompt, STUDIO_QA_PROMPT } from './prompt.js';
+import { responseOutputText, reviewImageDataUrl } from './review-payload.js';
 import type { EditRequest, EditResult, ImageEditEngine, QaResult, StudioRoute } from './types.js';
 
 type JsonObject = Record<string, unknown>;
@@ -29,20 +30,6 @@ async function readJson(response: Response): Promise<JsonObject> {
   return payload;
 }
 
-function outputText(payload: JsonObject): string {
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  for (const row of output) {
-    if (!row || typeof row !== 'object') continue;
-    const content = Array.isArray((row as JsonObject).content) ? ((row as JsonObject).content as unknown[]) : [];
-    for (const part of content) {
-      if (part && typeof part === 'object' && typeof (part as JsonObject).text === 'string') {
-        return (part as JsonObject).text as string;
-      }
-    }
-  }
-  return '';
-}
-
 function parseQa(text: string): JsonObject {
   const trimmed = text.trim();
   try {
@@ -52,10 +39,6 @@ function parseQa(text: string): JsonObject {
     if (!match) throw new Error('AI QA returned no JSON decision');
     return JSON.parse(match[0]) as JsonObject;
   }
-}
-
-function dataUrl(bytes: Uint8Array, mediaType: string): string {
-  return `data:${mediaType};base64,${Buffer.from(bytes).toString('base64')}`;
 }
 
 export class OpenAiImageEngine implements ImageEditEngine {
@@ -102,7 +85,8 @@ export class OpenAiImageEngine implements ImageEditEngine {
       await this.fetcher(this.url('images/edits'), {
         method: 'POST',
         headers: this.headers(),
-        body: form
+        body: form,
+        signal: AbortSignal.timeout(180_000)
       })
     );
     const rows = Array.isArray(payload.data) ? payload.data : [];
@@ -116,30 +100,36 @@ export class OpenAiImageEngine implements ImageEditEngine {
     };
   }
 
-  async compare(source: Uint8Array, sourceMediaType: string, candidate: EditResult): Promise<QaResult> {
+  async compare(source: Uint8Array, _sourceMediaType: string, candidate: EditResult): Promise<QaResult> {
     if (!this.apiKey) throw new Error('OpenAI image QA is not activated');
     const model = this.options.reviewModel ?? 'gpt-5.4-mini';
+    const [sourcePreview, candidatePreview] = await Promise.all([
+      reviewImageDataUrl(source),
+      reviewImageDataUrl(candidate.bytes)
+    ]);
     const payload = await readJson(
       await this.fetcher(this.url('responses'), {
         method: 'POST',
         headers: this.headers(true),
         body: JSON.stringify({
           model,
-          max_output_tokens: 300,
+          reasoning: { effort: 'low' },
+          max_output_tokens: 1_200,
           input: [
             {
               role: 'user',
               content: [
                 { type: 'input_text', text: STUDIO_QA_PROMPT },
-                { type: 'input_image', image_url: dataUrl(source, sourceMediaType), detail: 'high' },
-                { type: 'input_image', image_url: dataUrl(candidate.bytes, candidate.mediaType), detail: 'high' }
+                { type: 'input_image', image_url: sourcePreview, detail: 'high' },
+                { type: 'input_image', image_url: candidatePreview, detail: 'high' }
               ]
             }
           ]
-        })
+        }),
+        signal: AbortSignal.timeout(180_000)
       })
     );
-    const decision = parseQa(outputText(payload));
+    const decision = parseQa(responseOutputText(payload));
     const flags = [
       'geometry_or_piece_count_problem',
       'washed_out_or_hazy',
