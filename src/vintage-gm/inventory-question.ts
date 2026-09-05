@@ -533,10 +533,10 @@ export function buildVintageGmInventoryAnswer(
     kind: 'VINTAGE_GM_INVENTORY_ANSWER',
     status: !datasetReady
       ? 'DATA_NOT_LOADED'
-      : truncated
-        ? 'TRUNCATED'
-        : limitsVehicleResults
+      : limitsVehicleResults
           ? 'PARTIAL_CATALOG_COVERAGE'
+        : truncated
+          ? 'TRUNCATED'
           : selected.length === 0
             ? 'NO_MATCHES'
             : 'READY',
