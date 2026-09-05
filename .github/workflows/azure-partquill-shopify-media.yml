@@ -324,6 +324,7 @@ jobs:
               SHOPIFY_ADMIN_ACCESS_TOKEN=secretref:shopify-admin-token \
               SHOPIFY_MEDIA_RIGHTS_CONFIRMED=true \
               SHOPIFY_MEDIA_CANARY_PART_NUMBER=10110989 \
+              SHOPIFY_MEDIA_RELEASE_SHA="$GITHUB_SHA" \
               SHOPIFY_MEDIA_CONTINUOUS=true \
               SHOPIFY_MEDIA_MIN_INTERVAL_MS=1000 \
               IMAGE_STUDIO_STORAGE_ACCOUNT_URL="https://${STORAGE_ACCOUNT}.blob.core.windows.net" \
@@ -345,26 +346,29 @@ jobs:
           worker_revision_ready() {
             [ "$PROVISIONING_STATE" = "Succeeded" ] \
               && [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ] \
-              && [ "$REVISION_RUNNING" = "Running" ] \
-              && { [ "$REVISION_HEALTH" = "Healthy" ] \
-                || { [ "$REVISION_HEALTH" = "None" ] \
-                  && [ "$WORKER_INGRESS" != "true" ] \
-                  && [ "$WORKER_INGRESS" != "True" ]; }; }
+              && { [ "$REVISION_RUNNING" = "Running" ] || [ "$REVISION_RUNNING" = "RunningAtMaxScale" ]; } \
+              && { { [ "$WORKER_INGRESS" != "true" ] && [ "$WORKER_INGRESS" != "True" ]; } \
+                || [ "$REVISION_HEALTH" = "Healthy" ]; }
           }
           for attempt in $(seq 1 90); do
-            PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState --output tsv 2>/dev/null || true)
-            WORKER_INGRESS=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.external --output tsv 2>/dev/null || true)
-            LATEST_REVISION=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName --output tsv 2>/dev/null || true)
+            APP_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query '{provisioning:properties.provisioningState,ingress:properties.configuration.ingress.external,latest:properties.latestRevisionName}' --output json 2>/dev/null || printf '{}')
+            PROVISIONING_STATE=$(jq -r '.provisioning // empty' <<<"$APP_STATE")
+            WORKER_INGRESS=$(jq -r '.ingress // empty' <<<"$APP_STATE")
+            LATEST_REVISION=$(jq -r '.latest // empty' <<<"$APP_STATE")
             if [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ]; then
-              REVISION_HEALTH=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query properties.healthState --output tsv 2>/dev/null || true)
-              REVISION_RUNNING=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query properties.runningState --output tsv 2>/dev/null || true)
+              REVISION_STATE=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query '{health:properties.healthState,running:properties.runningState}' --output json 2>/dev/null || printf '{}')
+              REVISION_HEALTH=$(jq -r '.health // empty' <<<"$REVISION_STATE")
+              REVISION_RUNNING=$(jq -r '.running // empty' <<<"$REVISION_STATE")
             fi
             if worker_revision_ready; then break; fi
+            if [ $((attempt % 12)) -eq 0 ]; then
+              echo "Waiting for worker revision: provisioning=${PROVISIONING_STATE:-unknown}; ingress=${WORKER_INGRESS:-none}; health=${REVISION_HEALTH:-none}; running=${REVISION_RUNNING:-unknown}"
+            fi
             sleep 10
           done
           if ! worker_revision_ready; then
             echo "Worker state: provisioning=${PROVISIONING_STATE:-unknown}; revision=${LATEST_REVISION:-unknown}; ingress=${WORKER_INGRESS:-none}; health=${REVISION_HEALTH:-unknown}; running=${REVISION_RUNNING:-unknown}" >&2
-            az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
+            timeout 60s az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
             exit 1
           fi
 
@@ -380,11 +384,15 @@ jobs:
               --overwrite \
               --only-show-errors \
               --output none 2>/dev/null; then
-              if jq -e '.phase == "CONFIGURATION_HOLD"' "$RUNNER_TEMP/shopify-media-manifest.json" >/dev/null; then
-                echo "The worker entered a configuration hold. Check the locked credential, source identity, scopes, and established Foundry deployments." >&2
+              if jq -e --arg release "$GITHUB_SHA" '.releaseSha == $release and .phase == "CONFIGURATION_HOLD"' "$RUNNER_TEMP/shopify-media-manifest.json" >/dev/null; then
+                WORKER_ERROR=$(jq -r '.lastError // "No worker error was recorded."' "$RUNNER_TEMP/shopify-media-manifest.json" \
+                  | sed -E 's#https?://[^[:space:]]+#<redacted-url>#g; s/[A-Za-z0-9_=-]{48,}/<redacted-value>/g' \
+                  | tr '\n' ' ' \
+                  | cut -c1-1000)
+                echo "The worker entered a configuration hold: $WORKER_ERROR" >&2
                 exit 1
               fi
-              if jq -e '.canaryPartNumber == "10110989" and .canaryPassed == true' "$RUNNER_TEMP/shopify-media-manifest.json" >/dev/null; then
+              if jq -e --arg release "$GITHUB_SHA" '.releaseSha == $release and .canaryPartNumber == "10110989" and .canaryPassed == true' "$RUNNER_TEMP/shopify-media-manifest.json" >/dev/null; then
                 CANARY_READY=true
                 break
               fi
@@ -393,7 +401,7 @@ jobs:
           done
           if [ "$CANARY_READY" != "true" ]; then
             echo "The exact 10110989 canary did not pass within the bounded deployment window; the full queue remains locked." >&2
-            az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
+            timeout 60s az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
             exit 1
           fi
 
