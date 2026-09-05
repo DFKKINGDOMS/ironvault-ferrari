@@ -12,6 +12,7 @@ import { ConservativeBackgroundEngine } from '../image-studio/local-background-e
 import { OpenAiImageEngine } from '../image-studio/openai-engine.js';
 import type { ImageJobStore } from '../image-studio/file-store.js';
 import { AstraMediaPolicy } from './astra-policy.js';
+import { exactCanaryCandidates } from './canary-source.js';
 import {
   scanShopifyExport,
   shopifyCandidateKey,
@@ -44,6 +45,26 @@ const EXPORT_TEMP_ROOT = join(tmpdir(), 'partquill-shopify-media');
 const SHOP_IDENTITY = `query PartQuillShopIdentity {
   shop { name myshopifyDomain }
   currentAppInstallation { accessScopes { handle } }
+}`;
+
+const EXACT_CANARY_MEDIA = `query PartQuillExactCanary($query: String!) {
+  productVariants(first: 10, query: $query) {
+    nodes {
+      sku
+      product {
+        id
+        media(first: 100) {
+          nodes {
+            __typename
+            ... on MediaImage {
+              id alt mimeType
+              image { url width height altText }
+            }
+          }
+        }
+      }
+    }
+  }
 }`;
 
 const RECENT_BULK = `query PartQuillRecentBulkExports($first: Int!) {
@@ -656,6 +677,36 @@ async function processWithRecovery(
   }
 }
 
+async function processDirectCanary(
+  shop: ShopifyAdmin,
+  store: ImageJobStore,
+  state: WorkerState,
+  sourceStore: string,
+  policy: AstraMediaPolicy,
+  engine: ConservativeBackgroundEngine
+): Promise<void> {
+  state.phase = 'CANARY';
+  await saveState(store, state);
+  const data = await shop.gql<JsonObject>(EXACT_CANARY_MEDIA, { query: `sku:${CANARY_PART_NUMBER}` });
+  const candidates = exactCanaryCandidates(data, CANARY_PART_NUMBER);
+  if (!candidates.length) {
+    throw new Error(`CONFIGURATION: exact Shopify product-media canary ${CANARY_PART_NUMBER} was not found`);
+  }
+  for (const candidate of candidates) {
+    const result = await processWithRecovery(store, state, candidate, sourceStore, policy, engine);
+    if (result?.remoteAiUsed) await delay(MIN_INTERVAL_MS);
+    if (!result || !['PASSED', 'DUPLICATE'].includes(result.outcome) || !result.mapped) continue;
+    state.canaryPassed = true;
+    state.canaryCandidateKey = shopifyCandidateKey(candidate);
+    applyResult(state, result);
+    state.retrying = 0;
+    state.lastError = undefined;
+    await saveState(store, state);
+    return;
+  }
+  throw new Error(`CONFIGURATION: no actual ${CANARY_PART_NUMBER} product photo passed the locked Ferrari and Astra gates`);
+}
+
 async function worker(): Promise<void> {
   if (process.env.SHOPIFY_MEDIA_RIGHTS_CONFIRMED !== 'true') {
     throw new Error('CONFIGURATION: SHOPIFY_MEDIA_RIGHTS_CONFIRMED=true is required; originals cannot be processed without merchant authorization');
@@ -693,6 +744,9 @@ async function worker(): Promise<void> {
 
   for (;;) {
     try {
+      if (!state.canaryPassed) {
+        await processDirectCanary(shop, store, state, identity.name, policy, engine);
+      }
       const exportFile = await ensureExport(shop, store, state);
       if (!exportFile) {
         state.phase = 'AWAITING_EXPORT';
