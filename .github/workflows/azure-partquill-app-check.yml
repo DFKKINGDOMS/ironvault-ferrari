@@ -63,9 +63,9 @@ jobs:
           test "$PUBLIC_HEALTH" = "200"
           test "$INVENTORY_ANSWER" = "200"
           test "$ASSISTANT_ANSWER" = "200"
-          jq -e '.version == "0.24.0"' health.json >/dev/null
-          jq -e '.version == "0.24.0"' public-health.json >/dev/null
-          jq -e '.sellerUi.version == "0.24.0" and .sellerUi.vintageGmInventoryQuestions == true and .sellerUi.astraAssistant == true and .sellerUi.questionsAreReadOnly == true and .sellerUi.explicitListingRequestRequired == true' ready.json >/dev/null
+          jq -e '.version == "0.24.1"' health.json >/dev/null
+          jq -e '.version == "0.24.1"' public-health.json >/dev/null
+          jq -e '.sellerUi.version == "0.24.1" and .sellerUi.vintageGmInventoryQuestions == true and .sellerUi.astraAssistant == true and .sellerUi.questionsAreReadOnly == true and .sellerUi.explicitListingRequestRequired == true' ready.json >/dev/null
           jq -e '
             .inventoryAnswer.kind == "VINTAGE_GM_INVENTORY_ANSWER"
             and (.inventoryAnswer.status == "READY" or .inventoryAnswer.status == "TRUNCATED")

@@ -7,7 +7,11 @@ import { registerCatalogImage } from '../src/catalog/image-proxy.js';
 import { clearGmCalloutCaches } from '../src/catalog/gm-callout.js';
 import type { Store } from '../src/store/store.js';
 import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
-import type { SellerAssistant } from '../src/seller/astra-assistant.js';
+import {
+  deterministicSellerAssistantAnswer,
+  type SellerAssistant,
+  type SellerAssistantEvidence
+} from '../src/seller/astra-assistant.js';
 
 const gm5459066 = JSON.parse(
   readFileSync(new URL('../data/gm-catalog-smoke-5459066.json', import.meta.url), 'utf8')
@@ -70,7 +74,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.24.0',
+      version: '0.24.1',
       backendConnected: true,
       workspace: {
         displayName: 'PartQuill Workspace',
@@ -143,7 +147,9 @@ describe('HTTP contract', () => {
             catalogState: evidence.catalogState,
             sourcePages: evidence.catalog?.sourcePages ?? [],
             applicationRecordCount: evidence.catalog?.totalApplicationRecords ?? 0,
-            approvedImageCount: evidence.merchantMedia?.approvedImageCount ?? 0
+            approvedImageCount: evidence.merchantMedia?.approvedImageCount ?? 0,
+            inventoryState: evidence.inventory?.state ?? 'NOT_REQUESTED',
+            inventoryUnits: evidence.inventory?.quantity ?? 0
           },
           images: evidence.merchantMedia?.images ?? [],
           suggestedCommands: ['What does part 10110989 fit?'],
@@ -229,6 +235,63 @@ describe('HTTP contract', () => {
         publicEbayWrite: 'DISABLED'
       }
     });
+    expect(response.json().preview).toBeUndefined();
+  });
+
+  it('gives Astra exact inventory evidence even when the GM catalog key is absent', async () => {
+    let capturedEvidence: SellerAssistantEvidence | null = null;
+    const sellerAssistant: SellerAssistant = {
+      available: true,
+      provider: 'AZURE_FOUNDRY_ASTRA',
+      model: 'gpt-6-astra-1',
+      answer: async (command, evidence) => {
+        capturedEvidence = evidence;
+        return deterministicSellerAssistantAnswer(command, evidence);
+      }
+    };
+    const h = harness({ ALLOW_EBAY_WRITES: false });
+    await h.store.importVintageGmRecords([{
+      sourceRow: 1_996_743,
+      productName: '1996743',
+      sku: '1996743',
+      partNumber: '1996743',
+      brand: 'GM NA',
+      description: 'SECONDARY ACTUATOR VALVE',
+      quantity: 3,
+      sourcePrice: '25.0000',
+      sourceWeight: '1.0000',
+      normalizationState: 'NORMALIZED_EXACT_KEY',
+      normalizationIssue: null
+    }], {
+      datasetId: 'vintage-exact-inventory-without-catalog',
+      sourceSha256: 'f'.repeat(64),
+      sourceFileName: 'Products_Vintage_Full_Original.csv',
+      sourceTotalRows: 788_581,
+      expectedGmRows: 1,
+      complete: true
+    });
+    app = await buildApp({ ...h, sellerAssistant });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: '1996743' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(capturedEvidence).toMatchObject({
+      partNumber: '1996743',
+      catalogState: 'NOT_FOUND',
+      catalog: null,
+      inventory: {
+        state: 'EXACT_MATCH',
+        exactKeyMatch: true,
+        quantity: 3,
+        description: 'Secondary Actuator Valve',
+        catalogEvidenceAttached: false
+      }
+    });
+    expect(response.json().assistantAnswer.answer).toContain('3 units');
     expect(response.json().preview).toBeUndefined();
   });
 

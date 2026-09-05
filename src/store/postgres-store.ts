@@ -802,7 +802,7 @@ export class PostgresStore implements Store {
       source_weight_max: string;
       source_rows: number[];
       record_count: number;
-      catalog_data: GmCatalogPart;
+      catalog_data: GmCatalogPart | null;
     }>(
       `WITH grouped_inventory AS (
          SELECT
@@ -833,7 +833,7 @@ export class PostgresStore implements Store {
          inventory.source_inventory_value,inventory.source_weight_min,inventory.source_weight_max,
          inventory.source_rows,inventory.record_count,catalog.data AS catalog_data
        FROM grouped_inventory AS inventory
-       JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
+       LEFT JOIN partquill.gm_catalog_parts AS catalog ON catalog.part_number=inventory.part_number
        WHERE (($2::integer IS NULL AND $3::text IS NULL AND $4::text IS NULL)
           OR EXISTS (
             SELECT 1
@@ -958,7 +958,7 @@ export class PostgresStore implements Store {
     );
     const overflow = result.rows.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS;
     const matches = result.rows.slice(0, MAX_VINTAGE_INVENTORY_ANSWER_ROWS).map((row) => {
-      const matchedApplications = (row.catalog_data.applications ?? []).filter((application) =>
+      const matchedApplications = (row.catalog_data?.applications ?? []).filter((application) =>
         matchesVintageVehicleApplication(application, resolvedIntent)
       );
       return {
