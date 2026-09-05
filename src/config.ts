@@ -83,7 +83,10 @@ const schema = z
     MCP_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
     SELLER_PREVIEW_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(2_000).default(60),
     SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
-    SELLER_PREVIEW_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8)
+    SELLER_PREVIEW_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8),
+    SELLER_ASSISTANT_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(120).default(20),
+    SELLER_ASSISTANT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+    SELLER_ASSISTANT_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(3)
   })
   .superRefine((env, context) => {
     if (Boolean(env.AZURE_STORAGE_ACCOUNT_NAME) !== Boolean(env.GM_CATALOG_MEDIA_CONTAINER)) {

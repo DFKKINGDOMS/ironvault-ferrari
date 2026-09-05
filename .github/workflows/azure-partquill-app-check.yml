@@ -1,11 +1,11 @@
 name: Check PartQuill Azure app
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/azure-partquill-app-check.yml
+  workflow_run:
+    workflows:
+      - Deploy PartQuill to Azure
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   check:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -43,21 +44,28 @@ jobs:
             -H 'content-type: application/json' \
             --data "$(jq -nc --arg command "$QUESTION" '{command:$command}')" \
             "$URL/v1/seller-ui/command-preview" || true)
+          ASSISTANT_ANSWER=$(curl --max-time 120 -sS -o assistant-answer.json -w '%{http_code}' \
+            -H 'content-type: application/json' \
+            --data '{"command":"What can you do?"}' \
+            "$URL/v1/seller-ui/command-preview" || true)
           echo "health_status=$HEALTH" | tee health-status.txt
           echo "ready_status=$READY" | tee ready-status.txt
           echo "public_health_status=$PUBLIC_HEALTH" | tee public-health-status.txt
           echo "inventory_answer_status=$INVENTORY_ANSWER" | tee inventory-answer-status.txt
+          echo "assistant_answer_status=$ASSISTANT_ANSWER" | tee assistant-answer-status.txt
           echo "health_body=$(tr -d '\n' < health.json 2>/dev/null || true)"
           echo "ready_body=$(tr -d '\n' < ready.json 2>/dev/null || true)"
           jq '{kind:.inventoryAnswer.kind,status:.inventoryAnswer.status,returnedCount:.inventoryAnswer.returnedCount,summary:.inventoryAnswer.summary,readOnly:.inventoryAnswer.readOnly,listingDraftCreated:.inventoryAnswer.listingDraftCreated,allowanceConsumed:.inventoryAnswer.allowanceConsumed,intent:.inventoryAnswer.intent}' inventory-answer.json
+          jq '{kind:.assistantAnswer.kind,status:.assistantAnswer.status,provider:.assistantAnswer.provider,model:.assistantAnswer.model,readOnly:.assistantAnswer.readOnly,listingDraftCreated:.assistantAnswer.listingDraftCreated,allowanceConsumed:.assistantAnswer.allowanceConsumed,publicEbayWrite:.assistantAnswer.publicEbayWrite}' assistant-answer.json
 
           test "$HEALTH" = "200"
           test "$READY" = "200"
           test "$PUBLIC_HEALTH" = "200"
           test "$INVENTORY_ANSWER" = "200"
-          jq -e '.version == "0.22.1"' health.json >/dev/null
-          jq -e '.version == "0.22.1"' public-health.json >/dev/null
-          jq -e '.sellerUi.version == "0.22.1" and .sellerUi.vintageGmInventoryQuestions == true' ready.json >/dev/null
+          test "$ASSISTANT_ANSWER" = "200"
+          jq -e '.version == "0.24.0"' health.json >/dev/null
+          jq -e '.version == "0.24.0"' public-health.json >/dev/null
+          jq -e '.sellerUi.version == "0.24.0" and .sellerUi.vintageGmInventoryQuestions == true and .sellerUi.astraAssistant == true and .sellerUi.questionsAreReadOnly == true and .sellerUi.explicitListingRequestRequired == true' ready.json >/dev/null
           jq -e '
             .inventoryAnswer.kind == "VINTAGE_GM_INVENTORY_ANSWER"
             and (.inventoryAnswer.status == "READY" or .inventoryAnswer.status == "TRUNCATED")
@@ -69,6 +77,17 @@ jobs:
             and .inventoryAnswer.intent.sortBy == "QUANTITY"
             and .inventoryAnswer.intent.sortDirection == "DESC"
           ' inventory-answer.json >/dev/null
+          jq -e '
+            .assistantAnswer.kind == "PARTQUILL_ASSISTANT_ANSWER"
+            and .assistantAnswer.provider == "AZURE_FOUNDRY_ASTRA"
+            and .assistantAnswer.model == "gpt-6-astra-1"
+            and .assistantAnswer.readOnly == true
+            and .assistantAnswer.listingDraftCreated == false
+            and .assistantAnswer.allowanceConsumed == false
+            and .assistantAnswer.publicEbayWrite == "DISABLED"
+            and (.assistantAnswer.answer | length) > 20
+            and (.preview | not)
+          ' assistant-answer.json >/dev/null
           jq -e '
             .inventoryAnswer as $answer
             | [$answer.rows[].quantity] as $quantities
@@ -86,10 +105,12 @@ jobs:
             ready-status.txt
             public-health-status.txt
             inventory-answer-status.txt
+            assistant-answer-status.txt
             health.json
             ready.json
             public-health.json
             inventory-answer.json
+            assistant-answer.json
             revisions.json
             system-logs.txt
             console-logs.txt

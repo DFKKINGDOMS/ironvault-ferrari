@@ -25,7 +25,13 @@ import type { StudioJobRecord, StudioSourceUpload } from '../image-studio/types.
 import { buildPartQuillMcpServer } from '../mcp/server.js';
 import { buildPartQuillWidgetHtml } from '../mcp/widget.js';
 import { resolveCatalogImage } from '../catalog/image-proxy.js';
-import { buildSellerCommandPreview, buildSellerUiBootstrap, listingCommandRequestSchema, parseListingCommand } from '../seller/command-preview.js';
+import { buildSellerCommandPreview, buildSellerUiBootstrap, findPartNumber, listingCommandRequestSchema, parseListingCommand } from '../seller/command-preview.js';
+import {
+  buildSellerAssistantEvidence,
+  deterministicSellerAssistantAnswer,
+  isExplicitListingRequest,
+  type SellerAssistant
+} from '../seller/astra-assistant.js';
 import { assessGmCatalogMapping, normalizeGmCatalogPart } from '../catalog/gm-catalog-quality.js';
 import { RequestGuard, RequestLimitError } from '../security/request-guard.js';
 import type { GmCatalogPart } from '../catalog/gm-catalog.js';
@@ -188,6 +194,7 @@ export interface AppDependencies {
   ebayReference?: EbayReferenceService;
   communityImages?: CommunityImageService;
   shopifyMedia?: ShopifyMediaCatalog;
+  sellerAssistant?: SellerAssistant;
 }
 
 function publicStudioJob(job: StudioJobRecord) {
@@ -282,7 +289,7 @@ function validatedDeereWorkerAiPayload(
 }
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
-  const { config, store, service, tokenVault, imageStudio, imageJobStore, epcImage, deereCollectionPilot, ebayReference, communityImages, shopifyMedia } = dependencies;
+  const { config, store, service, tokenVault, imageStudio, imageJobStore, epcImage, deereCollectionPilot, ebayReference, communityImages, shopifyMedia, sellerAssistant } = dependencies;
   const veroProfiles = new EbayVeroProfileService();
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 128 * 1024 * 1024 });
   const webRoot = resolve(process.cwd(), 'dist/web');
@@ -311,6 +318,11 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     config.SELLER_PREVIEW_RATE_LIMIT_MAX,
     config.SELLER_PREVIEW_RATE_LIMIT_WINDOW_MS,
     config.SELLER_PREVIEW_MAX_CONCURRENCY
+  );
+  const sellerAssistantGuard = new RequestGuard(
+    config.SELLER_ASSISTANT_RATE_LIMIT_MAX,
+    config.SELLER_ASSISTANT_RATE_LIMIT_WINDOW_MS,
+    config.SELLER_ASSISTANT_MAX_CONCURRENCY
   );
   const communityUploadGuard = new RequestGuard(
     config.COMMUNITY_UPLOAD_RATE_LIMIT_MAX,
@@ -466,7 +478,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.post('/v1/internal/deere-worker/ai/images/generations', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) =>
     proxyDeereWorkerAi('images/generations', request, reply));
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.23.0' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.24.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -515,6 +527,13 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         enabled: Boolean(shopifyMedia),
         profile: 'ferrari-product-photo-v1',
         actualItemConfirmationRequired: true
+      },
+      assistant: {
+        enabled: sellerAssistant?.available ?? false,
+        provider: sellerAssistant?.provider ?? 'DETERMINISTIC_FALLBACK',
+        model: sellerAssistant?.model ?? null,
+        questionsAreReadOnly: true,
+        explicitListingRequestRequired: true
       }
     }));
   app.get('/v1/seller-ui/ebay-categories', async (request, reply) => {
@@ -592,6 +611,48 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           .header('cache-control', 'no-store')
           .header('x-content-type-options', 'nosniff')
           .send({ shortlist: buildVintageGmShortlist(command, pool) });
+      }
+      if (!isExplicitListingRequest(command)) {
+        const assistantPermit = sellerAssistantGuard.acquire(request.ip);
+        try {
+          const partNumber = findPartNumber(command);
+          let rawCatalog: GmCatalogPart | undefined;
+          let merchantMedia = null;
+          if (partNumber) {
+            try {
+              rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
+            } catch (error) {
+              request.log.warn({ error, partNumber }, 'catalog lookup unavailable for read-only assistant answer');
+            }
+            if (shopifyMedia) {
+              try {
+                merchantMedia = await shopifyMedia.lookup(partNumber);
+              } catch (error) {
+                request.log.warn({ error, partNumber }, 'merchant media lookup unavailable for read-only assistant answer');
+              }
+            }
+          }
+          const mapping = assessGmCatalogMapping(rawCatalog, partNumber);
+          const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
+          const evidence = buildSellerAssistantEvidence(partNumber, catalog, mapping, merchantMedia);
+          let assistantAnswer;
+          if (sellerAssistant?.available) {
+            try {
+              assistantAnswer = await sellerAssistant.answer(command, evidence);
+            } catch (error) {
+              request.log.warn({ error }, 'Azure Foundry seller assistant unavailable; returning fail-safe evidence answer');
+              assistantAnswer = deterministicSellerAssistantAnswer(command, evidence, true);
+            }
+          } else {
+            assistantAnswer = deterministicSellerAssistantAnswer(command, evidence);
+          }
+          return reply
+            .header('cache-control', 'no-store')
+            .header('x-content-type-options', 'nosniff')
+            .send({ assistantAnswer });
+        } finally {
+          assistantPermit.release();
+        }
       }
       const intent = parseListingCommand(command);
       const rawGmCatalog = intent.partNumber
@@ -1007,8 +1068,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           status: shopifyMediaStatus
         },
         sellerUi: {
-          version: '0.23.0',
+          version: '0.24.0',
           commandPreview: true,
+          astraAssistant: sellerAssistant?.available ?? false,
+          questionsAreReadOnly: true,
+          explicitListingRequestRequired: true,
+          assistantProtection: {
+            maxConcurrency: config.SELLER_ASSISTANT_MAX_CONCURRENCY,
+            requestsPerWindow: config.SELLER_ASSISTANT_RATE_LIMIT_MAX,
+            windowMs: config.SELLER_ASSISTANT_RATE_LIMIT_WINDOW_MS
+          },
           vintageGmShortlist: true,
           vintageGmInventoryQuestions: true,
           publicEbayWritesDisabled: true

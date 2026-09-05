@@ -7,6 +7,7 @@ import { registerCatalogImage } from '../src/catalog/image-proxy.js';
 import { clearGmCalloutCaches } from '../src/catalog/gm-callout.js';
 import type { Store } from '../src/store/store.js';
 import type { GmCatalogPart } from '../src/catalog/gm-catalog.js';
+import type { SellerAssistant } from '../src/seller/astra-assistant.js';
 
 const gm5459066 = JSON.parse(
   readFileSync(new URL('../data/gm-catalog-smoke-5459066.json', import.meta.url), 'utf8')
@@ -69,7 +70,7 @@ describe('HTTP contract', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/seller-ui/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json()).toMatchObject({
-      version: '0.23.0',
+      version: '0.24.0',
       backendConnected: true,
       workspace: {
         displayName: 'PartQuill Workspace',
@@ -119,6 +120,116 @@ describe('HTTP contract', () => {
       gates: { publicEbayWrite: 'DISABLED', ebayHandoffUrl: 'https://www.ebay.com/' },
       noExternalRequestMade: true
     });
+  });
+
+  it('routes ordinary questions to Azure Astra and never converts them into a listing draft', async () => {
+    const calls: string[] = [];
+    const sellerAssistant: SellerAssistant = {
+      available: true,
+      provider: 'AZURE_FOUNDRY_ASTRA',
+      model: 'gpt-6-astra-1',
+      answer: async (command, evidence) => {
+        calls.push(command);
+        return {
+          schemaVersion: '2026-09-05',
+          kind: 'PARTQUILL_ASSISTANT_ANSWER',
+          status: 'ANSWERED',
+          command,
+          answer: 'I can answer questions without creating a listing.',
+          provider: 'AZURE_FOUNDRY_ASTRA',
+          model: 'gpt-6-astra-1',
+          evidence: {
+            partNumber: evidence.partNumber,
+            catalogState: evidence.catalogState,
+            sourcePages: evidence.catalog?.sourcePages ?? [],
+            applicationRecordCount: evidence.catalog?.totalApplicationRecords ?? 0,
+            approvedImageCount: evidence.merchantMedia?.approvedImageCount ?? 0
+          },
+          images: evidence.merchantMedia?.images ?? [],
+          suggestedCommands: ['What does part 10110989 fit?'],
+          readOnly: true,
+          listingDraftCreated: false,
+          allowanceConsumed: false,
+          publicEbayWrite: 'DISABLED'
+        };
+      }
+    };
+    const h = harness({ ALLOW_EBAY_WRITES: false });
+    await h.store.importGmCatalogRecords([gm5459066], { datasetId: 'assistant-routing-test', complete: true });
+    app = await buildApp({ ...h, sellerAssistant });
+
+    const question = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'WHAT CAN YOU DO?' }
+    });
+    expect(question.statusCode).toBe(200);
+    expect(question.json()).toMatchObject({
+      assistantAnswer: {
+        provider: 'AZURE_FOUNDRY_ASTRA',
+        model: 'gpt-6-astra-1',
+        listingDraftCreated: false,
+        allowanceConsumed: false,
+        publicEbayWrite: 'DISABLED'
+      }
+    });
+    expect(question.json().preview).toBeUndefined();
+
+    const fitmentQuestion = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'What does part 5459066 fit?' }
+    });
+    expect(fitmentQuestion.statusCode).toBe(200);
+    expect(fitmentQuestion.json()).toMatchObject({
+      assistantAnswer: {
+        evidence: {
+          partNumber: '5459066',
+          applicationRecordCount: gm5459066.applications.length
+        },
+        listingDraftCreated: false
+      }
+    });
+    expect(fitmentQuestion.json().assistantAnswer.evidence.catalogState).not.toBe('NOT_FOUND');
+    expect(fitmentQuestion.json().preview).toBeUndefined();
+
+    const listing = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'List part 10110989 for $9.99' }
+    });
+    expect(listing.statusCode).toBe(200);
+    expect(listing.json().preview.intent.partNumber).toBe('10110989');
+    expect(listing.json().assistantAnswer).toBeUndefined();
+    expect(calls).toEqual(['WHAT CAN YOU DO?', 'What does part 5459066 fit?']);
+  });
+
+  it('fails over to a read-only evidence answer when Azure Astra is unavailable', async () => {
+    const sellerAssistant: SellerAssistant = {
+      available: true,
+      provider: 'AZURE_FOUNDRY_ASTRA',
+      model: 'gpt-6-astra-1',
+      answer: async () => { throw new Error('temporary upstream failure'); }
+    };
+    app = await buildApp({ ...harness({ ALLOW_EBAY_WRITES: false }), sellerAssistant });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'What can you do?' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      assistantAnswer: {
+        status: 'AI_UNAVAILABLE',
+        provider: 'DETERMINISTIC_FALLBACK',
+        listingDraftCreated: false,
+        allowanceConsumed: false,
+        publicEbayWrite: 'DISABLED'
+      }
+    });
+    expect(response.json().preview).toBeUndefined();
   });
 
   it('serves a locked orange primary image for an exact row-to-callout mapping', async () => {
