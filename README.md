@@ -208,6 +208,43 @@ PartQuill's server-side API credential.
 
 Any material edit restarts the approval chain.
 
+### Version-bound review and fee recovery
+
+Preflight and public approval records must match both the canonical payload hash
+and the current payload version. Restoring an earlier payload does not revive its
+approvals. Staged offers also retain `stagedPayloadVersion`; an older record with
+no version is held rather than treated as approved. For a legacy staged draft,
+replace the payload through `PUT /v1/items/:itemId/payload` (even if unchanged),
+then repeat preflight and staging. This does not authorize any eBay production write.
+
+Public approval and publishing both require an available, unexpired fee estimate
+with a valid USD amount and a source appropriate to the gateway mode. Expired,
+missing, malformed or unavailable fees remain held. To recover without creating
+another offer:
+
+1. Read `GET /v1/items/:itemId` using the normal server-side bearer credential.
+2. Call `POST /v1/items/:itemId/fees/refresh` with `actorId`, the current
+   `payloadHash`, `payloadVersion`, and `feeEstimateId` (explicitly `null` when
+   the stored listing has no estimate).
+3. Review the returned estimate and obtain a new, separate public approval. The
+   prior public approval remains in the ledger but cannot authorize the new fee.
+
+Refresh preserves the offer, payload and preflight approval. It never calls stage,
+publish, revise or withdraw. A `409 REVIEW_STATE_CHANGED` means reload before
+retrying; a `503 FEE_ESTIMATE_DEPENDENCY_FAILED` leaves the review unchanged and
+can be retried later. Authorization loss requires reconnecting the seller.
+Sequential approval/staging retries reuse the current review rather than creating
+duplicate approval rows or offers. Published, withdrawn and drifted offers cannot
+be replaced through this staging/recovery route.
+
+Approval, staging and fee-refresh state changes commit their item, optional
+listing/approval, and audit event together. PostgreSQL uses a transaction and
+locked snapshot comparison; memory mode implements the same comparison. Concurrent
+review changes fail closed. The version field uses existing JSONB storage, so no
+schema migration or Azure configuration change is required. This is not yet an
+external-operation outbox or full lifecycle concurrency control. The browser
+review remains a labeled simulation, not a client of these authenticated APIs.
+
 ## What remains before a real seller pilot
 
 - Connect an authorized catalog/eBay product adapter so verified identity, taxonomy, item specifics, fitment and licensed media can replace the illustrative fixture.

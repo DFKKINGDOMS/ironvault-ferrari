@@ -3,6 +3,7 @@ import type { AppConfig } from '../config.js';
 import { newId, now, payloadHash } from '../domain/canonical.js';
 import { DomainError } from '../domain/errors.js';
 import { evaluateDraft } from '../domain/policy.js';
+import { hasCurrentApproval, requireCurrentPreflight, requireCurrentStage, requireFreshFee } from '../domain/approval-policy.js';
 import type {
   ApprovalRecord,
   AuditEvent,
@@ -15,7 +16,7 @@ import type {
 } from '../domain/types.js';
 import type { EbayGateway } from '../ebay/types.js';
 import { EbayOAuthClient, REQUIRED_EBAY_SCOPES } from '../ebay/oauth-client.js';
-import type { Store } from '../store/store.js';
+import type { ReviewTransition, Store } from '../store/store.js';
 import type { TokenVault } from '../security/token-vault.js';
 
 export class PartQuillService {
@@ -34,6 +35,38 @@ export class PartQuillService {
     const item = await this.store.getItem(itemId);
     if (!item) throw new DomainError('item not found', 'ITEM_NOT_FOUND', 404);
     return item;
+  }
+
+  private async requireReviewableDraft(item: ItemRecord): Promise<void> {
+    const exceptions = evaluateDraft(item.payload, await this.store.listEvidence(item.id), await this.store.listImages(item.id));
+    if (item.exceptions.length > 0 || exceptions.length > 0) {
+      throw new DomainError('Resolve the visible evidence and policy holds before continuing review.', 'DRAFT_HAS_EXCEPTIONS');
+    }
+  }
+
+  private async commitReview(
+    transition: Omit<ReviewTransition, 'audit'>,
+    actorId: string,
+    action: string
+  ): Promise<void> {
+    await this.store.commitReviewTransition({
+      ...transition,
+      audit: {
+        id: newId(),
+        sellerId: transition.item.sellerId,
+        itemId: transition.item.id,
+        actorId,
+        action,
+        outcome: 'SUCCEEDED',
+        payloadHash: transition.item.payloadHash,
+        details: {
+          payloadVersion: transition.item.payloadVersion,
+          feeEstimateId: (transition.listing ?? transition.expectedListing)?.feeEstimate?.id ?? null,
+          gatewayMode: this.ebay.mode
+        },
+        createdAt: now()
+      }
+    });
   }
 
   private async accessToken(sellerId: string): Promise<string> {
@@ -207,7 +240,12 @@ export class PartQuillService {
 
   async approvePreflight(itemId: string, actorId: string, approvedHash: string): Promise<ItemRecord> {
     const item = await this.requireItem(itemId);
+    const listing = await this.store.getListing(itemId);
     if (item.payloadHash !== approvedHash) throw new DomainError('payload changed before approval', 'PAYLOAD_HASH_MISMATCH');
+    await this.requireReviewableDraft(item);
+    if (item.status === 'PREFLIGHT_APPROVED' && hasCurrentApproval(item, await this.store.listApprovals(itemId), 'PREFLIGHT')) {
+      return item;
+    }
     if (item.status !== 'READY_FOR_PREFLIGHT') {
       throw new DomainError('draft is not in the explicit ready-for-preflight state', 'DRAFT_NOT_READY_FOR_PREFLIGHT');
     }
@@ -227,19 +265,25 @@ export class PartQuillService {
       actorId,
       createdAt: now()
     };
-    await this.store.addApproval(approval);
     const next = { ...item, status: 'PREFLIGHT_APPROVED' as const, updatedAt: now() };
-    await this.store.saveItem(next);
+    await this.commitReview({ expectedItem: item, expectedListing: listing, item: next, approval }, actorId, 'PREFLIGHT_APPROVED');
     return next;
   }
 
   async stage(itemId: string, actorId: string): Promise<{ item: ItemRecord; listing: ListingRecord }> {
     const item = await this.requireItem(itemId);
     const approvals = await this.store.listApprovals(itemId);
-    if (!approvals.some((row) => row.stage === 'PREFLIGHT' && row.payloadHash === item.payloadHash)) {
-      throw new DomainError('current payload has no preflight approval', 'PREFLIGHT_APPROVAL_REQUIRED');
+    requireCurrentPreflight(item, approvals);
+    await this.requireReviewableDraft(item);
+    const priorListing = await this.store.getListing(itemId);
+    if (priorListing && priorListing.status !== 'STAGED') {
+      throw new DomainError('Use the existing listing lifecycle; staging cannot replace a published, withdrawn or drifted offer.', 'LISTING_LIFECYCLE_REQUIRED');
     }
-    if (item.exceptions.length > 0) throw new DomainError('draft has unresolved exceptions', 'DRAFT_HAS_EXCEPTIONS');
+    if (priorListing?.lastApprovedPayloadHash === item.payloadHash && priorListing.stagedPayloadVersion === item.payloadVersion) {
+      requireFreshFee(priorListing, this.ebay.mode);
+      return { item, listing: priorListing };
+    }
+    if (item.status !== 'PREFLIGHT_APPROVED') throw new DomainError('Approve preflight before staging.', 'PREFLIGHT_APPROVAL_REQUIRED');
     if (this.ebay.mode === 'live' && !this.config.ALLOW_EBAY_WRITES) {
       throw new DomainError('external eBay writes are disabled', 'EXTERNAL_WRITES_DISABLED');
     }
@@ -256,21 +300,13 @@ export class PartQuillService {
       feeEstimate,
       remoteSnapshot: staged.remoteSnapshot,
       lastApprovedPayloadHash: item.payloadHash,
+      stagedPayloadVersion: item.payloadVersion,
       createdAt: timestamp,
       updatedAt: timestamp
     };
-    await this.store.saveListing(listing);
+    requireFreshFee(listing, this.ebay.mode);
     const next = { ...item, status: 'READY_FOR_PUBLIC_APPROVAL' as const, updatedAt: timestamp };
-    await this.store.saveItem(next);
-    await this.audit({
-      sellerId: item.sellerId,
-      itemId,
-      actorId,
-      action: 'OFFER_STAGED',
-      outcome: 'SUCCEEDED',
-      payloadHash: item.payloadHash,
-      details: { offerId: listing.offerId, feeEstimateId: feeEstimate.id, gatewayMode: this.ebay.mode }
-    });
+    await this.commitReview({ expectedItem: item, expectedListing: priorListing, item: next, listing }, actorId, 'OFFER_STAGED');
     return { item: next, listing };
   }
 
@@ -282,17 +318,24 @@ export class PartQuillService {
   ): Promise<ItemRecord> {
     const item = await this.requireItem(itemId);
     const listing = await this.store.getListing(itemId);
-    if (!listing || listing.status !== 'STAGED') throw new DomainError('staged offer is required', 'STAGED_OFFER_REQUIRED');
-    if (item.payloadHash !== approvedHash || listing.lastApprovedPayloadHash !== approvedHash) {
+    if (item.payloadHash !== approvedHash) {
       throw new DomainError('payload changed after staging', 'PAYLOAD_HASH_MISMATCH');
     }
+    requireCurrentStage(item, listing);
+    const approvals = await this.store.listApprovals(itemId);
+    requireCurrentPreflight(item, approvals);
+    await this.requireReviewableDraft(item);
     if (!listing.feeEstimate || listing.feeEstimate.id !== feeEstimateId) {
       throw new DomainError('fee estimate changed or is missing', 'FEE_ESTIMATE_MISMATCH');
     }
-    if (Date.parse(listing.feeEstimate.expiresAt) <= Date.now()) {
-      throw new DomainError('fee estimate expired', 'FEE_ESTIMATE_EXPIRED');
+    requireFreshFee(listing, this.ebay.mode);
+    if (item.status === 'PUBLIC_APPROVED' && hasCurrentApproval(item, approvals, 'PUBLIC', feeEstimateId)) {
+      return item;
     }
-    await this.store.addApproval({
+    if (item.status !== 'READY_FOR_PUBLIC_APPROVAL') {
+      throw new DomainError('Stage the reviewed payload before public approval.', 'DRAFT_NOT_READY_FOR_PUBLIC_APPROVAL');
+    }
+    const approval: ApprovalRecord = {
       id: newId(),
       itemId,
       stage: 'PUBLIC',
@@ -301,19 +344,57 @@ export class PartQuillService {
       feeEstimateId,
       actorId,
       createdAt: now()
-    });
+    };
     const next = { ...item, status: 'PUBLIC_APPROVED' as const, updatedAt: now() };
-    await this.store.saveItem(next);
+    await this.commitReview({ expectedItem: item, expectedListing: listing, item: next, approval }, actorId, 'PUBLIC_APPROVED');
     return next;
+  }
+
+  async refreshFees(
+    itemId: string,
+    actorId: string,
+    expected: { payloadHash: string; payloadVersion: number; feeEstimateId: string | null }
+  ): Promise<{ item: ItemRecord; listing: ListingRecord }> {
+    const item = await this.requireItem(itemId);
+    const listing = await this.store.getListing(itemId);
+    requireCurrentStage(item, listing);
+    if (expected.payloadHash !== item.payloadHash || expected.payloadVersion !== item.payloadVersion ||
+        expected.feeEstimateId !== (listing.feeEstimate?.id ?? null)) {
+      throw new DomainError('The review changed. Reload the item before refreshing fees.', 'REVIEW_STATE_CHANGED');
+    }
+    requireCurrentPreflight(item, await this.store.listApprovals(itemId));
+    await this.requireReviewableDraft(item);
+    if (!['READY_FOR_PUBLIC_APPROVAL', 'PUBLIC_APPROVED'].includes(item.status)) {
+      throw new DomainError('Stage the reviewed payload before refreshing fees.', 'DRAFT_NOT_READY_FOR_PUBLIC_APPROVAL');
+    }
+    let feeEstimate: NonNullable<ListingRecord['feeEstimate']>;
+    try {
+      feeEstimate = await this.ebay.estimateFees(item.payload, await this.accessToken(item.sellerId));
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'AUTHORIZATION_REQUIRED') {
+        throw new DomainError(
+          'Reconnect seller authorization before refreshing fees.',
+          'AUTHORIZATION_REQUIRED',
+          error.statusCode
+        );
+      }
+      throw new DomainError('Fee estimation is unavailable. The previous review is unchanged; retry later.', 'FEE_ESTIMATE_DEPENDENCY_FAILED', 503);
+    }
+    const nextListing = { ...listing, feeEstimate, updatedAt: now() };
+    requireFreshFee(nextListing, this.ebay.mode);
+    if (feeEstimate.id === listing.feeEstimate?.id) {
+      throw new DomainError('A new fee estimate identifier is required. Retry fee refresh later.', 'FEE_ESTIMATE_NOT_RENEWED', 503);
+    }
+    const next = { ...item, status: 'READY_FOR_PUBLIC_APPROVAL' as const, updatedAt: now() };
+    await this.commitReview({ expectedItem: item, expectedListing: listing, item: next, listing: nextListing }, actorId, 'FEES_REFRESHED_PUBLIC_APPROVAL_INVALIDATED');
+    return { item: next, listing: nextListing };
   }
 
   async publish(itemId: string, actorId: string): Promise<{ item: ItemRecord; listing: ListingRecord }> {
     const item = await this.requireItem(itemId);
     const listing = await this.store.getListing(itemId);
     const approvals = await this.store.listApprovals(itemId);
-    const publicApproval = approvals.find(
-      (row) => row.stage === 'PUBLIC' && row.payloadHash === item.payloadHash && row.feeEstimateId === listing?.feeEstimate?.id
-    );
+    const publicApproval = hasCurrentApproval(item, approvals, 'PUBLIC', listing?.feeEstimate?.id);
     const reject = async (code: string, message: string): Promise<never> => {
       await this.audit({
         sellerId: item.sellerId,
@@ -329,13 +410,23 @@ export class PartQuillService {
     if (!this.config.ALLOW_EBAY_WRITES) return reject('EXTERNAL_WRITES_DISABLED', 'external eBay writes are disabled');
     if (!listing || listing.status !== 'STAGED') return reject('STAGED_OFFER_REQUIRED', 'staged offer is required');
     if (!publicApproval) return reject('PUBLIC_APPROVAL_REQUIRED', 'unchanged payload needs public approval');
-    if (item.exceptions.length > 0) return reject('DRAFT_HAS_EXCEPTIONS', 'draft has unresolved exceptions');
+    try {
+      requireCurrentPreflight(item, approvals);
+      requireCurrentStage(item, listing);
+      requireFreshFee(listing, this.ebay.mode);
+      await this.requireReviewableDraft(item);
+      if (item.status !== 'PUBLIC_APPROVED') throw new DomainError('Complete public review before publishing.', 'PUBLIC_APPROVAL_REQUIRED');
+    } catch (error) {
+      if (error instanceof DomainError) return reject(error.code, error.message);
+      throw error;
+    }
     if (!(await this.store.reserveFreePublish(item.sellerId, itemId, 10))) {
       return reject('FREE_ALLOWANCE_EXHAUSTED', 'free launch allowance is exhausted');
     }
     let published;
     try {
       const token = await this.accessToken(item.sellerId);
+      requireFreshFee(listing, this.ebay.mode);
       published = await this.ebay.publish(listing.offerId, token);
     } catch (error) {
       await this.store.releaseFreePublish(itemId);

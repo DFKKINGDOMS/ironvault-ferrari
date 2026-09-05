@@ -8,7 +8,9 @@ import type {
   SellerAcknowledgement,
   StoredImage
 } from '../domain/types.js';
-import type { EbayLeafCategory, Store } from './store.js';
+import type { EbayLeafCategory, ReviewTransition, Store } from './store.js';
+import { payloadHash } from '../domain/canonical.js';
+import { DomainError } from '../domain/errors.js';
 import type { GmCatalogImportOptions, GmCatalogPart, GmCatalogStatus } from '../catalog/gm-catalog.js';
 import { canonicalOemPartNumber } from '../catalog/gm-catalog-quality.js';
 import { mergeGmCatalogParts } from '../catalog/gm-catalog-merge.js';
@@ -58,6 +60,20 @@ export class MemoryStore implements Store {
   private readonly communityImages = new Map<string, StoredCommunityImage>();
   private gmCatalogComplete = false;
   private gmCatalogDatasetId: string | null = null;
+
+  async commitReviewTransition(transition: ReviewTransition): Promise<void> {
+    const currentItem = this.items.get(transition.expectedItem.id);
+    const currentListing = this.listings.get(transition.expectedItem.id);
+    if (payloadHash(currentItem ?? null) !== payloadHash(transition.expectedItem) ||
+        payloadHash(currentListing ?? null) !== payloadHash(transition.expectedListing ?? null)) {
+      throw new DomainError('The review changed. Reload the item before retrying.', 'REVIEW_STATE_CHANGED');
+    }
+    const { item, listing, approval, audit } = clone(transition);
+    this.items.set(item.id, item);
+    if (listing) this.listings.set(item.id, listing);
+    if (approval) this.approvals.push(approval);
+    this.audits.push(audit);
+  }
 
   async listEbayLeafCategories(query = '', limit = 2_000): Promise<EbayLeafCategory[]> {
     const rows: EbayLeafCategory[] = [
