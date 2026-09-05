@@ -2,6 +2,8 @@
 
 Act as the principal engineer and product architect for PartQuill. Inspect the entire repository before editing: its README, safety invariants, acceptance status, domain services, persistence, HTTP routes, React seller workspace, tests, migrations, and deployment assumptions. Then implement one coherent, high-impact enterprise improvement pass. Do not merely write an audit or redesign the visuals in isolation.
 
+This is a bounded production automation pass. Complete it within 45 minutes of model execution: spend no more than the first 12 minutes building a repository-wide risk and opportunity map, then reserve the rest for implementation, focused tests, validation, and a concise handoff. Prefer two to four connected vertical improvements over an exhaustive rewrite. Finish a smaller safe patch and document remaining priorities if the complete opportunity set will not fit; never leave the workspace half-edited while continuing an open-ended audit.
+
 PartQuill helps specialist automotive-parts sellers turn a natural-language instruction into either a read-only inventory answer or a safe, evidence-backed listing draft. The ideal flow is: understand the instruction, resolve exact identity evidence, map official taxonomy and specifics, protect against policy/fitment/rights risk, assemble seller-owned media and terms, review an exact payload, obtain two distinct approvals, and operate the listing through one inventory authority. Today it is a private pilot; make the product more credible, useful, and operationally coherent without pretending unfinished external integrations are live.
 
 Prioritize the strongest improvements you can complete and verify in this run:

@@ -85,13 +85,15 @@ Production eBay writes are refused by configuration in this checkpoint, even if 
 
 The manually reviewable `Azure Astra enterprise improvement` workflow uses the existing PartQuill Azure Foundry resource and its `gpt-6-astra-1` deployment to inspect and improve the repository. Its fixed mission is grounded in this README, the executable domain rules, and [AGENTS.md](AGENTS.md); arbitrary workflow input is not passed to the coding agent.
 
-The workflow intentionally separates authority:
+The workflow intentionally separates authority and failure recovery:
 
-1. A read-only job validates the existing revision, obtains a short-lived connection to the established Foundry resource, removes its Azure session, and lets Astra produce only a local patch.
-2. A fresh job with no Azure credentials reapplies that patch and runs the enterprise guardrails, production dependency audit, lint, tests, server build, and web build.
-3. A final job can commit only the validated patch and open a pull request. It cannot run repository code, and the pull request is never auto-merged.
+1. A bounded primary job validates the existing revision, obtains a short-lived connection to the established Foundry resource, removes its Azure session, and lets Astra produce only a local patch.
+2. If that job fails or times out, recovery and rescue passes run in fresh jobs with clean workspaces and newly issued Azure sessions. A failed model process therefore cannot prevent its fallback from starting.
+3. A fresh job with no Azure credentials reapplies the first successful patch and runs the enterprise guardrails, production dependency audit, lint, tests, server build, and web build.
+4. A final job can commit only the validated patch and open a pull request. It cannot run repository code, and the pull request is never auto-merged.
+5. A separate `workflow_run` watchdog automatically reruns failed jobs and their dependents, up to three workflow attempts, for infrastructure, timeout, or transient-service failures.
 
-Astra cannot modify the workflows, safety contract, agent contract, environment template, guard script, or bulk catalog data. It receives no eBay credentials and has no production-write authority. Re-run the workflow from GitHub Actions when a new enterprise improvement pass is desired; inspect the generated pull request before merging.
+Astra cannot modify the workflows, safety contract, agent contract, environment template, guard script, or bulk catalog data. It receives no eBay credentials and has no production-write authority. Start a new enterprise improvement pass from GitHub Actions when desired; ordinary attempt failures recover automatically, and every successful patch still requires review through its generated pull request.
 
 ## Local setup
 
