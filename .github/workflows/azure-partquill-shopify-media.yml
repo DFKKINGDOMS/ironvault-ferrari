@@ -338,18 +338,32 @@ jobs:
             --output none
 
           EXPECTED_REVISION="${APP}--${REVISION_SUFFIX}"
+          PROVISIONING_STATE="unknown"
+          WORKER_INGRESS="unknown"
           REVISION_HEALTH="unknown"
           REVISION_RUNNING="unknown"
+          worker_revision_ready() {
+            [ "$PROVISIONING_STATE" = "Succeeded" ] \
+              && [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ] \
+              && [ "$REVISION_RUNNING" = "Running" ] \
+              && { [ "$REVISION_HEALTH" = "Healthy" ] \
+                || { [ "$REVISION_HEALTH" = "None" ] \
+                  && [ "$WORKER_INGRESS" != "true" ] \
+                  && [ "$WORKER_INGRESS" != "True" ]; }; }
+          }
           for attempt in $(seq 1 90); do
+            PROVISIONING_STATE=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.provisioningState --output tsv 2>/dev/null || true)
+            WORKER_INGRESS=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.external --output tsv 2>/dev/null || true)
             LATEST_REVISION=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName --output tsv 2>/dev/null || true)
             if [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ]; then
               REVISION_HEALTH=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query properties.healthState --output tsv 2>/dev/null || true)
               REVISION_RUNNING=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query properties.runningState --output tsv 2>/dev/null || true)
             fi
-            if [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ] && [ "$REVISION_HEALTH" = "Healthy" ] && [ "$REVISION_RUNNING" = "Running" ]; then break; fi
+            if worker_revision_ready; then break; fi
             sleep 10
           done
-          if [ "$LATEST_REVISION" != "$EXPECTED_REVISION" ] || [ "$REVISION_HEALTH" != "Healthy" ] || [ "$REVISION_RUNNING" != "Running" ]; then
+          if ! worker_revision_ready; then
+            echo "Worker state: provisioning=${PROVISIONING_STATE:-unknown}; revision=${LATEST_REVISION:-unknown}; ingress=${WORKER_INGRESS:-none}; health=${REVISION_HEALTH:-unknown}; running=${REVISION_RUNNING:-unknown}" >&2
             az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
             exit 1
           fi
