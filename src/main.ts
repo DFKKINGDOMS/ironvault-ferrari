@@ -24,6 +24,7 @@ import { startEbayCategoryTaxonomySync } from './ebay/category-taxonomy-sync.js'
 import { AzureEpcQaEngine, DisabledEpcQaEngine } from './epc-image/azure-qa.js';
 import { EpcImageService } from './epc-image/service.js';
 import { DeereCollectionPilotStore } from './deere-collection-pilot/store.js';
+import { ShopifyMediaCatalog } from './shopify-media/catalog.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -101,6 +102,9 @@ const imageStudio = new ImageStudioService(
 );
 await imageStudio.initialize();
 const deereCollectionPilot = new DeereCollectionPilotStore(imageJobStore);
+const shopifyMedia = config.SHOPIFY_MEDIA_ENABLED
+  ? new ShopifyMediaCatalog(imageJobStore)
+  : undefined;
 const epcQa = completeAiEngine && config.PARTQUILL_AI_PROVIDER === 'azure-local'
   ? new AzureEpcQaEngine(
       aiKey,
@@ -152,6 +156,7 @@ const app = await buildApp({
   imageJobStore,
   epcImage,
   deereCollectionPilot,
+  ...(shopifyMedia ? { shopifyMedia } : {}),
   ...(communityImages ? { communityImages } : {}),
   ebayReference,
   ...(tokenVault ? { tokenVault } : {})

@@ -1,5 +1,6 @@
 import { ContainerClient } from '@azure/storage-blob';
-import { extname, posix } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { dirname, extname, posix } from 'node:path';
 import type { ImageJobManifest, ImageJobStore } from './file-store.js';
 
 function safeExtension(mediaType: string): string {
@@ -46,6 +47,13 @@ export class AzureBlobImageJobStore implements ImageJobStore {
     });
   }
 
+  async writeFile(path: string, sourcePath: string): Promise<void> {
+    await this.container.getBlockBlobClient(path).uploadFile(sourcePath, {
+      conditions: { ifNoneMatch: '*' },
+      blobHTTPHeaders: { blobContentType: this.resultMediaType(path) }
+    });
+  }
+
   async replaceBytes(path: string, bytes: Uint8Array): Promise<void> {
     await this.container.getBlockBlobClient(path).uploadData(bytes, {
       blobHTTPHeaders: { blobContentType: this.resultMediaType(path) }
@@ -86,11 +94,17 @@ export class AzureBlobImageJobStore implements ImageJobStore {
     return this.streamBytes(response.readableStreamBody);
   }
 
+  async readToFile(path: string, destinationPath: string): Promise<void> {
+    await mkdir(dirname(destinationPath), { recursive: true });
+    await this.container.getBlobClient(path).downloadToFile(destinationPath);
+  }
+
   resultMediaType(path: string): string {
     const extension = extname(path).toLowerCase();
     if (extension === '.png') return 'image/png';
     if (extension === '.webp') return 'image/webp';
     if (extension === '.json') return 'application/json';
+    if (extension === '.jsonl') return 'application/x-ndjson';
     return 'image/jpeg';
   }
 

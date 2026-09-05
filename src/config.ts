@@ -66,6 +66,7 @@ const schema = z
     IMAGE_STUDIO_STORAGE_PREFIX: z.string().regex(/^[A-Za-z0-9._/-]+$/).default('image-studio'),
     IMAGE_STUDIO_MAX_IMAGES: z.coerce.number().int().min(1).max(24).default(24),
     IMAGE_STUDIO_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3),
+    SHOPIFY_MEDIA_ENABLED: booleanString,
     COMMUNITY_IMAGES_ENABLED: booleanString,
     COMMUNITY_EDIT_MODE: z.enum(['chatgpt-manual', 'provider']).default('chatgpt-manual'),
     COMMUNITY_IMAGE_MAX_IMAGES: z.coerce.number().int().min(1).max(50).default(50),

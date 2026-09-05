@@ -28,6 +28,11 @@ type SellerBootstrap = {
     chatGptManualActive: boolean;
     gitArchiveConnected: boolean;
   };
+  shopifyMedia?: {
+    enabled: boolean;
+    profile: "ferrari-product-photo-v1";
+    actualItemConfirmationRequired: true;
+  };
   defaults: {
     listingFormat: string;
     minimumPrice: string;
@@ -232,6 +237,26 @@ type SellerPreview = {
       calloutId: string;
       source: "FIRST_PARTY_CATALOG_CALLOUT";
       rightsState: "FIRST_PARTY_CATALOG_EVIDENCE";
+    } | null;
+    merchantMedia: {
+      partNumber: string;
+      sourceStore: string;
+      updatedAt: string;
+      assets: Array<{
+        id: string;
+        filename: string;
+        alt: string;
+        width: number;
+        height: number;
+        viewUrl: string;
+        source: "SHOPIFY_PRODUCT_MEDIA" | "SHOPIFY_CONTENT_FILE_EXACT_KEY";
+        rightsState: "MERCHANT_OWNED_OR_AUTHORIZED";
+        mappingState: "EXACT_SHOPIFY_SKU" | "EXACT_FILE_KEY";
+        qaState: "FERRARI_RULES_PASSED";
+        sourceSha256: string;
+        derivativeSha256: string;
+        requiresActualItemConfirmation: true;
+      }>;
     } | null;
   };
   intelligence: ListingIntelligence | null;
@@ -457,9 +482,9 @@ type StagedPhoto = {
   id: string;
   name: string;
   url: string;
-  source: "SELLER_UPLOAD" | "PRIVATE_REFERENCE" | "RIGHTS_CLEARED_REFERENCE" | "FIRST_PARTY_CATALOG_CALLOUT";
+  source: "SELLER_UPLOAD" | "SHOPIFY_MERCHANT_MEDIA" | "PRIVATE_REFERENCE" | "RIGHTS_CLEARED_REFERENCE" | "FIRST_PARTY_CATALOG_CALLOUT";
   publishEligible: boolean;
-  rightsState: "SELLER_PHOTOGRAPH" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED" | "FIRST_PARTY_CATALOG_EVIDENCE";
+  rightsState: "SELLER_PHOTOGRAPH" | "MERCHANT_OWNED_OR_AUTHORIZED" | "PRIVATE_PERSONAL_REFERENCE_ONLY" | "RIGHTS_CLEARED" | "FIRST_PARTY_CATALOG_EVIDENCE";
   originalUrl?: string;
   editState?: "ORIGINAL" | "BROWSER_EDITED" | "AI_EDITED";
 };
@@ -480,6 +505,10 @@ function catalogCalloutPhoto(preview: SellerPreview): StagedPhoto[] {
 
 function isCatalogCalloutPhoto(photo: StagedPhoto): boolean {
   return photo.source === "FIRST_PARTY_CATALOG_CALLOUT";
+}
+
+function isActualItemPhoto(photo: StagedPhoto): boolean {
+  return (photo.source === "SELLER_UPLOAD" || photo.source === "SHOPIFY_MERCHANT_MEDIA") && photo.publishEligible;
 }
 
 type EditableFitmentRow = { vehicle: string; qualifier: string; state: string };
@@ -1164,7 +1193,7 @@ function ActiveDraftEditor({
   const heroPhoto = photos[0];
   const previewPhoto = photos.find((photo) => photo.id === previewPhotoId) ?? heroPhoto;
   const publishablePhotos = photos.filter((photo) => photo.publishEligible);
-  const sellerItemPhotos = photos.filter((photo) => photo.source === "SELLER_UPLOAD" && photo.publishEligible);
+  const sellerItemPhotos = photos.filter(isActualItemPhoto);
   const catalogPrimaryLocked = photos.some(isCatalogCalloutPhoto);
   const requiredAspectCount = REQUIRED_EBAY_ASPECTS.filter((name) => activeFields.aspects[name]?.trim()).length;
   const requiredAspectsComplete = requiredAspectCount === REQUIRED_EBAY_ASPECTS.length;
@@ -1680,6 +1709,29 @@ export default function Home() {
       showNotice(`${photos.length} photo${photos.length === 1 ? "" : "s"} added${limited > 0 ? `; ${limited} exceeded the ${MAX_SELLER_PHOTOS}-photo limit` : ""}. Nothing was sent to eBay.`);
     }).catch(() => showNotice("One or more photo previews could not be opened."));
   };
+  const stageMerchantPhoto = (asset: NonNullable<SellerPreview["media"]["merchantMedia"]>["assets"][number]) => {
+    setInstantPhotos((current) => {
+      if (current.some((photo) => photo.id === `shopify-${asset.id}`) || current.length >= MAX_SELLER_PHOTOS) return current;
+      const photo: StagedPhoto = {
+        id: `shopify-${asset.id}`,
+        name: asset.filename,
+        url: asset.viewUrl,
+        originalUrl: asset.viewUrl,
+        editState: "AI_EDITED",
+        source: "SHOPIFY_MERCHANT_MEDIA",
+        publishEligible: true,
+        rightsState: asset.rightsState
+      };
+      const catalogPrimary = current.find(isCatalogCalloutPhoto);
+      return catalogPrimary
+        ? [catalogPrimary, photo, ...current.filter((row) => row.id !== catalogPrimary.id)]
+        : [photo, ...current];
+    });
+    setPreflightApproved(false);
+    setPublicApproved(false);
+    setFeeFresh(false);
+    showNotice("Exact-key archive image staged after your actual-item confirmation. Both approvals and fee freshness were reset.");
+  };
   const removeInstantPhoto = (photoId: string) => {
     if (instantPhotos.some((photo) => photo.id === photoId && isCatalogCalloutPhoto(photo))) {
       showNotice("The orange callout diagram is locked as the primary catalog image.");
@@ -1942,8 +1994,10 @@ export default function Home() {
   const instantCatalogMatch = instantPreview?.identity.state === "CATALOG_STATED";
   const primaryCatalogReference = instantPreview?.media.catalogReferences.find((reference) => reference.primary)
     ?? instantPreview?.media.catalogReferences[0];
+  const merchantMediaAssets = instantPreview?.media.merchantMedia?.assets ?? [];
+  const primaryMerchantMedia = merchantMediaAssets[0];
   const instantHeld = Boolean(instantPreview && !instantSample);
-  const instantSellerItemPhotos = instantPhotos.filter((photo) => photo.source === "SELLER_UPLOAD" && photo.publishEligible);
+  const instantSellerItemPhotos = instantPhotos.filter(isActualItemPhoto);
   const instantReady = Boolean(
     instantPartConfirmed
     && instantConditionConfirmed
@@ -2097,13 +2151,14 @@ export default function Home() {
               <div className="instant-draft-main">
                 <div className="instant-product-card">
                   <div className="instant-media">
-                    {instantCatalogMatch && primaryCatalogReference ? <button className="catalog-image-candidate catalog-scan-thumb" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span>PARTQUILL CATALOG SCAN · FIRST PARTY</span><img src={primaryCatalogReference.viewUrl} alt={`Catalog evidence page ${primaryCatalogReference.pageId}`}/><strong>{primaryCatalogReference.callout ?? `Catalog page ${primaryCatalogReference.pageId}`}</strong><small>Open the full scan with its colored callout highlight.</small></button> : <div className={`catalog-image-candidate ${instantPhotoFirst ? "photo-first" : ""} ${instantSafety ? "safety" : ""}`}><span>{instantSafety ? "RESTRICTED ITEM · EVIDENCE INTAKE" : instantPhotoFirst ? "PHOTO-FIRST ITEM INTAKE" : "MEDIA REVIEW · PLACEHOLDER ONLY"}</span><Icon name={instantSafety ? "shield" : instantPhotoFirst ? "camera" : "box"}/><strong>{instantItemLabel}</strong><small>{instantPreview?.media.sourceDetail ?? "A seller-owned item photo is required."}</small></div>}
+                    {primaryMerchantMedia ? <div className="catalog-image-candidate catalog-scan-thumb merchant-media-thumb"><span>SHOPIFY MERCHANT MEDIA · FERRARI QA PASSED</span><img src={primaryMerchantMedia.viewUrl} alt={primaryMerchantMedia.alt}/><strong>{primaryMerchantMedia.filename}</strong><small>{primaryMerchantMedia.mappingState === "EXACT_SHOPIFY_SKU" ? "Mapped by exact Shopify product SKU." : "Mapped by an exact file key."} Confirm it is the physical item being listed before use.</small><button type="button" disabled={instantPhotos.length >= MAX_SELLER_PHOTOS || instantPhotos.some((photo) => photo.id === `shopify-${primaryMerchantMedia.id}`)} onClick={() => stageMerchantPhoto(primaryMerchantMedia)}>{instantPhotos.some((photo) => photo.id === `shopify-${primaryMerchantMedia.id}`) ? "Exact item image staged" : "Confirm exact item and use image"}</button></div> : instantCatalogMatch && primaryCatalogReference ? <button className="catalog-image-candidate catalog-scan-thumb" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span>PARTQUILL CATALOG SCAN · FIRST PARTY</span><img src={primaryCatalogReference.viewUrl} alt={`Catalog evidence page ${primaryCatalogReference.pageId}`}/><strong>{primaryCatalogReference.callout ?? `Catalog page ${primaryCatalogReference.pageId}`}</strong><small>Open the full scan with its colored callout highlight.</small></button> : <div className={`catalog-image-candidate ${instantPhotoFirst ? "photo-first" : ""} ${instantSafety ? "safety" : ""}`}><span>{instantSafety ? "RESTRICTED ITEM · EVIDENCE INTAKE" : instantPhotoFirst ? "PHOTO-FIRST ITEM INTAKE" : "MEDIA REVIEW · PLACEHOLDER ONLY"}</span><Icon name={instantSafety ? "shield" : instantPhotoFirst ? "camera" : "box"}/><strong>{instantItemLabel}</strong><small>{instantPreview?.media.sourceDetail ?? "A seller-owned item photo is required."}</small></div>}
+                    {merchantMediaAssets.length > 1 && <div className="merchant-media-options" aria-label={`${merchantMediaAssets.length} exact-key merchant image choices`}><div><strong>{merchantMediaAssets.length} verified source views</strong><small>Each angle stays separate. Confirm only views of the exact item being listed.</small></div><div>{merchantMediaAssets.slice(1).map((asset) => { const staged = instantPhotos.some((photo) => photo.id === `shopify-${asset.id}`); return <button type="button" key={asset.id} disabled={staged || instantPhotos.length >= MAX_SELLER_PHOTOS} onClick={() => stageMerchantPhoto(asset)}><img src={asset.viewUrl} alt={asset.alt}/><span><strong>{asset.filename}</strong><small>{staged ? "Staged" : "Confirm exact item + add"}</small></span></button>; })}</div></div>}
                     <div className="instant-thumbs">{(instantPreview?.media.requiredViews ?? [ { id: "hero", label: "Hero", detail: "Whole item", required: true }, { id: "label", label: "Label", detail: "Readable markings", required: false } ]).slice(0, 4).map((view) => <button key={view.id} onClick={() => showNotice(`${view.label}: ${view.detail}`)}><Icon name={view.id.includes("label") || view.id.includes("oem") ? "search" : "camera"}/><span>{view.label}</span></button>)}</div>
-                    {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo, index) => <figure className={isCatalogCalloutPhoto(photo) ? "catalog-primary-locked" : ""} key={photo.id}><span className="photo-order">{index + 1}</span><button className="remove-photo" type="button" disabled={isCatalogCalloutPhoto(photo)} aria-label={isCatalogCalloutPhoto(photo) ? `${photo.name} is locked as the primary image` : `Remove ${photo.name}`} onClick={() => removeInstantPhoto(photo.id)}>{isCatalogCalloutPhoto(photo) ? "LOCK" : "×"}</button><img src={photo.url} alt={isCatalogCalloutPhoto(photo) ? `Orange catalog callout primary image ${index + 1}` : `Seller-selected item photo ${index + 1}`}/><figcaption><span>{photo.name}</span><small>{isCatalogCalloutPhoto(photo) ? "Locked primary catalog image" : `Photo ${index + 1} of ${instantPhotos.length}`}</small></figcaption></figure>)}</div>}
+                    {instantPhotos.length > 0 && <div className="staged-photo-grid" aria-label="Photos staged in this browser">{instantPhotos.map((photo, index) => <figure className={isCatalogCalloutPhoto(photo) ? "catalog-primary-locked" : ""} key={photo.id}><span className="photo-order">{index + 1}</span><button className="remove-photo" type="button" disabled={isCatalogCalloutPhoto(photo)} aria-label={isCatalogCalloutPhoto(photo) ? `${photo.name} is locked as the primary image` : `Remove ${photo.name}`} onClick={() => removeInstantPhoto(photo.id)}>{isCatalogCalloutPhoto(photo) ? "LOCK" : "×"}</button><img src={photo.url} alt={isCatalogCalloutPhoto(photo) ? `Orange catalog callout primary image ${index + 1}` : `Seller-selected item photo ${index + 1}`}/><figcaption><span>{photo.name}</span><small>{isCatalogCalloutPhoto(photo) ? "Locked primary catalog image" : photo.source === "SHOPIFY_MERCHANT_MEDIA" ? "Exact-key Shopify media · Ferrari QA passed" : `Photo ${index + 1} of ${instantPhotos.length}`}</small></figcaption></figure>)}</div>}
                     <div className="media-source"><Icon name="alert"/><span><strong>{instantPreview?.media.sourceLabel ?? "Seller-owned item photo required"}</strong><small>No grey placeholder can enter the eBay payload.</small></span></div>
                     {(instantPreview?.media.catalogReferences.length ?? 0) > 0 && <button className="catalog-evidence-jump" onClick={() => document.getElementById("catalog-evidence-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Icon name="search"/><span><strong>Open highlighted catalog evidence</strong><small>{instantPreview?.media.catalogReferences.length} first-party row and diagram references</small></span><Icon name="arrow"/></button>}
                     <div className="media-upload-toolbar"><label className="media-add-button" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); stageInstantPhotos(event.dataTransfer.files); }}><Icon name="camera"/><span><strong>{instantSellerItemPhotos.length ? "Add more actual-item photos" : "Add actual-item photos"}</strong><small>Select or drop multiple images · up to {MAX_SELLER_PHOTOS}</small></span><b>{MAX_SELLER_PHOTOS - instantPhotos.length} open</b><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { stageInstantPhotos(event.target.files); event.currentTarget.value = ""; }}/></label>{instantSellerItemPhotos.length > 0 && <button className="clear-photos" type="button" onClick={() => { setInstantPhotos((current) => current.filter(isCatalogCalloutPhoto)); resetMaterialApprovals(); showNotice("Seller photos were removed; the orange catalog callout remains image 1."); }}>Remove seller photos</button>}</div>
-                    <p className="local-photo-note"><Icon name="shield"/> Private pilot: selected images stay in this browser preview. Photo analysis and durable upload are not connected yet.</p>
+                    <p className="local-photo-note"><Icon name="shield"/> {primaryMerchantMedia ? "The QA-passed archive derivative is served read-only from private Azure. Selecting it stages only this draft and still requires your physical-item confirmation." : "Private pilot: selected uploads stay in this browser preview. Photo analysis and durable upload are not connected yet."}</p>
                   </div>
 
                   <div className="instant-listing-copy">

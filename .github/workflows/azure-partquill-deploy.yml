@@ -170,21 +170,21 @@ jobs:
               --allow-project-management true \
               --output none
           fi
-          REVIEW_MODEL="gpt-5-mini"
+          REVIEW_MODEL="gpt-6-astra-1"
+          REVIEW_MODEL_NAME="gpt-6-astra"
+          REVIEW_MODEL_VERSION="2026-09-03"
           if ! az cognitiveservices account deployment show \
             --resource-group "$FOUNDRY_RG" \
             --name "$FOUNDRY_RESOURCE" \
             --deployment-name "$REVIEW_MODEL" >/dev/null 2>&1; then
-            az cognitiveservices account deployment create \
-              --resource-group "$FOUNDRY_RG" \
-              --name "$FOUNDRY_RESOURCE" \
-              --deployment-name "$REVIEW_MODEL" \
-              --model-name "$REVIEW_MODEL" \
-              --model-version "2025-08-07" \
-              --model-format OpenAI \
-              --sku-capacity 10 \
-              --sku-name GlobalStandard \
-              --output none
+            echo "The established PartQuill Astra deployment is missing; refusing to substitute a weaker review model." >&2
+            exit 1
+          fi
+          DEPLOYED_REVIEW_MODEL=$(az cognitiveservices account deployment show --resource-group "$FOUNDRY_RG" --name "$FOUNDRY_RESOURCE" --deployment-name "$REVIEW_MODEL" --query properties.model.name -o tsv)
+          DEPLOYED_REVIEW_VERSION=$(az cognitiveservices account deployment show --resource-group "$FOUNDRY_RG" --name "$FOUNDRY_RESOURCE" --deployment-name "$REVIEW_MODEL" --query properties.model.version -o tsv)
+          if [ "$DEPLOYED_REVIEW_MODEL" != "$REVIEW_MODEL_NAME" ] || [ "$DEPLOYED_REVIEW_VERSION" != "$REVIEW_MODEL_VERSION" ]; then
+            echo "The established PartQuill Astra deployment does not match the locked model version." >&2
+            exit 1
           fi
           FOUNDRY_KEY=$(az cognitiveservices account keys list \
             --resource-group "$FOUNDRY_RG" \
@@ -209,7 +209,7 @@ jobs:
             fi
           done
           if [ -z "$FOUNDRY_BASE_ROOT" ]; then
-            echo "Azure GPT-5-mini probe failed; refusing to activate an unverified image pipeline." >&2
+            echo "Azure Astra probe failed; refusing to activate an unverified image pipeline." >&2
             jq '{error:(.error.message // .error // "unknown")}' /tmp/foundry-review-probe.json 2>/dev/null || true
             exit 1
           fi
@@ -261,7 +261,7 @@ jobs:
             AI_IMAGE_ENV+=(AZURE_FOUNDRY_IMAGE_DEPLOYMENT="$IMAGE_MODEL")
           fi
 
-          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               AZURE_STORAGE_ACCOUNT_NAME="$STORAGE_ACCOUNT"               GM_CATALOG_MEDIA_CONTAINER="$MEDIA_CONTAINER"               GM_CATALOG_MEDIA_PREFIX=gm-scans/pages               GM_CATALOG_MEDIA_SAS=secretref:gm-catalog-media-sas               GM_CATALOG_MEDIA_UPLOAD_SAS=secretref:gm-catalog-media-upload-sas               MIGRATION_GITHUB_OIDC_ENABLED=true               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               IMAGE_STUDIO_STORAGE_MODE=azure-blob               IMAGE_STUDIO_STORAGE_ACCOUNT_URL="https://${IMAGE_STORAGE_ACCOUNT}.blob.core.windows.net"               IMAGE_STUDIO_STORAGE_CONTAINER="$IMAGE_CONTAINER"               IMAGE_STUDIO_STORAGE_SAS=secretref:image-studio-storage-sas               IMAGE_STUDIO_STORAGE_PREFIX=image-studio               AZURE_FOUNDRY_ENDPOINT="$FOUNDRY_BASE_ROOT"               AZURE_FOUNDRY_API_KEY=secretref:azure-foundry-api-key               AZURE_FOUNDRY_REVIEW_DEPLOYMENT="$REVIEW_MODEL"               "${AI_IMAGE_ENV[@]}"               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com,https://www.partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=azure-local               IMAGE_STUDIO_MODE=live               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=provider               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
+          az containerapp update             --resource-group "$RG"             --name "$APP"             --revision-suffix "$REVISION_SUFFIX"             --image "$IMAGE"             --min-replicas 1             --max-replicas 2             --cpu 0.5             --memory 1Gi             --set-env-vars               NODE_ENV=production               HOST=0.0.0.0               PORT=3000               DATABASE_URL="$DATABASE_URL"               DATABASE_AUTH_MODE=azure-managed-identity               AZURE_STORAGE_ACCOUNT_NAME="$STORAGE_ACCOUNT"               GM_CATALOG_MEDIA_CONTAINER="$MEDIA_CONTAINER"               GM_CATALOG_MEDIA_PREFIX=gm-scans/pages               GM_CATALOG_MEDIA_SAS=secretref:gm-catalog-media-sas               GM_CATALOG_MEDIA_UPLOAD_SAS=secretref:gm-catalog-media-upload-sas               MIGRATION_GITHUB_OIDC_ENABLED=true               PARTQUILL_API_KEY=secretref:partquill-api-key               TOKEN_ENCRYPTION_KEY=secretref:token-encryption-key               OAUTH_STATE_SECRET=secretref:oauth-state-secret               GM_IMPORT_TOKEN=secretref:gm-import-token               IMAGE_STUDIO_ACCESS_TOKEN=secretref:image-studio-access-token               IMAGE_STUDIO_STORAGE_MODE=azure-blob               IMAGE_STUDIO_STORAGE_ACCOUNT_URL="https://${IMAGE_STORAGE_ACCOUNT}.blob.core.windows.net"               IMAGE_STUDIO_STORAGE_CONTAINER="$IMAGE_CONTAINER"               IMAGE_STUDIO_STORAGE_SAS=secretref:image-studio-storage-sas               IMAGE_STUDIO_STORAGE_PREFIX=image-studio               SHOPIFY_MEDIA_ENABLED=true               AZURE_FOUNDRY_ENDPOINT="$FOUNDRY_BASE_ROOT"               AZURE_FOUNDRY_API_KEY=secretref:azure-foundry-api-key               AZURE_FOUNDRY_REVIEW_DEPLOYMENT="$REVIEW_MODEL"               "${AI_IMAGE_ENV[@]}"               PUBLIC_BASE_URL=https://partquill.com               CORS_ORIGINS=https://partquill.com,https://www.partquill.com               PILOT_EPHEMERAL_MODE=false               EBAY_ENV=production               EBAY_MODE=mock               ALLOW_EBAY_WRITES=false               EBAY_REFERENCE_DISCOVERY_MODE=disabled               EBAY_CATEGORY_SYNC_ENABLED=false               PARTQUILL_AI_PROVIDER=azure-local               IMAGE_STUDIO_MODE=live               COMMUNITY_IMAGES_ENABLED=true               COMMUNITY_EDIT_MODE=provider               OEM_RESEARCH_MODE=disabled               OEM_DATA_RIGHTS_CONFIRMED=false             --no-wait             --output none
 
           EXPECTED_REVISION="${APP}--${REVISION_SUFFIX}"
           REVISION_HEALTH="unknown"
@@ -308,7 +308,7 @@ jobs:
               && [ "$CATALOG_SCAN_STATUS" = "200" ] \
               && [[ "$CATALOG_SCAN_TYPE" == image/* ]] \
               && jq -e '.version == "0.23.0"' health.json >/dev/null \
-              && jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true' ready.json >/dev/null; then
+              && jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true' ready.json >/dev/null; then
               break
             fi
             sleep 10
@@ -345,7 +345,7 @@ jobs:
           [[ "$CATALOG_SCAN_TYPE" == image/* ]]
           test "$STUDIO_SMOKE_STATUS" = "202"
           jq -e '.version == "0.23.0"' health.json >/dev/null
-          jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true' ready.json >/dev/null
+          jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true' ready.json >/dev/null
 
       - name: Upload deployment report
         if: always()

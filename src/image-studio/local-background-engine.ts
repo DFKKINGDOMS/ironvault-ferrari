@@ -1,9 +1,9 @@
 import sharp from 'sharp';
 import type { EditRequest, EditResult, ImageEditEngine, QaResult } from './types.js';
 
-const ANALYSIS_EDGE = 1_600;
-const CANVAS_EDGE = 1_600;
-const OBJECT_EDGE = 1_440;
+const ANALYSIS_EDGE = 1_800;
+const CANVAS_EDGE = 2_000;
+const OBJECT_EDGE = 1_800;
 const MAX_INPUT_PIXELS = 60_000_000;
 
 type Rgb = { r: number; g: number; b: number };
@@ -128,10 +128,11 @@ export class ConservativeBackgroundEngine implements ImageEditEngine {
         create: { width: CANVAS_EDGE, height: CANVAS_EDGE, channels: 3, background: '#ffffff' }
       })
         .composite([{ input: foreground.data, left, top }])
+        .toColorspace('srgb')
         .png({ compressionLevel: 9 })
         .toBuffer();
 
-      return { bytes, mediaType: 'image/png', model: 'partquill-local-background-v1', quality: 'pixel-preserving' };
+      return { bytes, mediaType: 'image/png', model: 'partquill-local-background-v2', quality: 'pixel-preserving-2000px' };
     } catch (error) {
       if (this.fallback?.available) return this.fallback.edit(input);
       throw error;

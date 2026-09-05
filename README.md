@@ -29,6 +29,7 @@ It is intentionally not a universal visual parts identifier. The default runtime
 - Seller-photo requirement, explicit physical-part and condition confirmations, green/amber/red fitment legend, VIN recovery entry point, and a visible “Find the correct part” buyer-assistance path.
 - Safe “Send to eBay” handoff that opens only `https://www.ebay.com/`; no account sign-in, listing payload or eBay write is performed.
 - Existing connected Image Studio preserved at `/image-studio`.
+- Source-locked Import Export Shopify media sync for exact SKU and strict filename keys. It inventories files plus product/media relationships, streams the large export into private Azure Blob storage, removes exact-byte and decoded-pixel duplicates, quarantines logos/branding/marketing/documents, and applies the Ferrari preservation profile to every eligible image. Only 2000×2000 metadata-free sRGB JPEG derivatives that pass deterministic checks and Astra source comparison can appear in PartQuill. The original remains immutable, the public response is source-neutral, and a seller must still confirm that a matched image depicts the exact physical item before it can satisfy the listing-photo gate.
 - Azure-backed EPC image pipeline available at `/v1/epc-image/jobs` for the locked Ferrari/Lamborghini/Aston Martin cleanup rule.
 - Free community Parts Image Wiki at `/community-images`, with up to 50 JPEG, PNG or WebP images per contribution, an exact part number for every image, owner/permission attestation, a rights-cleared archive license and public contributor credit.
 - Community originals remain quarantined in PostgreSQL. Review rejects people, faces, hands, body parts, explicit or illegal material, unrelated scenes, marketplace promotional graphics, watermarks, overlays and visible part-number conflicts before editing.
@@ -122,6 +123,7 @@ The seller workspace endpoints are also public and read-only:
 
 - `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
 - `POST /v1/seller-ui/command-preview` — routes a command into a read-only Vintage inventory answer, catalog-held draft, photo-first draft, restricted-safety review, illustrative preview, or Vintage GM shortlist; it performs no eBay write.
+- `GET /v1/shopify-media/parts/:partNumber/images/:assetId` — serves only a private-Azure derivative that is exact-keyed to the requested part and has passed the locked Ferrari QA profile.
 - `GET /v1/seller-ui/ebay-reference/:partNumber` — checks only an exact, locally verified catalog key; unrelated categories, partial numbers, conflicting MPNs and conflicting automaker brands fail closed.
 
 The community contribution surface is public and rate limited:

@@ -1,0 +1,453 @@
+name: Sync Import Export Shopify media to Azure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-partquill-shopify-media.yml
+      - .github/workflows/azure-partquill-deploy.yml
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - src/shopify-media/**
+      - src/image-studio/**
+      - src/http/app.ts
+      - src/main.ts
+      - src/config.ts
+      - src/seller/command-preview.ts
+      - frontend/**
+      - test/shopify-media-*.test.ts
+      - test/local-background-engine.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: partquill-shopify-media-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Credential-free safety validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate enterprise and Ferrari image gates
+        run: |
+          set -euo pipefail
+          npm run verify:enterprise
+          npm run lint
+          npm test
+          npm run build:server
+          npm run build:web
+          grep -Fq "discontinued-auto-parts.myshopify.com" src/shopify-media/types.ts
+          grep -Fq "Import Export Auto Parts Inc" src/shopify-media/types.ts
+          grep -Fq "requiresActualItemConfirmation: true" src/shopify-media/types.ts
+          grep -Fq "ALLOW_EBAY_WRITES=false" .github/workflows/azure-partquill-deploy.yml
+
+  deploy:
+    name: Deploy resumable Azure media worker
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      AZURE_CONFIG_DIR: /tmp/partquill-shopify-azure
+      SHOPIFY_DIRECT_TOKEN: ${{ secrets.IMPORTEXPORT_SHOPIFY_ADMIN_ACCESS_TOKEN || secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+      SHOPIFY_CLIENT_ID_VALUE: ${{ secrets.IMPORTEXPORT_SHOPIFY_CLIENT_ID || secrets.SHOPIFY_CLIENT_ID }}
+      SHOPIFY_CLIENT_SECRET_VALUE: ${{ secrets.IMPORTEXPORT_SHOPIFY_CLIENT_SECRET || secrets.SHOPIFY_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify the locked read-only Shopify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHOP_DOMAIN="discontinued-auto-parts.myshopify.com"
+          SHOP_TOKEN="$SHOPIFY_DIRECT_TOKEN"
+          if [ -z "$SHOP_TOKEN" ]; then
+            if [ -z "$SHOPIFY_CLIENT_ID_VALUE" ] || [ -z "$SHOPIFY_CLIENT_SECRET_VALUE" ]; then
+              echo "Missing Import Export Shopify credentials. Add IMPORTEXPORT_SHOPIFY_ADMIN_ACCESS_TOKEN, or both IMPORTEXPORT_SHOPIFY_CLIENT_ID and IMPORTEXPORT_SHOPIFY_CLIENT_SECRET, as repository secrets." >&2
+              exit 1
+            fi
+            TOKEN_STATUS=$(curl --silent --show-error --max-time 60 \
+              --output "$RUNNER_TEMP/shopify-token.json" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header 'content-type: application/json' \
+              --data "$(jq -cn --arg id "$SHOPIFY_CLIENT_ID_VALUE" --arg secret "$SHOPIFY_CLIENT_SECRET_VALUE" '{grant_type:"client_credentials",client_id:$id,client_secret:$secret}')" \
+              "https://${SHOP_DOMAIN}/admin/oauth/access_token" || true)
+            if [ "$TOKEN_STATUS" != "200" ]; then
+              echo "The configured Import Export Shopify client credentials were rejected with HTTP $TOKEN_STATUS." >&2
+              exit 1
+            fi
+            SHOP_TOKEN=$(jq -r '.access_token // empty' "$RUNNER_TEMP/shopify-token.json")
+          fi
+          if [ -z "$SHOP_TOKEN" ]; then
+            echo "Shopify authentication returned no access token." >&2
+            exit 1
+          fi
+          echo "::add-mask::$SHOP_TOKEN"
+          IDENTITY_STATUS=$(curl --silent --show-error --max-time 60 \
+            --output "$RUNNER_TEMP/shopify-identity.json" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "x-shopify-access-token: $SHOP_TOKEN" \
+            --data '{"query":"query PartQuillShopIdentity { shop { name myshopifyDomain } currentAppInstallation { accessScopes { handle } } }"}' \
+            "https://${SHOP_DOMAIN}/admin/api/2026-07/graphql.json" || true)
+          if [ "$IDENTITY_STATUS" != "200" ]; then
+            echo "The configured Shopify credential failed its read-only identity probe with HTTP $IDENTITY_STATUS." >&2
+            exit 1
+          fi
+          jq -e '.data.shop.name == "Import Export Auto Parts Inc" and .data.shop.myshopifyDomain == "discontinued-auto-parts.myshopify.com"' "$RUNNER_TEMP/shopify-identity.json" >/dev/null || {
+            echo "The Shopify credential failed the locked source-store identity check; refusing cross-store import." >&2
+            exit 1
+          }
+          for REQUIRED_SCOPE in read_files read_products; do
+            jq -e --arg scope "$REQUIRED_SCOPE" '.data.currentAppInstallation.accessScopes | any(.handle == $scope)' "$RUNNER_TEMP/shopify-identity.json" >/dev/null || {
+              echo "The locked Shopify source credential lacks $REQUIRED_SCOPE." >&2
+              exit 1
+            }
+          done
+          printf 'SHOPIFY_ADMIN_TOKEN=%s\n' "$SHOP_TOKEN" >> "$GITHUB_ENV"
+          rm -f -- "$RUNNER_TEMP/shopify-token.json" "$RUNNER_TEMP/shopify-identity.json"
+
+      - name: Sign in to the established Azure subscription
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Deploy the source-locked worker and pass the exact canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="rg-partquill-platform-westus3"
+          ENVIRONMENT="cae-partquill-private-westus3"
+          APP="ca-partquill-shopify-media-westus3"
+          ACR="partquill50230827"
+          ACR_SERVER="partquill50230827.azurecr.io"
+          STORAGE_ACCOUNT="pqimages50230827"
+          STORAGE_CONTAINER="partquill-image-studio"
+          FOUNDRY_RESOURCE="partquill-ai-50230827"
+          REVIEW_MODEL="gpt-6-astra-1"
+          IMAGE_TAG="shopify-media-${GITHUB_SHA}"
+          IMAGE="${ACR_SERVER}/partquill:${IMAGE_TAG}"
+          REVISION_SUFFIX="media-${GITHUB_SHA:0:8}-${GITHUB_RUN_ATTEMPT}"
+
+          az group show --name "$RG" --output none
+          az containerapp env show --resource-group "$RG" --name "$ENVIRONMENT" --output none
+          az acr show --resource-group "$RG" --name "$ACR" --output none
+          az storage account show --resource-group "$RG" --name "$STORAGE_ACCOUNT" --output none
+          az cognitiveservices account show --resource-group "$RG" --name "$FOUNDRY_RESOURCE" --output none
+
+          DEPLOYED_REVIEW_MODEL=$(az cognitiveservices account deployment show \
+            --resource-group "$RG" \
+            --name "$FOUNDRY_RESOURCE" \
+            --deployment-name "$REVIEW_MODEL" \
+            --query properties.model.name \
+            --output tsv)
+          DEPLOYED_REVIEW_VERSION=$(az cognitiveservices account deployment show \
+            --resource-group "$RG" \
+            --name "$FOUNDRY_RESOURCE" \
+            --deployment-name "$REVIEW_MODEL" \
+            --query properties.model.version \
+            --output tsv)
+          if [ "$DEPLOYED_REVIEW_MODEL" != "gpt-6-astra" ] || [ "$DEPLOYED_REVIEW_VERSION" != "2026-09-03" ]; then
+            echo "The established Astra deployment is absent or does not match the locked model version." >&2
+            exit 1
+          fi
+
+          STORAGE_KEY=$(az storage account keys list --resource-group "$RG" --account-name "$STORAGE_ACCOUNT" --query '[0].value' --output tsv)
+          FOUNDRY_KEY=$(az cognitiveservices account keys list --resource-group "$RG" --name "$FOUNDRY_RESOURCE" --query key1 --output tsv)
+          az acr update --name "$ACR" --admin-enabled true --output none
+          ACR_USER=$(az acr credential show --name "$ACR" --query username --output tsv)
+          ACR_PASSWORD=$(az acr credential show --name "$ACR" --query passwords[0].value --output tsv)
+          for VALUE in "$STORAGE_KEY" "$FOUNDRY_KEY" "$ACR_PASSWORD"; do echo "::add-mask::$VALUE"; done
+
+          az storage container create \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --name "$STORAGE_CONTAINER" \
+            --public-access off \
+            --output none
+          SAS_EXPIRY=$(date -u -d '+1 year' '+%Y-%m-%dT%H:%MZ')
+          STORAGE_SAS=$(az storage container generate-sas \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --name "$STORAGE_CONTAINER" \
+            --permissions racwdl \
+            --expiry "$SAS_EXPIRY" \
+            --https-only \
+            --output tsv)
+          echo "::add-mask::$STORAGE_SAS"
+
+          FOUNDRY_ROOT="https://${FOUNDRY_RESOURCE}.openai.azure.com"
+          ASTRA_STATUS=$(curl --silent --show-error --max-time 90 \
+            --output "$RUNNER_TEMP/astra-probe.json" \
+            --write-out '%{http_code}' \
+            --header "api-key: $FOUNDRY_KEY" \
+            --header 'content-type: application/json' \
+            --data "{\"model\":\"${REVIEW_MODEL}\",\"input\":\"Return exactly READY.\",\"reasoning\":{\"effort\":\"low\"},\"max_output_tokens\":32}" \
+            "$FOUNDRY_ROOT/openai/v1/responses" || true)
+          if [ "$ASTRA_STATUS" != "200" ]; then
+            echo "The established Azure Astra deployment failed its runtime probe with HTTP $ASTRA_STATUS." >&2
+            exit 1
+          fi
+
+          PROVIDER_BLOB="system/azure-image-provider.json"
+          IMAGE_MODEL=""
+          if [ "$(az storage blob exists --account-name "$STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" --container-name "$STORAGE_CONTAINER" --name "$PROVIDER_BLOB" --query exists --output tsv)" = "true" ]; then
+            az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$STORAGE_KEY" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$PROVIDER_BLOB" \
+              --file "$RUNNER_TEMP/image-provider.json" \
+              --overwrite \
+              --only-show-errors \
+              --output none
+            IMAGE_MODEL=$(jq -r '.model // empty' "$RUNNER_TEMP/image-provider.json")
+          fi
+          if [[ ! "$IMAGE_MODEL" =~ ^gpt-image-[A-Za-z0-9._-]+$ ]]; then
+            echo "No verified Azure image-edit provider is recorded in the established private image store." >&2
+            exit 1
+          fi
+          python - "$RUNNER_TEMP/image-edit-probe.png" <<'PY'
+          import struct
+          import sys
+          import zlib
+
+          width = height = 256
+          rows = []
+          for y in range(height):
+              row = bytearray([0])
+              for x in range(width):
+                  part = 54 <= x <= 201 and 82 <= y <= 173
+                  bore = (x - 128) ** 2 + (y - 128) ** 2 < 24 ** 2
+                  row.extend((70, 74, 78) if part and not bore else (255, 255, 255))
+              rows.append(bytes(row))
+          raw = b''.join(rows)
+          def chunk(kind, data):
+              return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+          png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+          with open(sys.argv[1], 'wb') as handle:
+              handle.write(png)
+          PY
+          IMAGE_STATUS=$(curl --silent --show-error --max-time 180 \
+            --output "$RUNNER_TEMP/image-probe.json" \
+            --write-out '%{http_code}' \
+            --header "api-key: $FOUNDRY_KEY" \
+            --form "model=$IMAGE_MODEL" \
+            --form "image=@$RUNNER_TEMP/image-edit-probe.png;type=image/png" \
+            --form 'prompt=Preserve the exact pixel and place it on pure white.' \
+            --form 'size=1024x1024' \
+            --form 'quality=low' \
+            --form 'output_format=jpeg' \
+            --form 'background=opaque' \
+            "$FOUNDRY_ROOT/openai/v1/images/edits" || true)
+          if [ "$IMAGE_STATUS" != "200" ]; then
+            echo "The verified Azure image-edit provider failed its runtime probe with HTTP $IMAGE_STATUS." >&2
+            exit 1
+          fi
+          rm -f -- "$RUNNER_TEMP/astra-probe.json" "$RUNNER_TEMP/image-probe.json" "$RUNNER_TEMP/image-provider.json" "$RUNNER_TEMP/image-edit-probe.png"
+
+          az acr build --registry "$ACR" --image "partquill:${IMAGE_TAG}" --file Dockerfile .
+
+          if ! az containerapp show --resource-group "$RG" --name "$APP" >/dev/null 2>&1; then
+            az containerapp create \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --environment "$ENVIRONMENT" \
+              --image "$IMAGE" \
+              --registry-server "$ACR_SERVER" \
+              --registry-username "$ACR_USER" \
+              --registry-password "$ACR_PASSWORD" \
+              --system-assigned \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --cpu 2 \
+              --memory 4Gi \
+              --output none
+          fi
+          az containerapp registry set \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --server "$ACR_SERVER" \
+            --username "$ACR_USER" \
+            --password "$ACR_PASSWORD" \
+            --output none
+          az containerapp secret set \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --secrets \
+              shopify-admin-token="$SHOPIFY_ADMIN_TOKEN" \
+              image-storage-sas="$STORAGE_SAS" \
+              azure-foundry-key="$FOUNDRY_KEY" \
+            --output none
+          az containerapp update \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --revision-suffix "$REVISION_SUFFIX" \
+            --image "$IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --cpu 2 \
+            --memory 4Gi \
+            --command node \
+            --args dist/src/shopify-media/worker.js \
+            --set-env-vars \
+              NODE_ENV=production \
+              SHOPIFY_API_VERSION=2026-07 \
+              SHOPIFY_STORE_DOMAIN=discontinued-auto-parts.myshopify.com \
+              SHOPIFY_ADMIN_ACCESS_TOKEN=secretref:shopify-admin-token \
+              SHOPIFY_MEDIA_RIGHTS_CONFIRMED=true \
+              SHOPIFY_MEDIA_CANARY_PART_NUMBER=10110989 \
+              SHOPIFY_MEDIA_CONTINUOUS=true \
+              SHOPIFY_MEDIA_MIN_INTERVAL_MS=1000 \
+              IMAGE_STUDIO_STORAGE_ACCOUNT_URL="https://${STORAGE_ACCOUNT}.blob.core.windows.net" \
+              IMAGE_STUDIO_STORAGE_CONTAINER="$STORAGE_CONTAINER" \
+              IMAGE_STUDIO_STORAGE_SAS=secretref:image-storage-sas \
+              IMAGE_STUDIO_STORAGE_PREFIX=image-studio \
+              AZURE_FOUNDRY_ENDPOINT="$FOUNDRY_ROOT" \
+              AZURE_FOUNDRY_API_KEY=secretref:azure-foundry-key \
+              AZURE_FOUNDRY_REVIEW_DEPLOYMENT="$REVIEW_MODEL" \
+              AZURE_FOUNDRY_IMAGE_DEPLOYMENT="$IMAGE_MODEL" \
+            --no-wait \
+            --output none
+
+          EXPECTED_REVISION="${APP}--${REVISION_SUFFIX}"
+          REVISION_HEALTH="unknown"
+          REVISION_RUNNING="unknown"
+          for attempt in $(seq 1 90); do
+            LATEST_REVISION=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName --output tsv 2>/dev/null || true)
+            if [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ]; then
+              REVISION_HEALTH=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query properties.healthState --output tsv 2>/dev/null || true)
+              REVISION_RUNNING=$(az containerapp revision show --resource-group "$RG" --name "$APP" --revision "$LATEST_REVISION" --query properties.runningState --output tsv 2>/dev/null || true)
+            fi
+            if [ "$LATEST_REVISION" = "$EXPECTED_REVISION" ] && [ "$REVISION_HEALTH" = "Healthy" ] && [ "$REVISION_RUNNING" = "Running" ]; then break; fi
+            sleep 10
+          done
+          if [ "$LATEST_REVISION" != "$EXPECTED_REVISION" ] || [ "$REVISION_HEALTH" != "Healthy" ] || [ "$REVISION_RUNNING" != "Running" ]; then
+            az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
+            exit 1
+          fi
+
+          MANIFEST_BLOB="image-studio/shopify-media-v1/manifest.json"
+          CANARY_READY=false
+          for attempt in $(seq 1 180); do
+            if az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$STORAGE_KEY" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$MANIFEST_BLOB" \
+              --file "$RUNNER_TEMP/shopify-media-manifest.json" \
+              --overwrite \
+              --only-show-errors \
+              --output none 2>/dev/null; then
+              if jq -e '.phase == "CONFIGURATION_HOLD"' "$RUNNER_TEMP/shopify-media-manifest.json" >/dev/null; then
+                echo "The worker entered a configuration hold. Check the locked credential, source identity, scopes, and established Foundry deployments." >&2
+                exit 1
+              fi
+              if jq -e '.canaryPartNumber == "10110989" and .canaryPassed == true' "$RUNNER_TEMP/shopify-media-manifest.json" >/dev/null; then
+                CANARY_READY=true
+                break
+              fi
+            fi
+            sleep 30
+          done
+          if [ "$CANARY_READY" != "true" ]; then
+            echo "The exact 10110989 canary did not pass within the bounded deployment window; the full queue remains locked." >&2
+            az containerapp logs show --resource-group "$RG" --name "$APP" --revision "$EXPECTED_REVISION" --tail 100 --follow false 2>/dev/null || true
+            exit 1
+          fi
+
+          INDEX_BLOB="image-studio/shopify-media-v1/indexes/10110989.json"
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "$INDEX_BLOB" \
+            --file "$RUNNER_TEMP/10110989-index.json" \
+            --overwrite \
+            --only-show-errors \
+            --output none
+          jq -e '.partNumber == "10110989" and .profile == "ferrari-product-photo-v1" and (.assets | length > 0) and all(.assets[]; .qa.status == "PASSED" and .qa.output.width == 2000 and .qa.output.height == 2000 and .qa.output.metadataStripped == true and .qa.output.background == "#FFFFFF")' "$RUNNER_TEMP/10110989-index.json" >/dev/null
+          ASSET_ID=$(jq -r '.assets[0].id' "$RUNNER_TEMP/10110989-index.json")
+
+          LIVE_READY=false
+          for attempt in $(seq 1 90); do
+            READY_STATUS=$(curl --silent --show-error --max-time 20 --output "$RUNNER_TEMP/live-ready.json" --write-out '%{http_code}' https://partquill.com/ready || true)
+            BOOTSTRAP_STATUS=$(curl --silent --show-error --max-time 20 --output "$RUNNER_TEMP/live-bootstrap.json" --write-out '%{http_code}' https://partquill.com/v1/seller-ui/bootstrap || true)
+            if [ "$READY_STATUS" = "200" ] && [ "$BOOTSTRAP_STATUS" = "200" ] \
+              && jq -e '.ebay.mode == "mock" and .ebay.writesEnabled == false and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true' "$RUNNER_TEMP/live-ready.json" >/dev/null \
+              && jq -e '.workspace.displayName == "PartQuill Workspace" and .workspace.accountLabel == "Organization account" and .shopifyMedia.enabled == true' "$RUNNER_TEMP/live-bootstrap.json" >/dev/null \
+              && ! grep -Eqi 'Kurt[[:space:]]+White' "$RUNNER_TEMP/live-bootstrap.json"; then
+              LIVE_READY=true
+              break
+            fi
+            sleep 10
+          done
+          if [ "$LIVE_READY" != "true" ]; then
+            echo "The PartQuill web deployment did not expose the source-neutral Shopify media feature within the bounded window." >&2
+            exit 1
+          fi
+
+          PREVIEW_STATUS=$(curl --silent --show-error --max-time 60 \
+            --output "$RUNNER_TEMP/10110989-preview.json" \
+            --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --data '{"command":"List part 10110989 for $9.99"}' \
+            https://partquill.com/v1/seller-ui/command-preview || true)
+          test "$PREVIEW_STATUS" = "200"
+          jq -e '.preview.gates.publicEbayWrite == "DISABLED" and (.preview.media.merchantMedia.assets | length > 0) and .preview.media.merchantMedia.assets[0].requiresActualItemConfirmation == true' "$RUNNER_TEMP/10110989-preview.json" >/dev/null
+          VIEW_URL=$(jq -r --arg asset "$ASSET_ID" '.preview.media.merchantMedia.assets[] | select(.id == $asset) | .viewUrl' "$RUNNER_TEMP/10110989-preview.json" | head -n 1)
+          test -n "$VIEW_URL"
+          IMAGE_HTTP_STATUS=$(curl --silent --show-error --max-time 60 \
+            --output "$RUNNER_TEMP/10110989.jpg" \
+            --write-out '%{http_code}' \
+            "https://partquill.com${VIEW_URL}" || true)
+          test "$IMAGE_HTTP_STATUS" = "200"
+          test "$(head -c 2 "$RUNNER_TEMP/10110989.jpg" | od -An -tx1 | tr -d ' \n')" = "ffd8"
+          test "$(stat --format='%s' "$RUNNER_TEMP/10110989.jpg")" -gt 8000
+
+          {
+            echo "## Import Export Shopify media migration"
+            echo "- Credential-free validation: passed"
+            echo "- Locked source identity and scopes: passed"
+            echo "- Azure Astra runtime probe: passed"
+            echo "- Azure image provider runtime probe: passed"
+            echo "- Exact 10110989 canary: passed"
+            echo "- Ferrari output: 2000×2000 sRGB JPEG, metadata-free, pure white"
+            echo "- PartQuill mapping and image delivery: passed"
+            echo "- Actual-item confirmation: still required"
+            echo "- eBay production writes: disabled"
+            echo "- Full resumable queue: running"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove Azure session material
+        if: always()
+        shell: bash
+        run: |
+          az logout >/dev/null 2>&1 || true
+          az account clear >/dev/null 2>&1 || true
+          if [ "$AZURE_CONFIG_DIR" = "/tmp/partquill-shopify-azure" ]; then
+            rm -rf -- /tmp/partquill-shopify-azure
+          fi

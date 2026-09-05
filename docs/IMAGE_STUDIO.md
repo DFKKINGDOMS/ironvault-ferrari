@@ -145,11 +145,59 @@ it is never presented as durable production storage.
 
 Production stores originals, derivatives and manifests in the private
 `partquill-image-studio` Azure Blob container. The application uses
-`gpt-5-mini` through the `knjw1-9703` Microsoft Foundry project for source
+the established `gpt-6-astra-1` Azure Foundry deployment for source
 comparison. Product photographs take the conservative Sharp-based background
 route first; only sources that cannot be isolated safely are eligible for the
 optional Azure `gpt-image-1-mini` fallback. A failed or unavailable fallback is
 held for review and never redirected to ChatGPT credits.
+
+## Import Export Shopify archive route
+
+The dedicated Azure worker is permanently locked to the canonical
+`discontinued-auto-parts.myshopify.com` shop and verifies the exact shop identity
+plus `read_files` and `read_products` scopes before importing bytes. A token for
+another open Shopify session cannot redirect the job. GitHub Actions accepts a
+dedicated `IMPORTEXPORT_SHOPIFY_ADMIN_ACCESS_TOKEN` secret, or the matching
+`IMPORTEXPORT_SHOPIFY_CLIENT_ID` and `IMPORTEXPORT_SHOPIFY_CLIENT_SECRET` pair.
+A generic Shopify secret is accepted only as a migration fallback and still has
+to pass the same locked identity check.
+
+The export combines Shopify content files, products, variants, SKUs and media
+relationships. It is streamed to disk and private Blob storage, then scanned in
+restart-safe mapped and unmapped passes. Candidate rows are never accumulated
+as an in-memory image queue, so a catalog containing millions of relationship
+objects remains bounded. Exact-SKU and strict-key photos run first. Processing
+checkpoints after each asset. Transient throttling, network and Azure service
+failures back off and retry without weakening a gate; malformed or repeatedly
+defective individual files are held for review.
+
+Each eligible source follows this contract:
+
+1. Text policy excludes explicit logos, store-brand assets, favicons, banners,
+   badges and placeholders before their bytes are transferred.
+2. Exact byte SHA-256 and decoded-pixel SHA-256 remove encoding and metadata
+   duplicates while retaining one canonical immutable original.
+3. Astra classifies the pixels as a real product photograph. Marketing,
+   documents, diagrams, vehicles/scenery and ambiguous low-confidence files are
+   quarantined. Repeated pixels reuse the same classification. Rejected pixels
+   exist only in temporary worker memory; their image bytes are never uploaded
+   into the Azure original or derivative collections.
+4. A conservative pixel-preserving cutout runs first; complex backgrounds may
+   use the verified Azure image-edit deployment with the same locked prompt.
+5. The result is normalized to a 2000×2000 sRGB JPEG on solid `#FFFFFF`, with
+   EXIF, IPTC and XMP metadata removed.
+6. Deterministic format, size, margin, blank-image and edge checks run before
+   Astra compares the untouched source with the derivative. Geometry,
+   connectors, holes, labels, part numbers, markings, material, color, wear,
+   damage, angle, quantity and piece count must remain unchanged.
+7. Only a passed derivative is indexed by one exact product SKU or strict file
+   key. Descriptive text never creates identity or fitment.
+
+The exact `10110989` product-media association is the deployment canary. The
+full queue cannot unlock until that source has a passed derivative and PartQuill
+can serve it. A mapped archive image remains presentation-only; the user must
+explicitly confirm it is the actual item, which invalidates prior draft and fee
+approvals and binds the selected hashes to the rebuilt preview.
 
 ## Eurospares EPC image route
 
@@ -168,7 +216,7 @@ produces:
 - 1470×1070 interactive image with one thin `#ff6a00` ring per hotspot;
 - clean 420×306 thumbnail without circles;
 - transformed hotspot/REF/SKU JSON;
-- SHA-256 values and Azure `gpt-5-mini` three-image QA decision.
+- SHA-256 values and Azure Astra three-image QA decision.
 
 Suspected third-party watermark removal is blocked before processing. Failed
 geometry, line, number, background, watermark or ring QA is held for manual
