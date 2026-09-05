@@ -119,7 +119,7 @@ export class ConservativeBackgroundEngine implements ImageEditEngine {
 
       const foreground = await sharp(rgba, { raw: { width, height, channels: 4 } })
         .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 } })
-        .resize({ width: OBJECT_EDGE, height: OBJECT_EDGE, fit: 'inside', withoutEnlargement: true })
+        .resize({ width: OBJECT_EDGE, height: OBJECT_EDGE, fit: 'inside', withoutEnlargement: false })
         .png()
         .toBuffer({ resolveWithObject: true });
       const left = Math.floor((CANVAS_EDGE - foreground.info.width) / 2);

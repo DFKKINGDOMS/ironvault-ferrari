@@ -47,6 +47,20 @@ describe('conservative local background editor', () => {
     expect(pixel(0, 0)).toEqual([255, 255, 255]);
     expect(pixel(1_000, 1_000)[0]).toBeGreaterThan(170);
     expect(pixel(1_000, 1_000)[1]).toBeLessThan(50);
+    let minX = decoded.info.width;
+    let maxX = -1;
+    for (let y = 0; y < decoded.info.height; y += 1) {
+      for (let x = 0; x < decoded.info.width; x += 1) {
+        const [red, green, blue] = pixel(x, y);
+        if ((red ?? 255) < 245 || (green ?? 255) < 245 || (blue ?? 255) < 245) {
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+        }
+      }
+    }
+    expect(maxX - minX + 1).toBeGreaterThan(1_600);
+    expect(minX).toBeGreaterThanOrEqual(80);
+    expect(maxX).toBeLessThanOrEqual(1_920);
     expect(result.model).toBe('partquill-local-background-v2');
     expect(result.quality).toBe('pixel-preserving-2000px');
     expect(result.mediaType).toBe('image/png');
