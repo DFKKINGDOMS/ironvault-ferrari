@@ -8,6 +8,7 @@ import type {
   VintageGmInventorySort,
   VintageGmInventorySortDirection
 } from './types.js';
+import type { SellerListingQueryPool } from '../seller-listings/types.js';
 
 export const MAX_VINTAGE_INVENTORY_ANSWER_ROWS = 5_000;
 
@@ -476,7 +477,8 @@ function fitmentLabel(intent: VintageGmInventoryQuestionIntent): string {
 export function buildVintageGmInventoryAnswer(
   command: string,
   intent: VintageGmInventoryQuestionIntent,
-  pool: VintageGmInventoryQuestionPool
+  pool: VintageGmInventoryQuestionPool,
+  sellerListings: SellerListingQueryPool | null = null
 ): VintageGmInventoryAnswer {
   const resolvedIntent = pool.resolvedIntent ?? intent;
   const label = fitmentLabel(resolvedIntent);
@@ -529,7 +531,7 @@ export function buildVintageGmInventoryAnswer(
   const totalUnits = selected.reduce((total, row) => total + row.quantity, 0);
 
   return {
-    schemaVersion: '2026-08-31',
+    schemaVersion: '2026-09-05',
     kind: 'VINTAGE_GM_INVENTORY_ANSWER',
     status: !datasetReady
       ? 'DATA_NOT_LOADED'
@@ -560,6 +562,14 @@ export function buildVintageGmInventoryAnswer(
       limitsVehicleResults
     },
     rows: selected,
+    sellerListingSnapshot: {
+      state: sellerListings?.dataset?.active && sellerListings.dataset.status === 'completed' ? 'AVAILABLE' : 'DATA_NOT_LOADED',
+      snapshotDate: sellerListings?.dataset?.snapshotDate ?? null,
+      candidateCount: sellerListings?.candidates.length ?? 0,
+      truncated: sellerListings?.truncated ?? false
+    },
+    sellerListingCandidates: sellerListings?.candidates ?? [],
+    sellerListingDefinition: 'Seller-authored marketplace listing snapshot; listed quantity is not verified physical inventory, and title text does not prove identity or fitment.',
     valueDefinition: 'Sum of active Vintage source quantity multiplied by its source unit price; not resale or eBay market value.',
     readOnly: true,
     listingDraftCreated: false,

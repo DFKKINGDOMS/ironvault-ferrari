@@ -1,0 +1,300 @@
+name: Import private PartQuill seller listing snapshot
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-partquill-seller-listing-import.yml
+      - .github/operations/partquill-seller-upload-2026-08-08.pem
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: partquill-private-seller-listing-import
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-partquill-platform-westus3
+  CONTAINER_APP: ca-partquill-web-westus3
+  STORAGE_ACCOUNT: pqdata50230827
+  STORAGE_CONTAINER: partquill-seller-snapshots
+  COMPRESSED_SHA256: 6522e5199dda370878a3810102e95c3be83fa0415e6ed221882fc55d270ab4dd
+  UNCOMPRESSED_SHA256: 4e63caefd05ca5bb8fe6d55ce59fa78a8c4ae5797d64498e5f894fb8dd99e699
+  SNAPSHOT_DATE: "2026-08-08"
+  EXPECTED_ROWS: "29823"
+  UPLOAD_CERTIFICATE: .github/operations/partquill-seller-upload-2026-08-08.pem
+
+jobs:
+  issue-upload-ticket:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the public upload certificate
+        uses: actions/checkout@v4
+
+      - name: Validate the exact upload contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$COMPRESSED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$UNCOMPRESSED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SNAPSHOT_DATE" =~ ^20[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]
+          [[ "$EXPECTED_ROWS" =~ ^[1-9][0-9]{0,6}$ ]]
+          openssl x509 -in "$UPLOAD_CERTIFICATE" -noout -subject -checkend 3600 >/dev/null
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Issue encrypted exact-blob upload ticket
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ticket
+          blob_name="snapshots/${COMPRESSED_SHA256}.csv.gz"
+          storage_key=$(az storage account keys list \
+            --resource-group "$RESOURCE_GROUP" \
+            --account-name "$STORAGE_ACCOUNT" \
+            --query '[0].value' --output tsv)
+          test -n "$storage_key"
+          echo "::add-mask::$storage_key"
+          az storage container create \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$storage_key" \
+            --name "$STORAGE_CONTAINER" \
+            --public-access off \
+            --only-show-errors >/dev/null
+          expires_at=$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%MZ')
+          sas=$(az storage blob generate-sas \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$storage_key" \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "$blob_name" \
+            --permissions cw \
+            --expiry "$expires_at" \
+            --https-only \
+            --output tsv)
+          test -n "$sas"
+          sas_url="https://${STORAGE_ACCOUNT}.blob.core.windows.net/${STORAGE_CONTAINER}/${blob_name}?${sas}"
+          echo "::add-mask::$sas"
+          echo "::add-mask::$sas_url"
+          printf '%s' "$sas_url" > ticket/upload-url.txt
+          openssl cms -encrypt -binary -aes256 -outform DER \
+            -in ticket/upload-url.txt \
+            -out ticket/upload-ticket.der \
+            "$UPLOAD_CERTIFICATE"
+          rm -f ticket/upload-url.txt
+          jq -n \
+            --arg blob "$blob_name" \
+            --arg sha256 "$COMPRESSED_SHA256" \
+            --arg expiresAt "$expires_at" \
+            '{version:1,blob:$blob,compressedSha256:$sha256,expiresAt:$expiresAt,encrypted:true}' \
+            > ticket/metadata.json
+
+      - name: Upload encrypted ticket
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-seller-upload-ticket-${{ github.run_id }}
+          path: ticket/
+          if-no-files-found: error
+          retention-days: 1
+
+  import-snapshot:
+    needs: issue-upload-ticket
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the exact import code
+        uses: actions/checkout@v4
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Wait for and verify the private snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p private-snapshot import-report
+          blob_name="snapshots/${COMPRESSED_SHA256}.csv.gz"
+          storage_key=$(az storage account keys list \
+            --resource-group "$RESOURCE_GROUP" \
+            --account-name "$STORAGE_ACCOUNT" \
+            --query '[0].value' --output tsv)
+          test -n "$storage_key"
+          echo "::add-mask::$storage_key"
+          found=false
+          for attempt in $(seq 1 80); do
+            exists=$(az storage blob exists \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$storage_key" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$blob_name" \
+              --query exists --output tsv \
+              --only-show-errors 2>/dev/null || true)
+            if [ "$exists" = "true" ]; then
+              found=true
+              break
+            fi
+            echo "Waiting for encrypted-ticket upload ($attempt/80)"
+            sleep 15
+          done
+          test "$found" = "true"
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$storage_key" \
+            --container-name "$STORAGE_CONTAINER" \
+            --name "$blob_name" \
+            --file private-snapshot/active-listings.csv.gz \
+            --only-show-errors
+          echo "$COMPRESSED_SHA256  private-snapshot/active-listings.csv.gz" | sha256sum --check --strict
+
+      - name: Wait for this commit's Azure revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:8}"
+          revision=""
+          state=""
+          for attempt in $(seq 1 120); do
+            revision=$(az containerapp revision list \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$CONTAINER_APP" \
+              --query "[?contains(name, 'git-${short_sha}') && properties.active].name | [0]" \
+              --output tsv 2>/dev/null || true)
+            if [ -n "$revision" ]; then
+              state=$(az containerapp revision show \
+                --resource-group "$RESOURCE_GROUP" \
+                --name "$CONTAINER_APP" \
+                --revision "$revision" \
+                --query properties.runningState \
+                --output tsv 2>/dev/null || true)
+            fi
+            if [ -n "$revision" ] && [ "$state" = "Running" ]; then break; fi
+            echo "Waiting for deployed revision ($attempt/120)"
+            sleep 15
+          done
+          test -n "$revision"
+          test "$state" = "Running"
+
+      - name: Open the temporary OIDC import channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --revision-suffix "slopen-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=true \
+            --output none
+          fqdn=$(az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          test -n "$fqdn"
+          target_url="https://$fqdn"
+          echo "PARTQUILL_BASE_URL=$target_url" >> "$GITHUB_ENV"
+          channel_ready=false
+          for attempt in $(seq 1 30); do
+            token=$(curl --fail-with-body --silent --show-error \
+              --connect-timeout 10 --max-time 30 \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=partquill-migration" \
+              | jq -er '.value')
+            if curl --fail-with-body --silent --show-error \
+              --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $token" \
+              "$target_url/internal/migration/manifest" >/dev/null 2>&1; then
+              channel_ready=true
+              break
+            fi
+            echo "Waiting for temporary import channel ($attempt/30)"
+            sleep 10
+          done
+          test "$channel_ready" = "true"
+
+      - name: Import every sanitized seller listing row
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/import-seller-listings.py \
+            --csv private-snapshot/active-listings.csv.gz \
+            --snapshot-date "$SNAPSHOT_DATE" \
+            --expected-sha256 "$UNCOMPRESSED_SHA256" \
+            --endpoint "$PARTQUILL_BASE_URL" \
+            2>&1 | tee import-report/import.log
+
+      - name: Verify exact part and vehicle candidate recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --retry 6 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            "$PARTQUILL_BASE_URL/ready" > ready.json
+          jq -e --arg date "$SNAPSHOT_DATE" --argjson expected "$EXPECTED_ROWS" \
+            '.sellerListingSnapshot.status == "completed"
+             and .sellerListingSnapshot.active == true
+             and .sellerListingSnapshot.snapshotDate == $date
+             and .sellerListingSnapshot.importedRows == $expected' \
+            ready.json >/dev/null
+          curl --fail-with-body --silent --show-error \
+            --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            -H 'Content-Type: application/json' \
+            --data '{"command":"1996743"}' \
+            "$PARTQUILL_BASE_URL/v1/seller-ui/command-preview" > exact.json
+          jq -e '.assistantAnswer.evidence.sellerListingState == "EXACT_MATCH"
+            and .assistantAnswer.evidence.sellerListingMatches >= 1
+            and .assistantAnswer.evidence.sellerListedUnits > 0
+            and .assistantAnswer.listingDraftCreated == false
+            and .assistantAnswer.publicEbayWrite == "DISABLED"' exact.json >/dev/null
+          curl --fail-with-body --silent --show-error \
+            --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+            -H 'Content-Type: application/json' \
+            --data '{"command":"Give me all 1969 Camaro parts we have in stock"}' \
+            "$PARTQUILL_BASE_URL/v1/seller-ui/command-preview" > vehicle.json
+          jq -e '.inventoryAnswer.sellerListingSnapshot.candidateCount > 0
+            and (.inventoryAnswer.sellerListingCandidates | length) == .inventoryAnswer.sellerListingSnapshot.candidateCount
+            and (.inventoryAnswer.sellerListingCandidates | all(
+              .fitmentVerified == false and .physicalInventoryVerified == false
+            ))
+            and .inventoryAnswer.listingDraftCreated == false' vehicle.json >/dev/null
+          {
+            echo "status=verified"
+            echo "snapshot_date=$SNAPSHOT_DATE"
+            echo "rows=$EXPECTED_ROWS"
+            echo "exact_part=1996743"
+            echo "camaro_candidates=verified_nonzero"
+            echo "evidence_role=seller-authored-candidates-only"
+          } | tee import-report/summary.txt
+
+      - name: Close the temporary OIDC import channel
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --revision-suffix "slclose-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --set-env-vars MIGRATION_GITHUB_OIDC_ENABLED=false \
+            --output none
+
+      - name: Upload sanitized import evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partquill-seller-listing-import-${{ github.run_id }}
+          path: import-report/
+          if-no-files-found: warn
+          retention-days: 30

@@ -67,6 +67,10 @@ type SellerAssistantAnswer = {
     approvedImageCount: number;
     inventoryState: "NOT_REQUESTED" | "EXACT_MATCH" | "NOT_FOUND" | "DATA_NOT_LOADED";
     inventoryUnits: number;
+    sellerListingState: "NOT_REQUESTED" | "EXACT_MATCH" | "NOT_FOUND" | "DATA_NOT_LOADED";
+    sellerListingMatches: number;
+    sellerListedUnits: number;
+    sellerListingSnapshotDate: string | null;
   };
   images: Array<{
     id: string;
@@ -453,7 +457,7 @@ type VintageGmInventoryAnswerRow = {
 };
 
 type VintageGmInventoryAnswer = {
-  schemaVersion: "2026-08-31";
+  schemaVersion: "2026-09-05";
   kind: "VINTAGE_GM_INVENTORY_ANSWER";
   status: "READY" | "DATA_NOT_LOADED" | "NO_MATCHES" | "TRUNCATED" | "PARTIAL_CATALOG_COVERAGE";
   command: string;
@@ -489,6 +493,28 @@ type VintageGmInventoryAnswer = {
     limitsVehicleResults: boolean;
   };
   rows: VintageGmInventoryAnswerRow[];
+  sellerListingSnapshot: {
+    state: "AVAILABLE" | "DATA_NOT_LOADED";
+    snapshotDate: string | null;
+    candidateCount: number;
+    truncated: boolean;
+  };
+  sellerListingCandidates: Array<{
+    partNumber: string;
+    sku: string;
+    title: string;
+    listedQuantity: number;
+    soldQuantity: number;
+    currency: string;
+    askingPrice: string;
+    condition: string;
+    snapshotDate: string;
+    evidenceState: "SELLER_AUTHORED_LISTING";
+    physicalInventoryVerified: false;
+    identityVerified: false;
+    fitmentVerified: false;
+  }>;
+  sellerListingDefinition: string;
   valueDefinition: string;
   readOnly: true;
   listingDraftCreated: false;
@@ -1658,6 +1684,21 @@ function VintageInventoryAnswerPanel({
 
     <div className="inventory-answer-note"><Icon name="shield"/><div><strong>No listing was created and no launch allowance was used.</strong><p>{answer.valueDefinition}</p></div><span>No external request</span></div>
 
+    {answer.sellerListingCandidates.length > 0 && <section className="seller-listing-candidates">
+      <header><div><span>SELLER-LISTED CANDIDATES</span><h3>{answer.sellerListingCandidates.length.toLocaleString()} exact seller snapshot match{answer.sellerListingCandidates.length === 1 ? "" : "es"}</h3><p>These rows make the search useful, but remain separate from verified inventory and catalog fitment.</p></div><Badge tone="amber">Review required</Badge></header>
+      <div className="inventory-answer-table-wrap"><table className="inventory-answer-table seller-listing-table">
+        <thead><tr><th>Part number</th><th>Seller-authored title</th><th className="numeric">Listed qty</th><th className="numeric">Asking price</th><th>Evidence status</th></tr></thead>
+        <tbody>{answer.sellerListingCandidates.map((candidate, index) => <tr key={`${candidate.partNumber}-${candidate.sku}-${index}`}>
+          <td><strong>{candidate.partNumber}</strong><small>SKU {candidate.sku}</small></td>
+          <td><strong>{candidate.title}</strong><small>Seller-stated condition: {candidate.condition || "Not specified"}</small></td>
+          <td className="numeric"><strong>{candidate.listedQuantity.toLocaleString()}</strong><small>Not physical-count verified</small></td>
+          <td className="numeric"><strong>{candidate.currency === "USD" ? money(candidate.askingPrice) : `${candidate.currency} ${candidate.askingPrice}`}</strong><small>Seller asking price</small></td>
+          <td><strong>Candidate only</strong><small>Identity and fitment not catalog-verified</small></td>
+        </tr>)}</tbody>
+      </table></div>
+      <footer>Snapshot date {answer.sellerListingSnapshot.snapshotDate ?? "unavailable"}. {answer.sellerListingDefinition}</footer>
+    </section>}
+
     {answer.rows.length > 0 ? <>
       <div className="inventory-answer-controls">
         <label><span>Filter these results</span><div><Icon name="search"/><input value={filter} placeholder="Part number or description" onChange={(event) => { setFilter(event.target.value); setPage(1); }}/></div></label>
@@ -1713,6 +1754,7 @@ function SellerAssistantAnswerPanel({
       <article><span>Applications</span><strong>{answer.evidence.applicationRecordCount.toLocaleString()}</strong><small>Authorized catalog records; no inferred fitment</small></article>
       <article><span>Approved images</span><strong>{answer.evidence.approvedImageCount.toLocaleString()}</strong><small>Exact-key Ferrari-QA merchant images</small></article>
       <article><span>Inventory</span><strong>{answer.evidence.inventoryState.replaceAll("_", " ")}</strong><small>{answer.evidence.inventoryState === "EXACT_MATCH" ? `${answer.evidence.inventoryUnits.toLocaleString()} active unit${answer.evidence.inventoryUnits === 1 ? "" : "s"} on the exact key` : "Exact-key inventory lookup"}</small></article>
+      <article><span>Seller listing snapshot</span><strong>{answer.evidence.sellerListingState.replaceAll("_", " ")}</strong><small>{answer.evidence.sellerListingState === "EXACT_MATCH" ? `${answer.evidence.sellerListingMatches} exact listing row${answer.evidence.sellerListingMatches === 1 ? "" : "s"} · ${answer.evidence.sellerListedUnits.toLocaleString()} listed unit${answer.evidence.sellerListedUnits === 1 ? "" : "s"} · not physical stock` : "Exact-key seller snapshot lookup"}</small></article>
       <article><span>Action taken</span><strong>None</strong><small>No draft · no allowance · no eBay write</small></article>
     </div>
     {answer.suggestedCommands.length > 0 && <footer className="assistant-suggestions"><span>Continue with:</span><div>{answer.suggestedCommands.map((command) => <button key={command} onClick={() => onUseCommand(command)}>{command}<Icon name="arrow"/></button>)}</div></footer>}

@@ -67,6 +67,7 @@ import type { EpcImageService } from '../epc-image/service.js';
 import type { EpcArtifactKind, EpcJobRecord } from '../epc-image/types.js';
 import type { DeereCollectionPilotStore } from '../deere-collection-pilot/store.js';
 import type { ShopifyMediaCatalog } from '../shopify-media/catalog.js';
+import type { SellerListingQueryPool, SellerListingRecord } from '../seller-listings/types.js';
 
 const itemParams = z.object({ itemId: z.string().uuid() });
 const sellerParams = z.object({ sellerId: z.string().min(1) });
@@ -164,6 +165,41 @@ const vintageGmImportSchema = z.object({
   sourceTotalRows: z.number().int().min(0).max(5_000_000),
   expectedGmRows: z.number().int().min(1).max(1_000_000),
   records: z.array(vintageGmInventoryRecordSchema).min(1).max(1000),
+  complete: z.boolean().default(false)
+});
+const sellerListingRecordSchema = z.object({
+  sourceRow: z.number().int().min(2).max(5_000_000),
+  sku: z.string().max(96),
+  partNumber: z.string().regex(/^[A-Z0-9]+$/).max(64).nullable(),
+  title: z.string().trim().min(1).max(240),
+  availableQuantity: z.number().int().min(0).max(100_000_000),
+  soldQuantity: z.number().int().min(0).max(100_000_000),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  askingPrice: vintageDecimalSchema,
+  condition: z.string().max(120),
+  normalizationState: z.enum([
+    'NORMALIZED_EXACT_KEY',
+    'REJECTED_EMPTY_SKU',
+    'REJECTED_SCIENTIFIC_NOTATION',
+    'REJECTED_NO_DIGIT'
+  ]),
+  normalizationIssue: z.string().max(240).nullable()
+}).superRefine((record, context) => {
+  if (record.normalizationState === 'NORMALIZED_EXACT_KEY' && !record.partNumber) {
+    context.addIssue({ code: 'custom', path: ['partNumber'], message: 'normalized rows require a part number' });
+  }
+  if (record.normalizationState !== 'NORMALIZED_EXACT_KEY' && record.partNumber) {
+    context.addIssue({ code: 'custom', path: ['partNumber'], message: 'rejected rows cannot carry a normalized part number' });
+  }
+});
+const sellerListingImportSchema = z.object({
+  datasetId: z.string().trim().min(3).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  sourceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  sourceFileName: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._ ()-]*\.csv$/i),
+  snapshotDate: z.string().date(),
+  sourceTotalRows: z.number().int().min(0).max(5_000_000),
+  expectedRows: z.number().int().min(1).max(1_000_000),
+  records: z.array(sellerListingRecordSchema).min(1).max(1000),
   complete: z.boolean().default(false)
 });
 const migrationTableParams = z.object({ table: z.enum(MIGRATION_TABLE_NAMES) });
@@ -365,6 +401,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (request.method === 'POST' && request.url === '/internal/vintage-gm/import') return;
+    if (request.method === 'POST' && request.url === '/internal/seller-listings/import') return;
     if (request.url.startsWith('/internal/migration/')) return;
     if (request.url.startsWith('/v1/internal/deere-worker/')) return;
     if (publicPaths.some((path) => request.url.startsWith(path))) return;
@@ -590,17 +627,20 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       const { command } = listingCommandRequestSchema.parse(request.body);
       const inventoryIntent = parseVintageGmInventoryQuestion(command);
       if (inventoryIntent) {
-        const pool = store.queryVintageGmInventory
-          ? await store.queryVintageGmInventory(inventoryIntent)
-          : {
-              dataset: await store.getVintageGmStatus?.() ?? null,
-              matches: [],
-              truncated: false
-            };
+        const [pool, sellerListings] = await Promise.all([
+          store.queryVintageGmInventory
+            ? store.queryVintageGmInventory(inventoryIntent)
+            : store.getVintageGmStatus?.().then((dataset) => ({ dataset: dataset ?? null, matches: [], truncated: false }))
+              ?? Promise.resolve({ dataset: null, matches: [], truncated: false }),
+          store.querySellerListings
+            ? store.querySellerListings(inventoryIntent)
+            : store.getSellerListingStatus?.().then((dataset): SellerListingQueryPool => ({ dataset: dataset ?? null, candidates: [], truncated: false }))
+              ?? Promise.resolve({ dataset: null, candidates: [], truncated: false })
+        ]);
         return reply
           .header('cache-control', 'no-store')
           .header('x-content-type-options', 'nosniff')
-          .send({ inventoryAnswer: buildVintageGmInventoryAnswer(command, inventoryIntent, pool) });
+          .send({ inventoryAnswer: buildVintageGmInventoryAnswer(command, inventoryIntent, pool, sellerListings) });
       }
       if (isVintageGmShortlistCommand(command)) {
         const requested = vintageGmShortlistRequestedCount(command);
@@ -619,6 +659,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           let rawCatalog: GmCatalogPart | undefined;
           let merchantMedia = null;
           let exactInventoryAnswer: ReturnType<typeof buildVintageGmInventoryAnswer> | null = null;
+          let exactSellerListings: SellerListingQueryPool | null = null;
           if (partNumber) {
             try {
               rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
@@ -643,10 +684,18 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
                 request.log.warn({ error, partNumber }, 'inventory lookup unavailable for read-only assistant answer');
               }
             }
+            if (store.querySellerListings) {
+              try {
+                const exactListingIntent = parseVintageGmInventoryQuestion(`Do we have part ${partNumber} in stock?`);
+                if (exactListingIntent) exactSellerListings = await store.querySellerListings(exactListingIntent);
+              } catch (error) {
+                request.log.warn({ error, partNumber }, 'seller listing snapshot unavailable for read-only assistant answer');
+              }
+            }
           }
           const mapping = assessGmCatalogMapping(rawCatalog, partNumber);
           const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
-          const evidence = buildSellerAssistantEvidence(partNumber, catalog, mapping, merchantMedia, exactInventoryAnswer);
+          const evidence = buildSellerAssistantEvidence(partNumber, catalog, mapping, merchantMedia, exactInventoryAnswer, exactSellerListings);
           let assistantAnswer;
           if (sellerAssistant?.available) {
             try {
@@ -924,6 +973,33 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       status
     });
   });
+  app.post('/internal/seller-listings/import', { bodyLimit: 16 * 1024 * 1024 }, async (request, reply) => {
+    const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const authorized = secureTokenMatches(supplied, config.GM_IMPORT_TOKEN)
+      || (config.MIGRATION_GITHUB_OIDC_ENABLED && await verifyGithubMigrationOidcToken(supplied));
+    if (!authorized || !store.importSellerListingRecords) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'not found' } });
+    }
+    const payload = sellerListingImportSchema.parse(request.body);
+    const status = await store.importSellerListingRecords(
+      payload.records as SellerListingRecord[],
+      {
+        datasetId: payload.datasetId,
+        sourceSha256: payload.sourceSha256,
+        sourceFileName: payload.sourceFileName,
+        snapshotDate: payload.snapshotDate,
+        sourceTotalRows: payload.sourceTotalRows,
+        expectedRows: payload.expectedRows,
+        complete: payload.complete
+      }
+    );
+    return reply.header('cache-control', 'no-store').send({
+      datasetId: payload.datasetId,
+      imported: payload.records.length,
+      complete: payload.complete,
+      status
+    });
+  });
   const migrationAuthorized = async (authorization: string | undefined) => {
     const token = authorization?.replace(/^Bearer\s+/i, '');
     if (secureTokenMatches(token, config.MIGRATION_TRANSFER_TOKEN)) return true;
@@ -1031,9 +1107,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.get('/ready', async (_request, reply) => {
     try {
       await store.ping?.();
-      const [gmCatalog, vintageGm, shopifyMediaStatus] = await Promise.all([
+      const [gmCatalog, vintageGm, sellerListings, shopifyMediaStatus] = await Promise.all([
         store.getGmCatalogStatus?.(),
         store.getVintageGmStatus?.(),
+        store.getSellerListingStatus?.(),
         shopifyMedia?.status().catch(() => null)
       ]);
       return {
@@ -1117,6 +1194,25 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           rejectedRows: 0,
           distinctPartNumbers: 0,
           catalogKeyMatches: 0
+        },
+        sellerListingSnapshot: sellerListings ? {
+          status: sellerListings.status,
+          active: sellerListings.active,
+          snapshotDate: sellerListings.snapshotDate,
+          importedRows: sellerListings.importedRows,
+          normalizedRows: sellerListings.normalizedRows,
+          rejectedRows: sellerListings.rejectedRows,
+          distinctPartNumbers: sellerListings.distinctPartNumbers,
+          evidenceRole: 'SELLER_AUTHORED_CANDIDATES_ONLY'
+        } : {
+          status: 'not_started',
+          active: false,
+          snapshotDate: null,
+          importedRows: 0,
+          normalizedRows: 0,
+          rejectedRows: 0,
+          distinctPartNumbers: 0,
+          evidenceRole: 'SELLER_AUTHORED_CANDIDATES_ONLY'
         },
         oemResearch: {
           mode: config.OEM_RESEARCH_MODE,

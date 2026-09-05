@@ -1,5 +1,6 @@
 import type { GmCatalogApplication, GmCatalogPart } from '../catalog/gm-catalog.js';
 import type { GmCatalogMappingState } from '../catalog/gm-catalog-quality.js';
+import type { SellerListingCandidate } from '../seller-listings/types.js';
 
 export const VINTAGE_GM_BRANDS = [
   'GM NA',
@@ -154,7 +155,7 @@ export interface VintageGmInventoryAnswerRow {
 }
 
 export interface VintageGmInventoryAnswer {
-  schemaVersion: '2026-08-31';
+  schemaVersion: '2026-09-05';
   kind: 'VINTAGE_GM_INVENTORY_ANSWER';
   status: VintageGmInventoryAnswerStatus;
   command: string;
@@ -175,6 +176,14 @@ export interface VintageGmInventoryAnswer {
     limitsVehicleResults: boolean;
   };
   rows: VintageGmInventoryAnswerRow[];
+  sellerListingSnapshot: {
+    state: 'AVAILABLE' | 'DATA_NOT_LOADED';
+    snapshotDate: string | null;
+    candidateCount: number;
+    truncated: boolean;
+  };
+  sellerListingCandidates: SellerListingCandidate[];
+  sellerListingDefinition: 'Seller-authored marketplace listing snapshot; listed quantity is not verified physical inventory, and title text does not prove identity or fitment.';
   valueDefinition: 'Sum of active Vintage source quantity multiplied by its source unit price; not resale or eBay market value.';
   readOnly: true;
   listingDraftCreated: false;

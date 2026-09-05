@@ -3179,6 +3179,29 @@ input:focus-visible {
 .inventory-answer-note p { margin: 3px 0 0; color: #52685a; font-size: 9px; line-height: 1.45; }
 .inventory-answer-note > span { color: #52705b; font-size: 8px; font-weight: 850; text-transform: uppercase; white-space: nowrap; }
 
+.seller-listing-candidates {
+  margin-top: 14px;
+  border: 1px solid #d9bd78;
+  background: #fffaf0;
+}
+.seller-listing-candidates > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #ead8aa;
+}
+.seller-listing-candidates > header span { color: #9a5918; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+.seller-listing-candidates > header h3 { margin: 4px 0 2px; font-size: 17px; }
+.seller-listing-candidates > header p { margin: 0; color: var(--muted); font-size: 9px; }
+.seller-listing-candidates > footer { padding: 10px 16px; border-top: 1px solid #ead8aa; color: #745e3d; font-size: 8px; line-height: 1.5; }
+.seller-listing-table th:nth-child(1) { width: 15%; }
+.seller-listing-table th:nth-child(2) { width: 42%; }
+.seller-listing-table th:nth-child(3) { width: 12%; }
+.seller-listing-table th:nth-child(4) { width: 14%; }
+.seller-listing-table th:nth-child(5) { width: 17%; }
+
 .inventory-answer-controls {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) 180px 180px auto;

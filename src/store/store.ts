@@ -25,6 +25,12 @@ import type {
   MigrationManifest,
   MigrationTableName
 } from './migration-transfer.js';
+import type {
+  SellerListingDatasetStatus,
+  SellerListingImportOptions,
+  SellerListingQueryPool,
+  SellerListingRecord
+} from '../seller-listings/types.js';
 
 export interface EbayLeafCategory {
   categoryId: string;
@@ -77,6 +83,9 @@ export interface Store {
   getVintageGmStatus?(): Promise<VintageGmDatasetStatus>;
   listVintageGmCatalogMatches?(limit: number): Promise<VintageGmCatalogMatchPool>;
   queryVintageGmInventory?(intent: VintageGmInventoryQuestionIntent): Promise<VintageGmInventoryQuestionPool>;
+  importSellerListingRecords?(records: SellerListingRecord[], options: SellerListingImportOptions): Promise<SellerListingDatasetStatus>;
+  getSellerListingStatus?(): Promise<SellerListingDatasetStatus>;
+  querySellerListings?(intent: VintageGmInventoryQuestionIntent): Promise<SellerListingQueryPool>;
   getEbayReferenceCache(partNumber: string): Promise<EbayReferenceCacheRecord | undefined>;
   saveEbayReferenceCache(record: EbayReferenceCacheRecord): Promise<void>;
   deleteEbayReferenceCache(partNumber: string): Promise<void>;

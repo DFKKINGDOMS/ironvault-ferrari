@@ -7,7 +7,8 @@ const repositoryOwnerId = '98978443';
 const migrationRef = 'refs/heads/main';
 const migrationWorkflowRefs = new Set([
   'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-data-migrate.yml@refs/heads/main',
-  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-gm-catalog-import.yml@refs/heads/main'
+  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-gm-catalog-import.yml@refs/heads/main',
+  'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-seller-listing-import.yml@refs/heads/main'
 ]);
 const mediaMigrationAudience = 'partquill-media-migration';
 const mediaMigrationRepositoryId = '1316643567';
@@ -25,15 +26,19 @@ export async function verifyGithubMigrationOidcToken(token: string | undefined):
   if (!token) return false;
   try {
     const { payload } = await jwtVerify(token, githubJwks, { issuer, audience });
-    return payload.repository_id === repositoryId
-      && payload.repository_owner_id === repositoryOwnerId
-      && payload.repository === 'DFKKINGDOMS/ironvault-ferrari'
-      && payload.ref === migrationRef
-      && typeof payload.workflow_ref === 'string'
-      && migrationWorkflowRefs.has(payload.workflow_ref);
+    return isTrustedGithubMigrationClaims(payload);
   } catch {
     return false;
   }
+}
+
+export function isTrustedGithubMigrationClaims(payload: JWTPayload): boolean {
+  return payload.repository_id === repositoryId
+    && payload.repository_owner_id === repositoryOwnerId
+    && payload.repository === 'DFKKINGDOMS/ironvault-ferrari'
+    && payload.ref === migrationRef
+    && typeof payload.workflow_ref === 'string'
+    && migrationWorkflowRefs.has(payload.workflow_ref);
 }
 
 export function isTrustedGithubMediaMigrationClaims(payload: JWTPayload): boolean {

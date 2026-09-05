@@ -36,6 +36,13 @@ import {
   resolveVintageGmIntentFromCatalogModels,
   vintageGmModelSeriesAliases
 } from '../vintage-gm/inventory-question.js';
+import type {
+  SellerListingDatasetStatus,
+  SellerListingImportOptions,
+  SellerListingQueryPool,
+  SellerListingRecord
+} from '../seller-listings/types.js';
+import { MAX_SELLER_LISTING_CANDIDATES } from '../seller-listings/types.js';
 import { postgresPoolConfig, type DatabaseAuthMode } from './postgres-connection.js';
 import {
   MIGRATION_TABLE_NAMES,
@@ -982,6 +989,242 @@ export class PostgresStore implements Store {
       };
     });
     return { dataset, matches, truncated: overflow, resolvedIntent };
+  }
+
+  async importSellerListingRecords(
+    records: SellerListingRecord[],
+    options: SellerListingImportOptions
+  ): Promise<SellerListingDatasetStatus> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const importState = await client.query(
+        `INSERT INTO partquill.seller_listing_imports(
+           dataset_id,source_sha256,source_file_name,snapshot_date,source_total_rows,expected_rows,status,active,updated_at
+         ) VALUES($1,$2,$3,$4,$5,$6,'running',false,now())
+         ON CONFLICT(dataset_id) DO UPDATE SET status='running',updated_at=now(),error_detail=NULL
+         WHERE partquill.seller_listing_imports.source_sha256=EXCLUDED.source_sha256
+           AND partquill.seller_listing_imports.source_file_name=EXCLUDED.source_file_name
+           AND partquill.seller_listing_imports.snapshot_date=EXCLUDED.snapshot_date
+           AND partquill.seller_listing_imports.source_total_rows=EXCLUDED.source_total_rows
+           AND partquill.seller_listing_imports.expected_rows=EXCLUDED.expected_rows
+         RETURNING dataset_id`,
+        [
+          options.datasetId,
+          options.sourceSha256,
+          options.sourceFileName,
+          options.snapshotDate,
+          options.sourceTotalRows,
+          options.expectedRows
+        ]
+      );
+      if (importState.rowCount !== 1) {
+        throw new Error('Seller listing dataset metadata does not match the existing import');
+      }
+      if (records.length) {
+        await client.query(
+          `INSERT INTO partquill.seller_listing_rows(
+             dataset_id,source_row,sku,part_number,title,available_quantity,sold_quantity,currency,
+             asking_price,condition,normalization_state,normalization_issue,imported_at
+           )
+           SELECT $1,item."sourceRow",item.sku,item."partNumber",item.title,item."availableQuantity",
+             item."soldQuantity",item.currency,item."askingPrice"::numeric,item.condition,
+             item."normalizationState",item."normalizationIssue",now()
+           FROM jsonb_to_recordset($2::jsonb) AS item(
+             "sourceRow" integer,
+             sku text,
+             "partNumber" text,
+             title text,
+             "availableQuantity" integer,
+             "soldQuantity" integer,
+             currency text,
+             "askingPrice" text,
+             condition text,
+             "normalizationState" text,
+             "normalizationIssue" text
+           )
+           ON CONFLICT(dataset_id,source_row) DO UPDATE SET
+             sku=EXCLUDED.sku,
+             part_number=EXCLUDED.part_number,
+             title=EXCLUDED.title,
+             available_quantity=EXCLUDED.available_quantity,
+             sold_quantity=EXCLUDED.sold_quantity,
+             currency=EXCLUDED.currency,
+             asking_price=EXCLUDED.asking_price,
+             condition=EXCLUDED.condition,
+             normalization_state=EXCLUDED.normalization_state,
+             normalization_issue=EXCLUDED.normalization_issue,
+             imported_at=now()`,
+          [options.datasetId, JSON.stringify(records)]
+        );
+      }
+      const statistics = await client.query<{
+        imported_rows: number;
+        normalized_rows: number;
+        rejected_rows: number;
+        distinct_part_numbers: number;
+      }>(
+        `SELECT
+           count(*)::integer AS imported_rows,
+           count(*) FILTER (WHERE normalization_state='NORMALIZED_EXACT_KEY')::integer AS normalized_rows,
+           count(*) FILTER (WHERE normalization_state<>'NORMALIZED_EXACT_KEY')::integer AS rejected_rows,
+           count(DISTINCT part_number) FILTER (WHERE part_number IS NOT NULL)::integer AS distinct_part_numbers
+         FROM partquill.seller_listing_rows
+         WHERE dataset_id=$1`,
+        [options.datasetId]
+      );
+      const stats = statistics.rows[0];
+      if (!stats) throw new Error('Seller listing import statistics were unavailable');
+      if (options.complete && stats.imported_rows !== options.expectedRows) {
+        throw new Error(`Seller listing import is incomplete: expected ${options.expectedRows}, found ${stats.imported_rows}`);
+      }
+      if (options.complete) {
+        await client.query(
+          'UPDATE partquill.seller_listing_imports SET active=false,updated_at=now() WHERE active=true AND dataset_id<>$1',
+          [options.datasetId]
+        );
+      }
+      await client.query(
+        `UPDATE partquill.seller_listing_imports SET
+           imported_rows=$2,normalized_rows=$3,rejected_rows=$4,distinct_part_numbers=$5,
+           status=$6,active=$7,completed_at=CASE WHEN $7 THEN now() ELSE completed_at END,
+           updated_at=now(),error_detail=NULL
+         WHERE dataset_id=$1`,
+        [
+          options.datasetId,
+          stats.imported_rows,
+          stats.normalized_rows,
+          stats.rejected_rows,
+          stats.distinct_part_numbers,
+          options.complete ? 'completed' : 'running',
+          options.complete ?? false
+        ]
+      );
+      await client.query('COMMIT');
+      return await this.getSellerListingStatus();
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getSellerListingStatus(): Promise<SellerListingDatasetStatus> {
+    const result = await this.pool.query<{
+      dataset_id: string;
+      status: SellerListingDatasetStatus['status'];
+      active: boolean;
+      source_sha256: string;
+      source_file_name: string;
+      snapshot_date: Date | string;
+      source_total_rows: number;
+      expected_rows: number;
+      imported_rows: number;
+      normalized_rows: number;
+      rejected_rows: number;
+      distinct_part_numbers: number;
+      completed_at: Date | string | null;
+      updated_at: Date | string;
+    }>(
+      `SELECT dataset_id,status,active,source_sha256,source_file_name,snapshot_date,source_total_rows,
+         expected_rows,imported_rows,normalized_rows,rejected_rows,distinct_part_numbers,completed_at,updated_at
+       FROM partquill.seller_listing_imports
+       ORDER BY active DESC,updated_at DESC
+       LIMIT 1`
+    );
+    const row = result.rows[0];
+    if (!row) return {
+      datasetId: null,
+      status: 'not_started',
+      active: false,
+      sourceSha256: null,
+      sourceFileName: null,
+      snapshotDate: null,
+      sourceTotalRows: 0,
+      expectedRows: 0,
+      importedRows: 0,
+      normalizedRows: 0,
+      rejectedRows: 0,
+      distinctPartNumbers: 0,
+      completedAt: null,
+      updatedAt: null
+    };
+    const iso = (value: Date | string | null) => value
+      ? (value instanceof Date ? value : new Date(value)).toISOString()
+      : null;
+    const dateOnly = row.snapshot_date instanceof Date
+      ? row.snapshot_date.toISOString().slice(0, 10)
+      : String(row.snapshot_date).slice(0, 10);
+    return {
+      datasetId: row.dataset_id,
+      status: row.status,
+      active: row.active,
+      sourceSha256: row.source_sha256,
+      sourceFileName: row.source_file_name,
+      snapshotDate: dateOnly,
+      sourceTotalRows: row.source_total_rows,
+      expectedRows: row.expected_rows,
+      importedRows: row.imported_rows,
+      normalizedRows: row.normalized_rows,
+      rejectedRows: row.rejected_rows,
+      distinctPartNumbers: row.distinct_part_numbers,
+      completedAt: iso(row.completed_at),
+      updatedAt: iso(row.updated_at)
+    };
+  }
+
+  async querySellerListings(intent: VintageGmInventoryQuestionIntent): Promise<SellerListingQueryPool> {
+    const dataset = await this.getSellerListingStatus();
+    if (!dataset.datasetId || !dataset.active || dataset.status !== 'completed' || !dataset.snapshotDate) {
+      return { dataset, candidates: [], truncated: false };
+    }
+    const searchText = [
+      intent.year,
+      intent.model ?? intent.make,
+      intent.partQuery
+    ].filter((value): value is string | number => value != null && value !== '').join(' ');
+    if (!intent.partNumber && !searchText) return { dataset, candidates: [], truncated: false };
+    const result = await this.pool.query<{
+      part_number: string;
+      sku: string;
+      title: string;
+      available_quantity: number;
+      sold_quantity: number;
+      currency: string;
+      asking_price: string;
+      condition: string;
+    }>(
+      `SELECT part_number,sku,title,available_quantity,sold_quantity,currency,asking_price::text,condition
+       FROM partquill.seller_listing_rows
+       WHERE dataset_id=$1
+         AND part_number IS NOT NULL
+         AND available_quantity>0
+         AND ($2::text IS NULL OR part_number=$2)
+         AND ($2::text IS NOT NULL OR title_search @@ plainto_tsquery('simple',$3))
+       ORDER BY available_quantity DESC,part_number ASC,source_row ASC
+       LIMIT $4`,
+      [dataset.datasetId, intent.partNumber, searchText, MAX_SELLER_LISTING_CANDIDATES + 1]
+    );
+    return {
+      dataset,
+      candidates: result.rows.slice(0, MAX_SELLER_LISTING_CANDIDATES).map((row) => ({
+        partNumber: row.part_number,
+        sku: row.sku,
+        title: row.title,
+        listedQuantity: row.available_quantity,
+        soldQuantity: row.sold_quantity,
+        currency: row.currency,
+        askingPrice: row.asking_price,
+        condition: row.condition,
+        snapshotDate: dataset.snapshotDate!,
+        evidenceState: 'SELLER_AUTHORED_LISTING',
+        physicalInventoryVerified: false,
+        identityVerified: false,
+        fitmentVerified: false
+      })),
+      truncated: result.rows.length > MAX_SELLER_LISTING_CANDIDATES
+    };
   }
 
   async createItem(item: ItemRecord): Promise<void> {

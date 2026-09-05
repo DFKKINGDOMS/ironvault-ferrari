@@ -149,7 +149,11 @@ describe('HTTP contract', () => {
             applicationRecordCount: evidence.catalog?.totalApplicationRecords ?? 0,
             approvedImageCount: evidence.merchantMedia?.approvedImageCount ?? 0,
             inventoryState: evidence.inventory?.state ?? 'NOT_REQUESTED',
-            inventoryUnits: evidence.inventory?.quantity ?? 0
+            inventoryUnits: evidence.inventory?.quantity ?? 0,
+            sellerListingState: evidence.sellerListing?.state ?? 'NOT_REQUESTED',
+            sellerListingMatches: evidence.sellerListing?.matches.length ?? 0,
+            sellerListedUnits: evidence.sellerListing?.matches.reduce((total, row) => total + row.listedQuantity, 0) ?? 0,
+            sellerListingSnapshotDate: evidence.sellerListing?.snapshotDate ?? null
           },
           images: evidence.merchantMedia?.images ?? [],
           suggestedCommands: ['What does part 10110989 fit?'],
