@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: partquill-azure-astra-enterprise
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   astra_primary:

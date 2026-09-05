@@ -91,7 +91,7 @@ The workflow intentionally separates authority and failure recovery:
 2. If that job fails or times out, recovery and rescue passes run in fresh jobs with clean workspaces and newly issued Azure sessions. A failed model process therefore cannot prevent its fallback from starting.
 3. A fresh job with no Azure credentials reapplies the first successful patch and runs the enterprise guardrails, production dependency audit, lint, tests, server build, and web build.
 4. A final job can commit only the validated patch and open a pull request. It cannot run repository code, and the pull request is never auto-merged.
-5. A separate `workflow_run` watchdog automatically reruns failed jobs and their dependents, up to three workflow attempts, for infrastructure, timeout, or transient-service failures.
+5. A separate `workflow_run` watchdog automatically reruns failed jobs and their dependents, up to three workflow attempts, for infrastructure, timeout, or transient-service failures. A newly merged workflow or prompt revision supersedes any obsolete in-progress pass so stale automation cannot block its replacement.
 
 Astra cannot modify the workflows, safety contract, agent contract, environment template, guard script, or bulk catalog data. It receives no eBay credentials and has no production-write authority. Start a new enterprise improvement pass from GitHub Actions when desired; ordinary attempt failures recover automatically, and every successful patch still requires review through its generated pull request.
 
