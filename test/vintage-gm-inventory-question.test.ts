@@ -258,4 +258,64 @@ describe('Vintage inventory answer', () => {
     });
     expect(answer.valueDefinition).toContain('not resale or eBay market value');
   });
+
+  it('returns an exact inventory row even when catalog evidence is missing', () => {
+    const exactIntent = parseVintageGmInventoryQuestion('Do we have part 1996743 in stock?')!;
+    const answer = buildVintageGmInventoryAnswer('1996743', exactIntent, {
+      dataset: { ...dataset, distinctPartNumbers: 1, catalogKeyMatches: 0 },
+      truncated: false,
+      matches: [{
+        inventory: inventory('1996743', 'SECONDARY ACTUATOR VALVE', 3, '25.0000'),
+        sourceInventoryValue: '75.0000',
+        catalog: null,
+        matchedApplications: []
+      }]
+    });
+
+    expect(answer).toMatchObject({
+      status: 'READY',
+      returnedCount: 1,
+      summary: { distinctParts: 1, totalUnits: 3, complete: true },
+      catalogCoverage: {
+        matchedInventoryKeys: 0,
+        totalInventoryKeys: 1,
+        percent: 0,
+        complete: false,
+        limitsVehicleResults: false
+      },
+      rows: [{
+        partNumber: '1996743',
+        quantity: 3,
+        description: 'Secondary Actuator Valve',
+        fitment: { evidenceState: 'UNVERIFIED', applicationCount: 0 },
+        catalogImage: { state: 'UNAVAILABLE' }
+      }]
+    });
+  });
+
+  it('labels vehicle-wide results partial when most inventory keys lack catalog evidence', () => {
+    const answer = buildVintageGmInventoryAnswer('Give me all 1969 Camaro parts we have in stock', {
+      ...intent,
+      year: 1969,
+      model: 'Camaro',
+      vehicleText: '1969 Camaro'
+    }, {
+      dataset: { ...dataset, distinctPartNumbers: 39_376, catalogKeyMatches: 1_876 },
+      truncated: false,
+      matches: []
+    });
+
+    expect(answer).toMatchObject({
+      status: 'PARTIAL_CATALOG_COVERAGE',
+      returnedCount: 0,
+      summary: { complete: false },
+      catalogCoverage: {
+        matchedInventoryKeys: 1_876,
+        totalInventoryKeys: 39_376,
+        percent: 4.76,
+        complete: false,
+        limitsVehicleResults: true
+      }
+    });
+  });
 });

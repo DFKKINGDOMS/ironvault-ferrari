@@ -339,9 +339,9 @@ export class MemoryStore implements Store {
 
     const matches: VintageGmInventoryQuestionMatch[] = [];
     for (const [partNumber, records] of grouped) {
-      const catalog = this.gmCatalog.get(partNumber);
-      if (!catalog) continue;
-      const matchedApplications = (catalog.applications ?? []).filter((application) => matchesVintageVehicleApplication(application, resolvedIntent));
+      const catalog = this.gmCatalog.get(partNumber) ?? null;
+      if (!catalog && (resolvedIntent.year || resolvedIntent.make || resolvedIntent.model)) continue;
+      const matchedApplications = (catalog?.applications ?? []).filter((application) => matchesVintageVehicleApplication(application, resolvedIntent));
       if ((resolvedIntent.year || resolvedIntent.make || resolvedIntent.model) && matchedApplications.length === 0) continue;
       const numericMinRecord = (field: 'sourcePrice' | 'sourceWeight') =>
         [...records].sort((left, right) => Number(left[field]) - Number(right[field]))[0]?.[field] ?? '0';
@@ -364,7 +364,7 @@ export class MemoryStore implements Store {
           recordCount: records.length
         },
         sourceInventoryValue: records.reduce((total, record) => total + (record.quantity * Number(record.sourcePrice)), 0).toFixed(4),
-        catalog: clone(catalog),
+        catalog: catalog ? clone(catalog) : null,
         matchedApplications: clone(matchedApplications)
       };
       if (!matchesVintagePartQuery(candidate.catalog, candidate.inventory, resolvedIntent)) continue;

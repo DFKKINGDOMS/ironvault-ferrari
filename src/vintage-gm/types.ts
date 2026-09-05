@@ -107,7 +107,7 @@ export interface VintageGmInventoryQuestionIntent {
 export interface VintageGmInventoryQuestionMatch {
   inventory: VintageGmCatalogInventory;
   sourceInventoryValue: string;
-  catalog: GmCatalogPart;
+  catalog: GmCatalogPart | null;
   matchedApplications: GmCatalogApplication[];
 }
 
@@ -122,7 +122,8 @@ export type VintageGmInventoryAnswerStatus =
   | 'READY'
   | 'DATA_NOT_LOADED'
   | 'NO_MATCHES'
-  | 'TRUNCATED';
+  | 'TRUNCATED'
+  | 'PARTIAL_CATALOG_COVERAGE';
 
 export interface VintageGmInventoryAnswerRow {
   rank: number;
@@ -148,7 +149,7 @@ export interface VintageGmInventoryAnswerRow {
     label: string;
     applicationCount: number;
     sourcePages: number[];
-    evidenceState: 'CATALOG_STATED' | 'CATALOG_DERIVED_MODEL';
+    evidenceState: 'CATALOG_STATED' | 'CATALOG_DERIVED_MODEL' | 'UNVERIFIED';
   };
 }
 
@@ -165,6 +166,13 @@ export interface VintageGmInventoryAnswer {
     totalUnits: number;
     sourceInventoryValue: string;
     complete: boolean;
+  };
+  catalogCoverage: {
+    matchedInventoryKeys: number;
+    totalInventoryKeys: number;
+    percent: number;
+    complete: boolean;
+    limitsVehicleResults: boolean;
   };
   rows: VintageGmInventoryAnswerRow[];
   valueDefinition: 'Sum of active Vintage source quantity multiplied by its source unit price; not resale or eBay market value.';

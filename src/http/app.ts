@@ -618,6 +618,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           const partNumber = findPartNumber(command);
           let rawCatalog: GmCatalogPart | undefined;
           let merchantMedia = null;
+          let exactInventoryAnswer: ReturnType<typeof buildVintageGmInventoryAnswer> | null = null;
           if (partNumber) {
             try {
               rawCatalog = await store.lookupGmCatalogPart?.(partNumber);
@@ -631,10 +632,21 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
                 request.log.warn({ error, partNumber }, 'merchant media lookup unavailable for read-only assistant answer');
               }
             }
+            if (store.queryVintageGmInventory) {
+              try {
+                const exactInventoryIntent = parseVintageGmInventoryQuestion(`Do we have part ${partNumber} in stock?`);
+                if (exactInventoryIntent) {
+                  const exactInventoryPool = await store.queryVintageGmInventory(exactInventoryIntent);
+                  exactInventoryAnswer = buildVintageGmInventoryAnswer(command, exactInventoryIntent, exactInventoryPool);
+                }
+              } catch (error) {
+                request.log.warn({ error, partNumber }, 'inventory lookup unavailable for read-only assistant answer');
+              }
+            }
           }
           const mapping = assessGmCatalogMapping(rawCatalog, partNumber);
           const catalog = normalizeGmCatalogPart(rawCatalog, partNumber);
-          const evidence = buildSellerAssistantEvidence(partNumber, catalog, mapping, merchantMedia);
+          const evidence = buildSellerAssistantEvidence(partNumber, catalog, mapping, merchantMedia, exactInventoryAnswer);
           let assistantAnswer;
           if (sellerAssistant?.available) {
             try {

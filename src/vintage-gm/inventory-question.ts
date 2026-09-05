@@ -300,13 +300,13 @@ export function parseVintageGmInventoryQuestion(command: string): VintageGmInven
 }
 
 export function matchesVintagePartQuery(
-  catalog: GmCatalogPart,
+  catalog: GmCatalogPart | null,
   inventory: VintageGmCatalogInventory,
   intent: VintageGmInventoryQuestionIntent
 ): boolean {
   if (intent.partNumber && normalizedWords(inventory.partNumber) !== normalizedWords(intent.partNumber)) return false;
   if (intent.partSearchGroups.length === 0) return true;
-  const applicationPartText = (catalog.applications ?? []).map((application) => [
+  const applicationPartText = (catalog?.applications ?? []).map((application) => [
     application.partName,
     application.description,
     application.groupHeading,
@@ -315,9 +315,9 @@ export function matchesVintagePartQuery(
   const searchable = normalizedWords([
     inventory.productName,
     ...inventory.descriptions,
-    catalog.productType,
-    catalog.description,
-    catalog.catalogGroup,
+    catalog?.productType,
+    catalog?.description,
+    catalog?.catalogGroup,
     applicationPartText
   ].filter(Boolean).join(' '));
   return intent.partSearchGroups.every((alternatives) =>
@@ -407,9 +407,12 @@ export function matchesVintageVehicleApplication(
 }
 
 function catalogImage(
-  catalog: GmCatalogPart,
+  catalog: GmCatalogPart | null,
   sourcePages: number[]
 ): VintageGmInventoryAnswerRow['catalogImage'] {
+  if (!catalog) {
+    return { state: 'UNAVAILABLE', url: null, pageId: null, calloutId: null, label: 'Catalog image unavailable' };
+  }
   if (catalog.calloutEvidence?.annotatedImageUrl) {
     return {
       state: 'EXACT_CALLOUT',
@@ -490,7 +493,10 @@ export function buildVintageGmInventoryAnswer(
       rank: 0,
       partNumber: match.inventory.partNumber,
       sku: match.inventory.sku,
-      description: displayDescription(match.inventory.descriptions, match.catalog.description ?? match.catalog.productType),
+      description: displayDescription(
+        match.inventory.descriptions,
+        match.catalog?.description ?? match.catalog?.productType ?? match.inventory.productName
+      ),
       alternateDescriptions: match.inventory.descriptions.slice(1).map((description) => titleCase(description)),
       brands: match.inventory.brands,
       quantity: match.inventory.quantity,
@@ -501,10 +507,10 @@ export function buildVintageGmInventoryAnswer(
       sourceWeightMax: match.inventory.sourceWeightMax,
       catalogImage: catalogImage(match.catalog, sourcePages),
       fitment: {
-        label,
+        label: match.catalog ? label : 'Fitment not verified',
         applicationCount: applications.length,
         sourcePages,
-        evidenceState: modelDerived ? 'CATALOG_DERIVED_MODEL' : 'CATALOG_STATED'
+        evidenceState: !match.catalog ? 'UNVERIFIED' : modelDerived ? 'CATALOG_DERIVED_MODEL' : 'CATALOG_STATED'
       }
     };
   }).filter((row) => row.fitment.applicationCount > 0 || (!resolvedIntent.year && !resolvedIntent.make && !resolvedIntent.model));
@@ -514,13 +520,26 @@ export function buildVintageGmInventoryAnswer(
     .map((row, index) => ({ ...row, rank: index + 1 }));
   const truncated = pool.truncated || selected.length < ordered.length;
   const datasetReady = Boolean(pool.dataset?.active && pool.dataset.status === 'completed');
+  const totalInventoryKeys = pool.dataset?.distinctPartNumbers ?? 0;
+  const matchedInventoryKeys = pool.dataset?.catalogKeyMatches ?? 0;
+  const catalogCoverageComplete = totalInventoryKeys > 0 && matchedInventoryKeys >= totalInventoryKeys;
+  const limitsVehicleResults = Boolean(resolvedIntent.year || resolvedIntent.make || resolvedIntent.model)
+    && !catalogCoverageComplete;
   const value = selected.reduce((total, row) => total + Number(row.sourceInventoryValue), 0);
   const totalUnits = selected.reduce((total, row) => total + row.quantity, 0);
 
   return {
     schemaVersion: '2026-08-31',
     kind: 'VINTAGE_GM_INVENTORY_ANSWER',
-    status: !datasetReady ? 'DATA_NOT_LOADED' : selected.length === 0 ? 'NO_MATCHES' : truncated ? 'TRUNCATED' : 'READY',
+    status: !datasetReady
+      ? 'DATA_NOT_LOADED'
+      : limitsVehicleResults
+          ? 'PARTIAL_CATALOG_COVERAGE'
+        : truncated
+          ? 'TRUNCATED'
+          : selected.length === 0
+            ? 'NO_MATCHES'
+            : 'READY',
     command,
     intent: resolvedIntent,
     dataset: pool.dataset,
@@ -529,7 +548,16 @@ export function buildVintageGmInventoryAnswer(
       distinctParts: selected.length,
       totalUnits,
       sourceInventoryValue: value.toFixed(4),
-      complete: !truncated
+      complete: !truncated && !limitsVehicleResults
+    },
+    catalogCoverage: {
+      matchedInventoryKeys,
+      totalInventoryKeys,
+      percent: totalInventoryKeys > 0
+        ? Number(((matchedInventoryKeys / totalInventoryKeys) * 100).toFixed(2))
+        : 0,
+      complete: catalogCoverageComplete,
+      limitsVehicleResults
     },
     rows: selected,
     valueDefinition: 'Sum of active Vintage source quantity multiplied by its source unit price; not resale or eBay market value.',

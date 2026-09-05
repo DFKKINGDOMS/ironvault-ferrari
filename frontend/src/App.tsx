@@ -65,6 +65,8 @@ type SellerAssistantAnswer = {
     sourcePages: number[];
     applicationRecordCount: number;
     approvedImageCount: number;
+    inventoryState: "NOT_REQUESTED" | "EXACT_MATCH" | "NOT_FOUND" | "DATA_NOT_LOADED";
+    inventoryUnits: number;
   };
   images: Array<{
     id: string;
@@ -446,14 +448,14 @@ type VintageGmInventoryAnswerRow = {
     label: string;
     applicationCount: number;
     sourcePages: number[];
-    evidenceState: "CATALOG_STATED" | "CATALOG_DERIVED_MODEL";
+    evidenceState: "CATALOG_STATED" | "CATALOG_DERIVED_MODEL" | "UNVERIFIED";
   };
 };
 
 type VintageGmInventoryAnswer = {
   schemaVersion: "2026-08-31";
   kind: "VINTAGE_GM_INVENTORY_ANSWER";
-  status: "READY" | "DATA_NOT_LOADED" | "NO_MATCHES" | "TRUNCATED";
+  status: "READY" | "DATA_NOT_LOADED" | "NO_MATCHES" | "TRUNCATED" | "PARTIAL_CATALOG_COVERAGE";
   command: string;
   intent: {
     kind: "VINTAGE_GM_INVENTORY_QUESTION";
@@ -478,6 +480,13 @@ type VintageGmInventoryAnswer = {
     totalUnits: number;
     sourceInventoryValue: string;
     complete: boolean;
+  };
+  catalogCoverage: {
+    matchedInventoryKeys: number;
+    totalInventoryKeys: number;
+    percent: number;
+    complete: boolean;
+    limitsVehicleResults: boolean;
   };
   rows: VintageGmInventoryAnswerRow[];
   valueDefinition: string;
@@ -1579,6 +1588,18 @@ function VintageInventoryAnswerPanel({
     : answer.intent.partQuery
       ? `${answer.intent.partQuery} · ${vehicleScope || "all catalog-supported GM vehicles"}`
       : vehicleScope || "All catalog-supported GM parts";
+  const vehicleScoped = Boolean(answer.intent.year || answer.intent.make || answer.intent.model);
+  const answerDetail = answer.status === "DATA_NOT_LOADED"
+    ? "The active Vintage source snapshot is not available in this environment."
+    : answer.status === "PARTIAL_CATALOG_COVERAGE"
+      ? `${answer.returnedCount.toLocaleString()} verified in-stock match${answer.returnedCount === 1 ? "" : "es"} found, but this vehicle answer is partial because only ${answer.catalogCoverage.matchedInventoryKeys.toLocaleString()} of ${answer.catalogCoverage.totalInventoryKeys.toLocaleString()} inventory part numbers currently have catalog evidence.`
+      : answer.status === "NO_MATCHES"
+        ? vehicleScoped
+          ? "No in-stock catalog-supported matches were found for that vehicle."
+          : "No exact active inventory row matched that request."
+        : vehicleScoped
+          ? `${answer.returnedCount.toLocaleString()} in-stock part numbers matched the active Vintage source and GM catalog fitment evidence.`
+          : `${answer.returnedCount.toLocaleString()} exact in-stock inventory part number${answer.returnedCount === 1 ? "" : "s"} found.`;
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const rows = answer.rows.filter((row) => !needle || `${row.partNumber} ${row.sku} ${row.description} ${row.brands.join(" ")}`.toLowerCase().includes(needle));
@@ -1623,8 +1644,8 @@ function VintageInventoryAnswerPanel({
 
   return <section className="inventory-answer" aria-label="Vintage Parts inventory answer">
     <header className="inventory-answer-head">
-      <div><span>READ-ONLY INVENTORY ANSWER</span><h2>{scopeLabel}</h2><p>{answer.status === "DATA_NOT_LOADED" ? "The active Vintage source snapshot is not available in this environment." : answer.status === "NO_MATCHES" ? "No in-stock exact catalog matches met the requested vehicle and year." : `${answer.returnedCount.toLocaleString()} in-stock part numbers matched the active Vintage source and GM catalog fitment evidence.`}</p></div>
-      <div><Badge tone={answer.status === "READY" ? "green" : answer.status === "TRUNCATED" ? "amber" : "red"}>{answer.status === "READY" ? "Answer complete" : answer.status.replaceAll("_", " ")}</Badge><button className="text-button" onClick={onReset}>Ask another question</button></div>
+      <div><span>READ-ONLY INVENTORY ANSWER</span><h2>{scopeLabel}</h2><p>{answerDetail}</p></div>
+      <div><Badge tone={answer.status === "READY" ? "green" : answer.status === "TRUNCATED" || answer.status === "PARTIAL_CATALOG_COVERAGE" ? "amber" : "red"}>{answer.status === "READY" ? "Answer complete" : answer.status === "PARTIAL_CATALOG_COVERAGE" ? "Verified subset" : answer.status.replaceAll("_", " ")}</Badge><button className="text-button" onClick={onReset}>Ask another question</button></div>
     </header>
 
     <div className="inventory-answer-summary">
@@ -1632,6 +1653,7 @@ function VintageInventoryAnswerPanel({
       <article><span>Total units</span><strong>{answer.summary.totalUnits.toLocaleString()}</strong><small>Quantity in the active Vintage snapshot</small></article>
       <article><span>Source inventory value</span><strong>{money(answer.summary.sourceInventoryValue)}</strong><small>Quantity × source price; not resale value</small></article>
       <article><span>Inventory authority</span><strong>Vintage Parts</strong><small>{answer.dataset?.sourceFileName ?? "Active source unavailable"}</small></article>
+      <article><span>Catalog coverage</span><strong>{answer.catalogCoverage.percent.toLocaleString()}%</strong><small>{answer.catalogCoverage.matchedInventoryKeys.toLocaleString()} of {answer.catalogCoverage.totalInventoryKeys.toLocaleString()} inventory keys mapped</small></article>
     </div>
 
     <div className="inventory-answer-note"><Icon name="shield"/><div><strong>No listing was created and no launch allowance was used.</strong><p>{answer.valueDefinition}</p></div><span>No external request</span></div>
@@ -1650,7 +1672,7 @@ function VintageInventoryAnswerPanel({
           <td><strong>{row.partNumber}</strong><small>SKU {row.sku}</small></td>
           <td><div className="inventory-answer-part">
             {row.catalogImage.url ? <a className="inventory-answer-thumb" href={row.catalogImage.url} target="_blank" rel="noreferrer"><img src={row.catalogImage.url} alt={row.catalogImage.label}/><span>{row.catalogImage.state === "EXACT_CALLOUT" ? "Exact callout" : row.catalogImage.state === "CATALOG_DIAGRAM" ? "Diagram" : "Evidence"}</span></a> : <div className="inventory-answer-thumb unavailable"><Icon name="camera"/><span>No verified image</span></div>}
-            <div className="inventory-answer-copy"><strong>{row.description}</strong><small>{row.fitment.label} · {row.fitment.applicationCount} catalog application{row.fitment.applicationCount === 1 ? "" : "s"} · {row.fitment.evidenceState === "CATALOG_STATED" ? "catalog stated" : "catalog-derived model scope"}</small>{row.catalogImage.url && <a href={row.catalogImage.url} target="_blank" rel="noreferrer">{row.catalogImage.label} <Icon name="arrow"/></a>}</div>
+            <div className="inventory-answer-copy"><strong>{row.description}</strong><small>{row.fitment.evidenceState === "UNVERIFIED" ? "Exact inventory key · fitment not verified" : `${row.fitment.label} · ${row.fitment.applicationCount} catalog application${row.fitment.applicationCount === 1 ? "" : "s"} · ${row.fitment.evidenceState === "CATALOG_STATED" ? "catalog stated" : "catalog-derived model scope"}`}</small>{row.catalogImage.url && <a href={row.catalogImage.url} target="_blank" rel="noreferrer">{row.catalogImage.label} <Icon name="arrow"/></a>}</div>
           </div></td>
           <td className="numeric"><strong>{row.quantity.toLocaleString()}</strong></td>
           <td className="numeric"><strong>{priceLabel(row)}</strong></td>
@@ -1659,7 +1681,7 @@ function VintageInventoryAnswerPanel({
         </tr>)}</tbody>
       </table></div>
       <footer className="inventory-answer-pagination"><span>Showing {filtered.length ? ((safePage - 1) * pageSize + 1).toLocaleString() : 0}–{Math.min(safePage * pageSize, filtered.length).toLocaleString()} of {filtered.length.toLocaleString()}</span><div><button disabled={safePage <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>Previous</button><b>Page {safePage} of {pages}</b><button disabled={safePage >= pages} onClick={() => setPage((current) => Math.min(pages, current + 1))}>Next</button></div></footer>
-    </> : <div className="vintage-shortlist-empty"><Icon name="inventory"/><h3>No in-stock fitment matches found</h3><p>PartQuill kept the answer empty instead of treating a year or model word as proven compatibility.</p></div>}
+    </> : <div className="vintage-shortlist-empty"><Icon name="inventory"/><h3>{vehicleScoped ? "No verified in-stock fitment matches found" : "No exact active inventory match found"}</h3><p>{vehicleScoped ? "PartQuill kept the answer empty instead of treating a year or model word as proven compatibility. Catalog coverage is shown above so an incomplete join cannot masquerade as a complete answer." : "The inventory lookup used the exact normalized part key; catalog availability did not hide the stock result."}</p></div>}
   </section>;
 }
 
@@ -1690,6 +1712,7 @@ function SellerAssistantAnswerPanel({
       <article><span>Catalog evidence</span><strong>{answer.evidence.catalogState.replaceAll("_", " ")}</strong><small>{answer.evidence.sourcePages.length ? `${answer.evidence.sourcePages.length} source page${answer.evidence.sourcePages.length === 1 ? "" : "s"}` : "No part-specific source pages"}</small></article>
       <article><span>Applications</span><strong>{answer.evidence.applicationRecordCount.toLocaleString()}</strong><small>Authorized catalog records; no inferred fitment</small></article>
       <article><span>Approved images</span><strong>{answer.evidence.approvedImageCount.toLocaleString()}</strong><small>Exact-key Ferrari-QA merchant images</small></article>
+      <article><span>Inventory</span><strong>{answer.evidence.inventoryState.replaceAll("_", " ")}</strong><small>{answer.evidence.inventoryState === "EXACT_MATCH" ? `${answer.evidence.inventoryUnits.toLocaleString()} active unit${answer.evidence.inventoryUnits === 1 ? "" : "s"} on the exact key` : "Exact-key inventory lookup"}</small></article>
       <article><span>Action taken</span><strong>None</strong><small>No draft · no allowance · no eBay write</small></article>
     </div>
     {answer.suggestedCommands.length > 0 && <footer className="assistant-suggestions"><span>Continue with:</span><div>{answer.suggestedCommands.map((command) => <button key={command} onClick={() => onUseCommand(command)}>{command}<Icon name="arrow"/></button>)}</div></footer>}
@@ -1947,8 +1970,10 @@ export default function Home() {
           ? `${payload.inventoryAnswer.returnedCount} in-stock Vintage part numbers found. This was a read-only answer; no listing allowance was used.`
           : payload.inventoryAnswer.status === "TRUNCATED"
             ? `${payload.inventoryAnswer.returnedCount} rows returned. Download the current result or narrow the question for a complete answer.`
+            : payload.inventoryAnswer.status === "PARTIAL_CATALOG_COVERAGE"
+              ? `${payload.inventoryAnswer.returnedCount} verified rows returned, but the vehicle answer is a partial catalog-covered subset.`
             : payload.inventoryAnswer.status === "NO_MATCHES"
-              ? "No catalog-supported in-stock matches met that vehicle question. Nothing was guessed."
+              ? "No exact in-stock match met that question. Nothing was guessed."
               : "The active Vintage inventory snapshot is not loaded in this environment.");
         return;
       }
