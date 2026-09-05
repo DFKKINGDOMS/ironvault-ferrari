@@ -288,7 +288,28 @@ jobs:
             exit 1
           fi
 
-          az containerapp ingress enable             --resource-group "$RG"             --name "$APP"             --type external             --target-port 3000             --transport auto             --allow-insecure false             --output none
+          INGRESS_READY=false
+          for attempt in $(seq 1 18); do
+            if az containerapp ingress enable \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --type external \
+              --target-port 3000 \
+              --transport auto \
+              --allow-insecure false \
+              --output none \
+              2>"$RUNNER_TEMP/partquill-ingress-error.txt"; then
+              INGRESS_READY=true
+              break
+            fi
+            if ! grep -q 'ContainerAppOperationInProgress' "$RUNNER_TEMP/partquill-ingress-error.txt"; then
+              cat "$RUNNER_TEMP/partquill-ingress-error.txt" >&2
+              exit 1
+            fi
+            echo "Azure control plane is still applying the prior Container App operation; retrying ingress ($attempt/18)."
+            sleep 10
+          done
+          test "$INGRESS_READY" = "true"
 
           FQDN=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.configuration.ingress.fqdn -o tsv)
           URL="https://$FQDN"
