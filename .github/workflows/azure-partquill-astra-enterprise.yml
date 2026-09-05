@@ -78,12 +78,39 @@ jobs:
             exit 1
           fi
 
-          if ! az cognitiveservices account deployment show \
+          DEPLOYMENT_EXISTS=false
+          if az cognitiveservices account deployment show \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_FOUNDRY_RESOURCE" \
             --deployment-name "$ASTRA_DEPLOYMENT" \
             --output none >/dev/null 2>&1; then
-            az cognitiveservices account deployment create \
+            DEPLOYMENT_EXISTS=true
+          fi
+
+          if [ "$DEPLOYMENT_EXISTS" = true ]; then
+            DEPLOYED_MODEL=$(az cognitiveservices account deployment show \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_FOUNDRY_RESOURCE" \
+              --deployment-name "$ASTRA_DEPLOYMENT" \
+              --query properties.model.name \
+              --output tsv)
+            DEPLOYED_VERSION=$(az cognitiveservices account deployment show \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_FOUNDRY_RESOURCE" \
+              --deployment-name "$ASTRA_DEPLOYMENT" \
+              --query properties.model.version \
+              --output tsv)
+            if [ "$DEPLOYED_MODEL" != "$ASTRA_MODEL" ] || [ "$DEPLOYED_VERSION" != "$ASTRA_MODEL_VERSION" ]; then
+              echo "Deployment $ASTRA_DEPLOYMENT is $DEPLOYED_MODEL@$DEPLOYED_VERSION, expected $ASTRA_MODEL@$ASTRA_MODEL_VERSION." >&2
+              exit 1
+            fi
+          fi
+
+          # One capacity unit is 1K tokens/minute. A whole-repository max-reasoning
+          # pass cannot run reliably at the 10K TPM minimal deployment size.
+          CAPACITY_READY=false
+          for REQUESTED_CAPACITY in 1000 500 250 100; do
+            if az cognitiveservices account deployment create \
               --resource-group "$AZURE_RESOURCE_GROUP" \
               --name "$AZURE_FOUNDRY_RESOURCE" \
               --deployment-name "$ASTRA_DEPLOYMENT" \
@@ -91,26 +118,29 @@ jobs:
               --model-name "$ASTRA_MODEL" \
               --model-version "$ASTRA_MODEL_VERSION" \
               --sku-name GlobalStandard \
-              --sku-capacity 10 \
-              --output none
-          fi
-
-          DEPLOYED_MODEL=$(az cognitiveservices account deployment show \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_FOUNDRY_RESOURCE" \
-            --deployment-name "$ASTRA_DEPLOYMENT" \
-            --query properties.model.name \
-            --output tsv)
-          DEPLOYED_VERSION=$(az cognitiveservices account deployment show \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_FOUNDRY_RESOURCE" \
-            --deployment-name "$ASTRA_DEPLOYMENT" \
-            --query properties.model.version \
-            --output tsv)
-          if [ "$DEPLOYED_MODEL" != "$ASTRA_MODEL" ] || [ "$DEPLOYED_VERSION" != "$ASTRA_MODEL_VERSION" ]; then
-            echo "Deployment $ASTRA_DEPLOYMENT is $DEPLOYED_MODEL@$DEPLOYED_VERSION, expected $ASTRA_MODEL@$ASTRA_MODEL_VERSION." >&2
+              --sku-capacity "$REQUESTED_CAPACITY" \
+              --output none; then
+              CAPACITY_READY=true
+              break
+            fi
+            echo "Astra capacity $REQUESTED_CAPACITY was unavailable; trying the next safe level." >&2
+          done
+          if [ "$CAPACITY_READY" != true ]; then
+            echo "At least 100K TPM of GPT-6 Astra capacity is required for this repository pass." >&2
             exit 1
           fi
+
+          DEPLOYED_CAPACITY=$(az cognitiveservices account deployment show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_FOUNDRY_RESOURCE" \
+            --deployment-name "$ASTRA_DEPLOYMENT" \
+            --query sku.capacity \
+            --output tsv)
+          if [ "$DEPLOYED_CAPACITY" -lt 100 ]; then
+            echo "Astra deployment has only ${DEPLOYED_CAPACITY}K TPM; at least 100K TPM is required." >&2
+            exit 1
+          fi
+          echo "Astra deployment capacity: ${DEPLOYED_CAPACITY}K TPM" >> "$GITHUB_STEP_SUMMARY"
 
           FOUNDRY_KEY=$(az cognitiveservices account keys list \
             --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -150,7 +180,8 @@ jobs:
           fi
 
       - name: Let Azure-hosted Astra improve the application
-        id: astra
+        id: astra_primary
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ steps.foundry.outputs.api_key }}
@@ -163,6 +194,40 @@ jobs:
           safety-strategy: drop-sudo
           allow-users: DFKKINGDOMS
           output-file: ${{ runner.temp }}/astra-final-message.md
+
+      - name: Reset and wait if Azure throttled the first attempt
+        if: steps.astra_primary.outcome != 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source="$GITHUB_SHA" --staged --worktree .
+          git clean -fd
+          rm -f -- "$RUNNER_TEMP/astra-final-message.md"
+          sleep 75
+
+      - name: Retry Azure-hosted Astra after the quota window
+        id: astra_retry
+        if: steps.astra_primary.outcome != 'success'
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ steps.foundry.outputs.api_key }}
+          responses-api-endpoint: ${{ steps.foundry.outputs.responses_endpoint }}
+          prompt-file: .github/codex/prompts/partquill-enterprise-upgrade.md
+          model: gpt-6-astra-1
+          effort: max
+          codex-version: 0.153.0
+          permission-profile: ":workspace"
+          safety-strategy: drop-sudo
+          allow-users: DFKKINGDOMS
+          output-file: ${{ runner.temp }}/astra-final-message.md
+
+      - name: Require a completed Astra pass
+        if: steps.astra_primary.outcome != 'success' && steps.astra_retry.outcome != 'success'
+        shell: bash
+        run: |
+          echo "Both Azure-hosted Astra attempts failed; no patch will be accepted." >&2
+          exit 1
 
       - name: Enforce patch scope and serialize the result
         shell: bash
