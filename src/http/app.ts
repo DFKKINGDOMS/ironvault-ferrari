@@ -478,7 +478,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.post('/v1/internal/deere-worker/ai/images/generations', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) =>
     proxyDeereWorkerAi('images/generations', request, reply));
 
-  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.24.1' }));
+  app.get('/health', async () => ({ status: 'ok', service: 'partquill-api', version: '0.24.0' }));
   app.get('/', async (_request, reply) => reply
     .header(
       'content-security-policy',
@@ -1080,7 +1080,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
           status: shopifyMediaStatus
         },
         sellerUi: {
-          version: '0.24.1',
+          version: '0.24.0',
           commandPreview: true,
           astraAssistant: sellerAssistant?.available ?? false,
           questionsAreReadOnly: true,

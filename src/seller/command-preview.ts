@@ -885,7 +885,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.24.1',
+    version: '0.24.0',
     mode: 'private-pilot',
     backendConnected: true,
     workspace: {
