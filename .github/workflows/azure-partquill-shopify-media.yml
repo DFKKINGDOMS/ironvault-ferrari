@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
           RG="rg-partquill-platform-westus3"
           ENVIRONMENT="cae-partquill-private-westus3"
-          APP="ca-partquill-shopify-media-westus3"
+          APP="ca-pq-shopify-media-wus3"
           ACR="partquill50230827"
           ACR_SERVER="partquill50230827.azurecr.io"
           STORAGE_ACCOUNT="pqimages50230827"
