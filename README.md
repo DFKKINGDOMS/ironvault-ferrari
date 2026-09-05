@@ -81,6 +81,18 @@ unchanged payload
 
 Production eBay writes are refused by configuration in this checkpoint, even if the global write flag is accidentally enabled.
 
+## Azure Foundry Astra enterprise review
+
+The manually reviewable `Azure Astra enterprise improvement` workflow uses the existing PartQuill Azure Foundry resource and its `gpt-6-astra-1` deployment to inspect and improve the repository. Its fixed mission is grounded in this README, the executable domain rules, and [AGENTS.md](AGENTS.md); arbitrary workflow input is not passed to the coding agent.
+
+The workflow intentionally separates authority:
+
+1. A read-only job validates the existing revision, obtains a short-lived connection to the established Foundry resource, removes its Azure session, and lets Astra produce only a local patch.
+2. A fresh job with no Azure credentials reapplies that patch and runs the enterprise guardrails, production dependency audit, lint, tests, server build, and web build.
+3. A final job can commit only the validated patch and open a pull request. It cannot run repository code, and the pull request is never auto-merged.
+
+Astra cannot modify the workflows, safety contract, agent contract, environment template, guard script, or bulk catalog data. It receives no eBay credentials and has no production-write authority. Re-run the workflow from GitHub Actions when a new enterprise improvement pass is desired; inspect the generated pull request before merging.
+
 ## Local setup
 
 Requirements: Node 22+ and, for durable mode, PostgreSQL.

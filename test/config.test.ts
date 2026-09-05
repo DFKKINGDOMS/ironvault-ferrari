@@ -35,6 +35,23 @@ describe('production configuration fail-closed behavior', () => {
     expect(config.ALLOW_EBAY_WRITES).toBe(false);
   });
 
+  it('uses neutral workspace identity and normalizes configurable initials', () => {
+    const defaults = loadConfig({});
+    expect(defaults).toMatchObject({
+      PARTQUILL_WORKSPACE_NAME: 'PartQuill Workspace',
+      PARTQUILL_WORKSPACE_LABEL: 'Organization account',
+      PARTQUILL_WORKSPACE_INITIALS: 'PQ'
+    });
+
+    const branded = loadConfig({
+      PARTQUILL_WORKSPACE_NAME: 'Acme Parts',
+      PARTQUILL_WORKSPACE_LABEL: 'Operations workspace',
+      PARTQUILL_WORKSPACE_INITIALS: 'ap'
+    });
+    expect(branded.PARTQUILL_WORKSPACE_INITIALS).toBe('AP');
+    expect(() => loadConfig({ PARTQUILL_WORKSPACE_INITIALS: 'TOO-LONG' })).toThrow();
+  });
+
   it('requires production Browse API credentials for live reference discovery', () => {
     expect(() => loadConfig({ EBAY_REFERENCE_DISCOVERY_MODE: 'live' })).toThrow('production Browse API');
     expect(() => loadConfig({

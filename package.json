@@ -21,7 +21,8 @@
     "start": "node dist/src/main.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:enterprise": "node scripts/verify-enterprise-guardrails.mjs"
   },
   "dependencies": {
     "@azure/storage-blob": "^12.33.0",

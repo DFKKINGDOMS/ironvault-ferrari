@@ -38,6 +38,14 @@ const schema = z
     EBAY_REFERENCE_MAX_IMAGES: z.coerce.number().int().min(1).max(3).default(3),
     PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
     CORS_ORIGINS: z.string().default('http://localhost:5173'),
+    PARTQUILL_WORKSPACE_NAME: z.string().trim().min(1).max(80).default('PartQuill Workspace'),
+    PARTQUILL_WORKSPACE_LABEL: z.string().trim().min(1).max(80).default('Organization account'),
+    PARTQUILL_WORKSPACE_INITIALS: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9]{1,3}$/)
+      .default('PQ')
+      .transform((value) => value.toUpperCase()),
     PARTQUILL_AI_PROVIDER: z.enum(['disabled', 'openai', 'azure', 'azure-local']).default('disabled'),
     OPENAI_API_KEY: z.string().optional(),
     AZURE_OPENAI_ENDPOINT: z.string().url().optional(),

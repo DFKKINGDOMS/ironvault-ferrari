@@ -1,0 +1,353 @@
+name: Azure Astra enterprise improvement
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-partquill-astra-enterprise.yml
+      - .github/codex/prompts/partquill-enterprise-upgrade.md
+      - AGENTS.md
+      - scripts/verify-enterprise-guardrails.mjs
+  workflow_dispatch:
+
+concurrency:
+  group: partquill-azure-astra-enterprise
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: rg-partquill-platform-westus3
+  AZURE_FOUNDRY_RESOURCE: partquill-ai-50230827
+  ASTRA_DEPLOYMENT: gpt-6-astra-1
+  ASTRA_MODEL: gpt-6-astra
+  ASTRA_MODEL_VERSION: 2026-09-03
+
+jobs:
+  generate-patch:
+    name: Generate a credential-isolated patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CONFIG_DIR: /tmp/partquill-azure-auth
+    steps:
+      - name: Check out the reviewed base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Validate the base before cloud authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run verify:enterprise
+          npm run lint
+          npm test
+          npm run build:server
+          npm run build:web
+
+      - name: Sign in to the existing Azure subscription
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+
+      - name: Reuse Foundry and prepare the Astra deployment
+        id: foundry
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! az cognitiveservices account show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_FOUNDRY_RESOURCE" \
+            --output none; then
+            echo "The established PartQuill Foundry resource does not exist; this workflow will not create a duplicate." >&2
+            exit 1
+          fi
+
+          if ! az cognitiveservices account deployment show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_FOUNDRY_RESOURCE" \
+            --deployment-name "$ASTRA_DEPLOYMENT" \
+            --output none >/dev/null 2>&1; then
+            az cognitiveservices account deployment create \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_FOUNDRY_RESOURCE" \
+              --deployment-name "$ASTRA_DEPLOYMENT" \
+              --model-format OpenAI \
+              --model-name "$ASTRA_MODEL" \
+              --model-version "$ASTRA_MODEL_VERSION" \
+              --sku-name GlobalStandard \
+              --sku-capacity 10 \
+              --output none
+          fi
+
+          DEPLOYED_MODEL=$(az cognitiveservices account deployment show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_FOUNDRY_RESOURCE" \
+            --deployment-name "$ASTRA_DEPLOYMENT" \
+            --query properties.model.name \
+            --output tsv)
+          DEPLOYED_VERSION=$(az cognitiveservices account deployment show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_FOUNDRY_RESOURCE" \
+            --deployment-name "$ASTRA_DEPLOYMENT" \
+            --query properties.model.version \
+            --output tsv)
+          if [ "$DEPLOYED_MODEL" != "$ASTRA_MODEL" ] || [ "$DEPLOYED_VERSION" != "$ASTRA_MODEL_VERSION" ]; then
+            echo "Deployment $ASTRA_DEPLOYMENT is $DEPLOYED_MODEL@$DEPLOYED_VERSION, expected $ASTRA_MODEL@$ASTRA_MODEL_VERSION." >&2
+            exit 1
+          fi
+
+          FOUNDRY_KEY=$(az cognitiveservices account keys list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_FOUNDRY_RESOURCE" \
+            --query key1 \
+            --output tsv)
+          RESPONSES_ENDPOINT="https://${AZURE_FOUNDRY_RESOURCE}.openai.azure.com/openai/v1/responses"
+          echo "::add-mask::$FOUNDRY_KEY"
+
+          PROBE_BODY="$RUNNER_TEMP/astra-probe.json"
+          PROBE_STATUS=$(curl --silent --show-error \
+            --output "$PROBE_BODY" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer $FOUNDRY_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "{\"model\":\"$ASTRA_DEPLOYMENT\",\"input\":\"Return exactly READY.\",\"reasoning\":{\"effort\":\"low\"},\"max_output_tokens\":32}" \
+            "$RESPONSES_ENDPOINT")
+          if [ "$PROBE_STATUS" != "200" ]; then
+            echo "Azure Responses API probe failed with HTTP $PROBE_STATUS." >&2
+            jq -r '.error.message // "No Azure error message returned."' "$PROBE_BODY" >&2 || true
+            exit 1
+          fi
+          rm -f -- "$PROBE_BODY"
+
+          echo "api_key=$FOUNDRY_KEY" >> "$GITHUB_OUTPUT"
+          echo "responses_endpoint=$RESPONSES_ENDPOINT" >> "$GITHUB_OUTPUT"
+
+      - name: Remove Azure session material before model execution
+        if: always()
+        shell: bash
+        run: |
+          az logout >/dev/null 2>&1 || true
+          az account clear >/dev/null 2>&1 || true
+          if [ "$AZURE_CONFIG_DIR" = "/tmp/partquill-azure-auth" ]; then
+            rm -rf -- /tmp/partquill-azure-auth
+          fi
+
+      - name: Let Azure-hosted Astra improve the application
+        id: astra
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ steps.foundry.outputs.api_key }}
+          responses-api-endpoint: ${{ steps.foundry.outputs.responses_endpoint }}
+          prompt-file: .github/codex/prompts/partquill-enterprise-upgrade.md
+          model: gpt-6-astra-1
+          effort: max
+          codex-version: 0.153.0
+          permission-profile: ":workspace"
+          safety-strategy: drop-sudo
+          allow-users: DFKKINGDOMS
+          output-file: ${{ runner.temp }}/astra-final-message.md
+
+      - name: Enforce patch scope and serialize the result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Astra completed without producing a code or documentation change." >&2
+            exit 1
+          fi
+
+          while IFS= read -r CHANGED_PATH; do
+            case "$CHANGED_PATH" in
+              .github/*|AGENTS.md|.env.example|docs/SAFETY_INVARIANTS.md|scripts/verify-enterprise-guardrails.mjs|data/*)
+                echo "Astra attempted to modify protected path: $CHANGED_PATH" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --cached --name-only)
+
+          CHANGED_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          if [ "$CHANGED_COUNT" -gt 80 ]; then
+            echo "Astra patch changes $CHANGED_COUNT files; the safety limit is 80." >&2
+            exit 1
+          fi
+
+          git diff --cached --binary --full-index > "$RUNNER_TEMP/astra.patch"
+          PATCH_BYTES=$(stat --format='%s' "$RUNNER_TEMP/astra.patch")
+          if [ "$PATCH_BYTES" -gt 8388608 ]; then
+            echo "Astra patch is $PATCH_BYTES bytes; the safety limit is 8 MiB." >&2
+            exit 1
+          fi
+          git diff --cached --stat > "$RUNNER_TEMP/astra-stat.txt"
+          if [ ! -s "$RUNNER_TEMP/astra-final-message.md" ]; then
+            printf '%s\n' 'Astra returned a patch without a final summary.' > "$RUNNER_TEMP/astra-final-message.md"
+          fi
+
+      - name: Upload the untrusted patch only
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-generated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/astra.patch
+            ${{ runner.temp }}/astra-stat.txt
+            ${{ runner.temp }}/astra-final-message.md
+          if-no-files-found: error
+          retention-days: 7
+
+  validate-patch:
+    name: Validate without Azure credentials
+    needs: generate-patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the same base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Download the generated patch
+        uses: actions/download-artifact@v4
+        with:
+          name: astra-generated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/astra-generated
+
+      - name: Reapply and inspect the patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index --binary "$RUNNER_TEMP/astra-generated/astra.patch"
+          while IFS= read -r CHANGED_PATH; do
+            case "$CHANGED_PATH" in
+              .github/*|AGENTS.md|.env.example|docs/SAFETY_INVARIANTS.md|scripts/verify-enterprise-guardrails.mjs|data/*)
+                echo "Validated patch contains protected path: $CHANGED_PATH" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --cached --name-only)
+
+      - name: Run enterprise quality gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run verify:enterprise
+          npm run audit:prod
+          npm run lint
+          npm test
+          npm run build:server
+          npm run build:web
+
+      - name: Package the exact validated patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --cached --binary --full-index > "$RUNNER_TEMP/astra-generated/astra-validated.patch"
+
+      - name: Upload the validated patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-validated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/astra-generated/astra-validated.patch
+            ${{ runner.temp }}/astra-generated/astra-stat.txt
+            ${{ runner.temp }}/astra-generated/astra-final-message.md
+          if-no-files-found: error
+          retention-days: 14
+
+  open-pull-request:
+    name: Open a human-review pull request
+    needs: validate-patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out the same base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Download the validated patch
+        uses: actions/download-artifact@v4
+        with:
+          name: astra-validated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/astra-validated
+
+      - name: Commit the validated patch and open a pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git apply --index --binary "$RUNNER_TEMP/astra-validated/astra-validated.patch"
+
+          BRANCH="astra/enterprise-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git switch --create "$BRANCH"
+          git config user.name "PartQuill Astra"
+          git config user.email "partquill-astra@users.noreply.github.com"
+          git commit -m "feat: apply Azure Astra enterprise improvements"
+          git push --set-upstream origin "$BRANCH"
+
+          PR_BODY="$RUNNER_TEMP/astra-pr-body.md"
+          {
+            echo "## Azure Foundry Astra review"
+            echo
+            echo "This patch was generated by the existing PartQuill Azure Foundry resource with GPT-6 Astra, then reapplied and validated in a separate job that had no Azure credentials. It has **not** been deployed or auto-merged."
+            echo
+            echo "### Astra summary"
+            echo
+            sed -n '1,180p' "$RUNNER_TEMP/astra-validated/astra-final-message.md"
+            echo
+            echo "### Patch footprint"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/astra-validated/astra-stat.txt"
+            echo '```'
+            echo
+            echo "### Automated gates"
+            echo
+            echo "- Enterprise safety guardrails"
+            echo "- Production dependency audit"
+            echo "- ESLint"
+            echo "- Vitest"
+            echo "- Server TypeScript build"
+            echo "- React TypeScript and Vite build"
+            echo
+            echo "Production eBay writes remain disabled. A maintainer must inspect this PR before merge."
+          } > "$PR_BODY"
+
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Enterprise upgrade from Azure Foundry Astra" \
+            --body-file "$PR_BODY")
+          echo "Astra pull request: $PR_URL" >> "$GITHUB_STEP_SUMMARY"

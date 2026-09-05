@@ -8,6 +8,7 @@ type SellerBootstrap = {
   version: string;
   mode: string;
   backendConnected: boolean;
+  workspace?: { displayName: string; accountLabel: string; initials: string };
   ebay: { environment: string; mode: string; writesEnabled: boolean; handoffUrl: string };
   persistence: string;
   imageStudio: { mode: string; path: string; activated: boolean };
@@ -2023,7 +2024,7 @@ export default function Home() {
           {navGroups.map((group) => <div className="nav-group" key={group.label}><span className="nav-label">{group.label}</span>{group.items.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} aria-current={view === item.id ? "page" : undefined} onClick={() => navigate(item.id)}><Icon name={item.icon} /><span>{item.label}</span>{item.count !== undefined && <b>{item.count}</b>}</button>)}</div>)}
         </nav>
         <div className="side-allowance"><div><span>Free Launch allowance</span><strong>7 of 10 left</strong></div><i><b /></i><small>Only successful public listings count.</small></div>
-        <div className="side-account"><span>KW</span><div><strong>Kurt White</strong><small>Owner · Demo seller</small></div><Icon name="more" /></div>
+        <div className="side-account"><span>{bootstrap?.workspace?.initials ?? "PQ"}</span><div><strong>{bootstrap?.workspace?.displayName ?? "PartQuill Workspace"}</strong><small>{bootstrap?.workspace?.accountLabel ?? "Organization account"}</small></div><Icon name="more" /></div>
       </aside>
 
       <main id="main" className="app-main">
@@ -2253,7 +2254,7 @@ export default function Home() {
 
         {view === "evidence" && <section className="view">
           <SectionHeading eyebrow="Proof, not promises" title="Evidence Packs" body="Export the seller-owned chain for a return, VeRO question, recall review, chargeback or internal audit." action={<button className="primary" onClick={() => showNotice("Sample EvidencePack download prepared.")}><Icon name="receipt"/> Export selected</button>} />
-          <div className="evidence-layout"><div className="pack-card"><div className="pack-cover"><span>PARTQUILL / EVIDENCE PACK</span><strong>VLT-1042</strong><small>Draft v12 · not published</small><Icon name="shield"/></div><div className="pack-sections">{[ ["Source photographs", "4 originals · SHA-256 retained"], ["Approved derivatives", "1 image · source comparison passed"], ["Identity evidence", "Brand + MPN seller-confirmed"], ["Catalog evidence", "2 exact reference checks · fitment excluded"], ["Approval ledger", "Private preflight pending"], ["Payload history", "12 immutable draft versions"] ].map(([label,value]) => <div key={label}><span>{label}</span><strong>{value}</strong><Icon name="check"/></div>)}</div></div><div className="audit-ledger"><div><span>Audit ledger</span><Badge tone="green">Append-only design</Badge></div>{[ ["04:12", "Seller confirmed physical MPN", "KW"], ["04:09", "Unsupported fitment removed", "System"], ["04:06", "Hero derivative approved", "KW"], ["04:03", "Catalog reference refreshed", "System"], ["03:58", "Draft created from part number", "KW"] ].map(([time,event,actor]) => <article key={`${time}-${event}`}><time>{time}</time><i/><div><strong>{event}</strong><span>{actor}</span></div></article>)}</div></div>
+          <div className="evidence-layout"><div className="pack-card"><div className="pack-cover"><span>PARTQUILL / EVIDENCE PACK</span><strong>VLT-1042</strong><small>Draft v12 · not published</small><Icon name="shield"/></div><div className="pack-sections">{[ ["Source photographs", "4 originals · SHA-256 retained"], ["Approved derivatives", "1 image · source comparison passed"], ["Identity evidence", "Brand + MPN seller-confirmed"], ["Catalog evidence", "2 exact reference checks · fitment excluded"], ["Approval ledger", "Private preflight pending"], ["Payload history", "12 immutable draft versions"] ].map(([label,value]) => <div key={label}><span>{label}</span><strong>{value}</strong><Icon name="check"/></div>)}</div></div><div className="audit-ledger"><div><span>Audit ledger</span><Badge tone="green">Append-only design</Badge></div>{[ ["04:12", "Seller confirmed physical MPN", "Seller"], ["04:09", "Unsupported fitment removed", "System"], ["04:06", "Hero derivative approved", "Seller"], ["04:03", "Catalog reference refreshed", "System"], ["03:58", "Draft created from part number", "Seller"] ].map(([time,event,actor]) => <article key={`${time}-${event}`}><time>{time}</time><i/><div><strong>{event}</strong><span>{actor}</span></div></article>)}</div></div>
         </section>}
 
         {view === "community" && <CommunityImages
