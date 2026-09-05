@@ -11,7 +11,8 @@ const noPartEvidence: SellerAssistantEvidence = {
   catalogState: 'NOT_REQUESTED',
   catalog: null,
   merchantMedia: null,
-  inventory: null
+  inventory: null,
+  sellerListing: null
 };
 
 describe('seller assistant routing', () => {

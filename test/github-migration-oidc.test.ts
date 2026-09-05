@@ -1,8 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
   isTrustedGithubDeereWorkerClaims,
+  isTrustedGithubMigrationClaims,
   isTrustedGithubMediaMigrationClaims
 } from '../src/security/github-migration-oidc.js';
+
+const trustedSellerListingClaims = {
+  repository_id: '1332273432',
+  repository_owner_id: '98978443',
+  repository: 'DFKKINGDOMS/ironvault-ferrari',
+  ref: 'refs/heads/main',
+  workflow_ref:
+    'DFKKINGDOMS/ironvault-ferrari/.github/workflows/azure-partquill-seller-listing-import.yml@refs/heads/main'
+};
+
+describe('GitHub seller listing import OIDC claims', () => {
+  it('accepts only the exact import workflow on main', () => {
+    expect(isTrustedGithubMigrationClaims(trustedSellerListingClaims)).toBe(true);
+    expect(isTrustedGithubMigrationClaims({ ...trustedSellerListingClaims, ref: 'refs/heads/feature' })).toBe(false);
+    expect(isTrustedGithubMigrationClaims({ ...trustedSellerListingClaims, workflow_ref: 'untrusted.yml' })).toBe(false);
+    expect(isTrustedGithubMigrationClaims({ ...trustedSellerListingClaims, repository_id: '1316643567' })).toBe(false);
+  });
+});
 
 const trustedClaims = {
   repository_id: '1316643567',

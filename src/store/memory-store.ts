@@ -32,12 +32,26 @@ import {
   matchesVintageVehicleApplication,
   resolveVintageGmIntentFromCatalogModels
 } from '../vintage-gm/inventory-question.js';
+import type {
+  SellerListingDatasetStatus,
+  SellerListingImportOptions,
+  SellerListingQueryPool,
+  SellerListingRecord
+} from '../seller-listings/types.js';
+import {
+  matchesSellerListingIntent,
+  MAX_SELLER_LISTING_CANDIDATES
+} from '../seller-listings/types.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
 interface MemoryVintageGmDataset extends Omit<VintageGmDatasetStatus, 'datasetId'> {
+  datasetId: string;
+}
+
+interface MemorySellerListingDataset extends Omit<SellerListingDatasetStatus, 'datasetId'> {
   datasetId: string;
 }
 
@@ -55,6 +69,8 @@ export class MemoryStore implements Store {
   private readonly gmCatalog = new Map<string, GmCatalogPart>();
   private readonly vintageGmInventory = new Map<string, { datasetId: string; record: VintageGmInventoryRecord }>();
   private readonly vintageGmDatasets = new Map<string, MemoryVintageGmDataset>();
+  private readonly sellerListingRows = new Map<string, { datasetId: string; record: SellerListingRecord }>();
+  private readonly sellerListingDatasets = new Map<string, MemorySellerListingDataset>();
   private readonly ebayReferenceCache = new Map<string, EbayReferenceCacheRecord>();
   private readonly communitySubmissions = new Map<string, CommunitySubmissionRecord>();
   private readonly communityImages = new Map<string, StoredCommunityImage>();
@@ -377,6 +393,110 @@ export class MemoryStore implements Store {
       matches: matches.slice(0, cap),
       truncated: matches.length > MAX_VINTAGE_INVENTORY_ANSWER_ROWS,
       resolvedIntent
+    };
+  }
+
+  async importSellerListingRecords(
+    records: SellerListingRecord[],
+    options: SellerListingImportOptions
+  ): Promise<SellerListingDatasetStatus> {
+    const current = this.sellerListingDatasets.get(options.datasetId);
+    if (current && (
+      current.sourceSha256 !== options.sourceSha256
+      || current.sourceFileName !== options.sourceFileName
+      || current.snapshotDate !== options.snapshotDate
+      || current.expectedRows !== options.expectedRows
+      || current.sourceTotalRows !== options.sourceTotalRows
+    )) throw new Error('Seller listing dataset metadata does not match the existing import');
+
+    for (const record of records) {
+      this.sellerListingRows.set(`${options.datasetId}:${record.sourceRow}`, {
+        datasetId: options.datasetId,
+        record: clone(record)
+      });
+    }
+    const datasetRecords = [...this.sellerListingRows.values()]
+      .filter((entry) => entry.datasetId === options.datasetId)
+      .map((entry) => entry.record);
+    if (options.complete && datasetRecords.length !== options.expectedRows) {
+      throw new Error(`Seller listing import is incomplete: expected ${options.expectedRows}, found ${datasetRecords.length}`);
+    }
+    const timestamp = new Date().toISOString();
+    if (options.complete) {
+      for (const [datasetId, dataset] of this.sellerListingDatasets) {
+        this.sellerListingDatasets.set(datasetId, { ...dataset, active: false });
+      }
+    }
+    const partNumbers = new Set(datasetRecords.flatMap((record) => record.partNumber ? [record.partNumber] : []));
+    const next: MemorySellerListingDataset = {
+      datasetId: options.datasetId,
+      status: options.complete ? 'completed' : 'running',
+      active: options.complete ?? false,
+      sourceSha256: options.sourceSha256,
+      sourceFileName: options.sourceFileName,
+      snapshotDate: options.snapshotDate,
+      sourceTotalRows: options.sourceTotalRows,
+      expectedRows: options.expectedRows,
+      importedRows: datasetRecords.length,
+      normalizedRows: datasetRecords.filter((record) => record.normalizationState === 'NORMALIZED_EXACT_KEY').length,
+      rejectedRows: datasetRecords.filter((record) => record.normalizationState !== 'NORMALIZED_EXACT_KEY').length,
+      distinctPartNumbers: partNumbers.size,
+      completedAt: options.complete ? timestamp : null,
+      updatedAt: timestamp
+    };
+    this.sellerListingDatasets.set(options.datasetId, next);
+    return clone(next);
+  }
+
+  async getSellerListingStatus(): Promise<SellerListingDatasetStatus> {
+    const datasets = [...this.sellerListingDatasets.values()]
+      .sort((left, right) => Number(right.active) - Number(left.active)
+        || (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+    return datasets[0] ? clone(datasets[0]) : {
+      datasetId: null,
+      status: 'not_started',
+      active: false,
+      sourceSha256: null,
+      sourceFileName: null,
+      snapshotDate: null,
+      sourceTotalRows: 0,
+      expectedRows: 0,
+      importedRows: 0,
+      normalizedRows: 0,
+      rejectedRows: 0,
+      distinctPartNumbers: 0,
+      completedAt: null,
+      updatedAt: null
+    };
+  }
+
+  async querySellerListings(intent: VintageGmInventoryQuestionIntent): Promise<SellerListingQueryPool> {
+    const dataset = [...this.sellerListingDatasets.values()]
+      .filter((candidate) => candidate.active && candidate.status === 'completed')
+      .sort((left, right) => (right.completedAt ?? '').localeCompare(left.completedAt ?? ''))[0];
+    if (!dataset) return { dataset: await this.getSellerListingStatus(), candidates: [], truncated: false };
+    const matches = [...this.sellerListingRows.values()]
+      .filter((entry) => entry.datasetId === dataset.datasetId && matchesSellerListingIntent(entry.record, intent))
+      .map((entry) => entry.record)
+      .sort((left, right) => right.availableQuantity - left.availableQuantity || left.partNumber!.localeCompare(right.partNumber!, undefined, { numeric: true }));
+    return {
+      dataset: clone(dataset),
+      candidates: matches.slice(0, MAX_SELLER_LISTING_CANDIDATES).map((record) => ({
+        partNumber: record.partNumber!,
+        sku: record.sku,
+        title: record.title,
+        listedQuantity: record.availableQuantity,
+        soldQuantity: record.soldQuantity,
+        currency: record.currency,
+        askingPrice: record.askingPrice,
+        condition: record.condition,
+        snapshotDate: dataset.snapshotDate!,
+        evidenceState: 'SELLER_AUTHORED_LISTING',
+        physicalInventoryVerified: false,
+        identityVerified: false,
+        fitmentVerified: false
+      })),
+      truncated: matches.length > MAX_SELLER_LISTING_CANDIDATES
     };
   }
 
