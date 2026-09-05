@@ -100,7 +100,7 @@ jobs:
              and .gmCatalog.availableParts >= $expected
              and .ebay.writesEnabled == false
              and .persistence == "postgres"
-             and .sellerUi.version == "0.23.0"
+             and .sellerUi.version == "0.24.0"
              and .imageStudio.provider == "azure-local"
              and .imageStudio.activated == true
              and .imageStudio.storage == "azure-blob"

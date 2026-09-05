@@ -307,8 +307,8 @@ jobs:
               && [ "$READY_STATUS" = "200" ] \
               && [ "$CATALOG_SCAN_STATUS" = "200" ] \
               && [[ "$CATALOG_SCAN_TYPE" == image/* ]] \
-              && jq -e '.version == "0.23.0"' health.json >/dev/null \
-              && jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true' ready.json >/dev/null; then
+              && jq -e '.version == "0.24.0"' health.json >/dev/null \
+              && jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true and .sellerUi.astraAssistant == true and .sellerUi.questionsAreReadOnly == true and .sellerUi.explicitListingRequestRequired == true' ready.json >/dev/null; then
               break
             fi
             sleep 10
@@ -325,6 +325,21 @@ jobs:
             -F watermarkStatus=NONE \
             -F images=@/tmp/image-studio-smoke.png "$URL/v1/image-studio/jobs" || true)
 
+          ASSISTANT_STATUS="pending"
+          for attempt in 1 2 3; do
+            ASSISTANT_STATUS=$(curl --connect-timeout 5 --max-time 90 -sS \
+              -o assistant-answer.json \
+              -w '%{http_code}' \
+              -H 'content-type: application/json' \
+              --data '{"command":"What can you do?"}' \
+              "$URL/v1/seller-ui/command-preview" || true)
+            if [ "$ASSISTANT_STATUS" = "200" ] \
+              && jq -e '.assistantAnswer.kind == "PARTQUILL_ASSISTANT_ANSWER" and .assistantAnswer.provider == "AZURE_FOUNDRY_ASTRA" and .assistantAnswer.model == "gpt-6-astra-1" and .assistantAnswer.readOnly == true and .assistantAnswer.listingDraftCreated == false and .assistantAnswer.allowanceConsumed == false and .assistantAnswer.publicEbayWrite == "DISABLED" and (.assistantAnswer.answer | length) > 20 and (.preview | not)' assistant-answer.json >/dev/null; then
+              break
+            fi
+            sleep 10
+          done
+
           {
             echo "url=$URL"
             echo "health_status=$HEALTH_STATUS"
@@ -332,6 +347,8 @@ jobs:
             echo "catalog_scan_138445_status=$CATALOG_SCAN_STATUS"
             echo "catalog_scan_138445_type=$CATALOG_SCAN_TYPE"
             echo "image_studio_smoke_status=$STUDIO_SMOKE_STATUS"
+            echo "astra_assistant_status=$ASSISTANT_STATUS"
+            echo "astra_assistant_provider=$(jq -r '.assistantAnswer.provider // "missing"' assistant-answer.json 2>/dev/null || true)"
             echo "image=$IMAGE"
             echo "principal_id=$PRINCIPAL_ID"
             echo "subnet_id=$SUBNET_ID"
@@ -344,8 +361,10 @@ jobs:
           test "$CATALOG_SCAN_STATUS" = "200"
           [[ "$CATALOG_SCAN_TYPE" == image/* ]]
           test "$STUDIO_SMOKE_STATUS" = "202"
-          jq -e '.version == "0.23.0"' health.json >/dev/null
-          jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true' ready.json >/dev/null
+          test "$ASSISTANT_STATUS" = "200"
+          jq -e '.version == "0.24.0"' health.json >/dev/null
+          jq -e '.imageStudio.activated == true and .imageStudio.storage == "azure-blob" and .epcImage.activated == true and .shopifyMedia.enabled == true and .shopifyMedia.actualItemConfirmationRequired == true and .sellerUi.astraAssistant == true and .sellerUi.questionsAreReadOnly == true and .sellerUi.explicitListingRequestRequired == true' ready.json >/dev/null
+          jq -e '.assistantAnswer.kind == "PARTQUILL_ASSISTANT_ANSWER" and .assistantAnswer.provider == "AZURE_FOUNDRY_ASTRA" and .assistantAnswer.model == "gpt-6-astra-1" and .assistantAnswer.readOnly == true and .assistantAnswer.listingDraftCreated == false and .assistantAnswer.allowanceConsumed == false and .assistantAnswer.publicEbayWrite == "DISABLED" and (.assistantAnswer.answer | length) > 20 and (.preview | not)' assistant-answer.json >/dev/null
 
       - name: Upload deployment report
         if: always()

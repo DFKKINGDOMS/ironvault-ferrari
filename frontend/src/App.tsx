@@ -33,6 +33,13 @@ type SellerBootstrap = {
     profile: "ferrari-product-photo-v1";
     actualItemConfirmationRequired: true;
   };
+  assistant?: {
+    enabled: boolean;
+    provider: "AZURE_FOUNDRY_ASTRA" | "DETERMINISTIC_FALLBACK";
+    model: string | null;
+    questionsAreReadOnly: true;
+    explicitListingRequestRequired: true;
+  };
   defaults: {
     listingFormat: string;
     minimumPrice: string;
@@ -42,6 +49,38 @@ type SellerBootstrap = {
     returns: string;
     international: string;
   };
+};
+
+type SellerAssistantAnswer = {
+  schemaVersion: "2026-09-05";
+  kind: "PARTQUILL_ASSISTANT_ANSWER";
+  status: "ANSWERED" | "EVIDENCE_LIMITED" | "AI_UNAVAILABLE";
+  command: string;
+  answer: string;
+  provider: "AZURE_FOUNDRY_ASTRA" | "DETERMINISTIC_FALLBACK";
+  model: string | null;
+  evidence: {
+    partNumber: string | null;
+    catalogState: string;
+    sourcePages: number[];
+    applicationRecordCount: number;
+    approvedImageCount: number;
+  };
+  images: Array<{
+    id: string;
+    filename: string;
+    alt: string;
+    width: number;
+    height: number;
+    viewUrl: string;
+    qaState: "FERRARI_RULES_PASSED";
+    requiresActualItemConfirmation: true;
+  }>;
+  suggestedCommands: string[];
+  readOnly: true;
+  listingDraftCreated: false;
+  allowanceConsumed: false;
+  publicEbayWrite: "DISABLED";
 };
 
 type EbayCategoryChoice = {
@@ -1624,6 +1663,39 @@ function VintageInventoryAnswerPanel({
   </section>;
 }
 
+function SellerAssistantAnswerPanel({
+  answer,
+  onUseCommand,
+  onReset
+}: {
+  answer: SellerAssistantAnswer;
+  onUseCommand: (command: string) => void;
+  onReset: () => void;
+}) {
+  const isAstra = answer.provider === "AZURE_FOUNDRY_ASTRA";
+  const evidenceLabel = answer.evidence.partNumber
+    ? `Part ${answer.evidence.partNumber}`
+    : "General workspace question";
+  return <section className="assistant-answer" aria-label="PartQuill assistant answer">
+    <header className="assistant-answer-head">
+      <div><span>READ-ONLY INTELLIGENCE</span><h2>{evidenceLabel}</h2><p>{isAstra ? "Answered by the Azure-hosted GPT-6 Astra deployment using only the authorized evidence shown below." : "Answered by PartQuill’s deterministic safety fallback because no model answer was available."}</p></div>
+      <div><Badge tone={isAstra ? "green" : answer.status === "AI_UNAVAILABLE" ? "amber" : "slate"}>{isAstra ? "Azure GPT-6 Astra" : answer.status === "AI_UNAVAILABLE" ? "Astra temporarily unavailable" : "Safe local answer"}</Badge><button className="text-button" onClick={onReset}>Ask another question</button></div>
+    </header>
+    <div className="assistant-answer-body"><span className="assistant-mark">PQ</span><p>{answer.answer}</p></div>
+    {answer.images.length > 0 && <div className="assistant-image-strip" aria-label={`Approved merchant images for part ${answer.evidence.partNumber}`}>
+      <div><span>EXACT-KEY MERCHANT MEDIA</span><strong>{answer.images.length} actual product image{answer.images.length === 1 ? "" : "s"}</strong><small>Ferrari QA passed · confirm the physical item before listing</small></div>
+      <div>{answer.images.map((image) => <a key={image.id} href={image.viewUrl} target="_blank" rel="noreferrer"><img src={image.viewUrl} alt={image.alt}/><span>{image.filename}</span><small>{image.width}×{image.height} · QA passed</small></a>)}</div>
+    </div>}
+    <div className="assistant-evidence-grid">
+      <article><span>Catalog evidence</span><strong>{answer.evidence.catalogState.replaceAll("_", " ")}</strong><small>{answer.evidence.sourcePages.length ? `${answer.evidence.sourcePages.length} source page${answer.evidence.sourcePages.length === 1 ? "" : "s"}` : "No part-specific source pages"}</small></article>
+      <article><span>Applications</span><strong>{answer.evidence.applicationRecordCount.toLocaleString()}</strong><small>Authorized catalog records; no inferred fitment</small></article>
+      <article><span>Approved images</span><strong>{answer.evidence.approvedImageCount.toLocaleString()}</strong><small>Exact-key Ferrari-QA merchant images</small></article>
+      <article><span>Action taken</span><strong>None</strong><small>No draft · no allowance · no eBay write</small></article>
+    </div>
+    {answer.suggestedCommands.length > 0 && <footer className="assistant-suggestions"><span>Continue with:</span><div>{answer.suggestedCommands.map((command) => <button key={command} onClick={() => onUseCommand(command)}>{command}<Icon name="arrow"/></button>)}</div></footer>}
+  </section>;
+}
+
 export default function Home() {
   const [view, setView] = useState<View>(() => window.location.pathname === "/community-images" ? "community" : "instant");
   const [editorTab, setEditorTab] = useState<EditorTab>("listing");
@@ -1653,6 +1725,7 @@ export default function Home() {
   const [instantPreview, setInstantPreview] = useState<SellerPreview | null>(null);
   const [instantShortlist, setInstantShortlist] = useState<VintageGmShortlist | null>(null);
   const [instantInventoryAnswer, setInstantInventoryAnswer] = useState<VintageGmInventoryAnswer | null>(null);
+  const [instantAssistantAnswer, setInstantAssistantAnswer] = useState<SellerAssistantAnswer | null>(null);
   const [instantLoading, setInstantLoading] = useState(false);
   const [instantDirty, setInstantDirty] = useState(false);
   const [bootstrap, setBootstrap] = useState<SellerBootstrap | null>(null);
@@ -1836,12 +1909,33 @@ export default function Home() {
         body: JSON.stringify({ command })
       });
       if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
-      const payload = await response.json() as { preview?: SellerPreview; shortlist?: VintageGmShortlist; inventoryAnswer?: VintageGmInventoryAnswer };
+      const payload = await response.json() as { preview?: SellerPreview; shortlist?: VintageGmShortlist; inventoryAnswer?: VintageGmInventoryAnswer; assistantAnswer?: SellerAssistantAnswer };
+      if (payload.assistantAnswer) {
+        setEbayReference(null);
+        setEbayReferenceLoading(false);
+        setInstantPreview(null);
+        setInstantShortlist(null);
+        setInstantInventoryAnswer(null);
+        setInstantAssistantAnswer(payload.assistantAnswer);
+        setInstantPartConfirmed(false);
+        setInstantConditionConfirmed(false);
+        setInstantDirty(false);
+        setInstantPhotos([]);
+        setFoundPartNumber("");
+        setInstantBuilt(true);
+        showNotice(payload.assistantAnswer.provider === "AZURE_FOUNDRY_ASTRA"
+          ? "Azure GPT-6 Astra answered this as a read-only question. No draft was created."
+          : payload.assistantAnswer.status === "AI_UNAVAILABLE"
+            ? "Astra was temporarily unavailable, so PartQuill returned a safe evidence-only answer instead of creating a draft."
+            : "PartQuill answered this as a read-only question. No draft was created.");
+        return;
+      }
       if (payload.inventoryAnswer) {
         setEbayReference(null);
         setEbayReferenceLoading(false);
         setInstantPreview(null);
         setInstantShortlist(null);
+        setInstantAssistantAnswer(null);
         setInstantInventoryAnswer(payload.inventoryAnswer);
         setInstantPartConfirmed(false);
         setInstantConditionConfirmed(false);
@@ -1864,6 +1958,7 @@ export default function Home() {
         setInstantPreview(null);
         setInstantShortlist(payload.shortlist);
         setInstantInventoryAnswer(null);
+        setInstantAssistantAnswer(null);
         setInstantPartConfirmed(false);
         setInstantConditionConfirmed(false);
         setInstantDirty(false);
@@ -1877,11 +1972,12 @@ export default function Home() {
             : "No Vintage GM shortlist is active yet. Nothing was guessed or sent externally.");
         return;
       }
-      if (!payload.preview) throw new Error("The backend returned neither a listing preview nor an inventory answer.");
+      if (!payload.preview) throw new Error("The backend returned neither an assistant answer, a listing preview, nor an inventory answer.");
       const preview = payload.preview;
       setEbayReference(null);
       setInstantShortlist(null);
       setInstantInventoryAnswer(null);
+      setInstantAssistantAnswer(null);
       setInstantPreview(preview);
       setInstantPrice(preview.intent.price ?? "");
       setInstantCondition(preview.intent.condition);
@@ -1932,6 +2028,7 @@ export default function Home() {
       setInstantPreview(null);
       setInstantShortlist(null);
       setInstantInventoryAnswer(null);
+      setInstantAssistantAnswer(null);
       setInstantBuilt(false);
       showNotice(error instanceof Error ? error.message : "The command preview could not be built.");
     } finally {
@@ -1941,6 +2038,7 @@ export default function Home() {
   const reviewVintageCandidate = (candidate: VintageGmShortlistCandidate) => {
     setInstantCommand(candidate.listing.reviewCommand);
     setInstantShortlist(null);
+    setInstantAssistantAnswer(null);
     void buildInstantDraft(candidate.listing.reviewCommand);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -1949,6 +2047,7 @@ export default function Home() {
     const command = `List GM part ${row.partNumber} for $${sellerPrice}`;
     setInstantCommand(command);
     setInstantInventoryAnswer(null);
+    setInstantAssistantAnswer(null);
     void buildInstantDraft(command);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -2092,7 +2191,7 @@ export default function Home() {
         {view === "instant" && <section className="view instant-view">
           <div className="instant-intro">
             <div><span>PARTQUILL · COMMAND &amp; RESEARCH WORKSPACE</span><h1>What do you want PartQuill to do?</h1><p>List a part or ask an inventory question. PartQuill routes the instruction, shows the evidence, and never turns a question into a draft.</p></div>
-            <Badge tone={bootstrap?.backendConnected ? "green" : "slate"}>{bootstrap?.backendConnected ? "Private pilot · backend connected" : "Connecting"}</Badge>
+            <Badge tone={bootstrap?.assistant?.enabled ? "green" : bootstrap?.backendConnected ? "amber" : "slate"}>{bootstrap?.assistant?.enabled ? "Azure GPT-6 Astra connected" : bootstrap?.backendConnected ? "Backend connected · safe fallback" : "Connecting"}</Badge>
           </div>
 
           <div className="command-deck">
@@ -2103,7 +2202,16 @@ export default function Home() {
               <button disabled={instantLoading} onClick={() => void buildInstantDraft()}>{instantLoading ? "Working safely…" : "Run command"} <Icon name={instantLoading ? "more" : "arrow"}/></button>
             </div>
             <div className="command-tools"><div><button onClick={() => navigate("new")}><Icon name="camera"/> Add item photos</button><button onClick={() => showNotice("Barcode and label scanning remain supporting evidence; they cannot establish fitment alone.")}><Icon name="search"/> Scan a label</button><button onClick={() => navigate("settings")}><Icon name="settings"/> Seller defaults</button></div><span>Press Enter to run · Shift + Enter for a new line</span></div>
-            {instantBuilt && (instantInventoryAnswer ? <div className="command-extracted" aria-label="Extracted inventory question intent">
+            {instantBuilt && (instantAssistantAnswer ? <div className="command-extracted" aria-label="Read-only assistant question route">
+              <span>PartQuill heard</span>
+              <b className="route-green">Read-only question</b>
+              <b>{instantAssistantAnswer.provider === "AZURE_FOUNDRY_ASTRA" ? "Azure GPT-6 Astra" : "Safe evidence fallback"}</b>
+              {instantAssistantAnswer.evidence.partNumber && <b>MPN {instantAssistantAnswer.evidence.partNumber}</b>}
+              <b>{instantAssistantAnswer.evidence.applicationRecordCount} catalog applications</b>
+              <b>{instantAssistantAnswer.evidence.approvedImageCount} approved images</b>
+              <b>No draft · no allowance</b>
+              <b>eBay writes disabled</b>
+            </div> : instantInventoryAnswer ? <div className="command-extracted" aria-label="Extracted inventory question intent">
               <span>PartQuill heard</span>
               <b className="route-green">Read-only inventory question</b>
               {instantInventoryAnswer.intent.year && <b>Year {instantInventoryAnswer.intent.year}</b>}
@@ -2137,15 +2245,15 @@ export default function Home() {
               <b>{instantPreview?.noExternalRequestMade ? "No external request" : "Checking"}</b>
               <button onClick={() => navigate("new")}>Use fields instead <Icon name="arrow"/></button>
             </div>)}
-            <div className="command-examples"><span>Try:</span>{["Give me all 1990 Corvette parts that Vintage Parts has in stock", "Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence", "List part 58487514 for $9.99", "List a used black dashboard for $49.99"].map((example) => <button key={example} onClick={() => { setInstantCommand(example); setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantInventoryAnswer(null); }}>{example}</button>)}</div>
+            <div className="command-examples"><span>Try:</span>{["What can you do?", "What does part 10110989 fit?", "Give me all 1990 Corvette parts that Vintage Parts has in stock", "List part 58487514 for $9.99"].map((example) => <button key={example} onClick={() => { setInstantCommand(example); setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantInventoryAnswer(null); setInstantAssistantAnswer(null); }}>{example}</button>)}</div>
           </div>
 
-          {!instantShortlist && !instantInventoryAnswer && <div className="builder-rail" aria-label="Automatic listing build stages">
+          {!instantAssistantAnswer && !instantShortlist && !instantInventoryAnswer && <div className="builder-rail" aria-label="Automatic listing build stages">
             {instantStages.map(([number,label,copy,complete]) => <div key={number} className={instantBuilt && complete ? "complete" : ""}><b>{number}</b><span><strong>{label}</strong><small>{copy}</small></span><Icon name={instantBuilt && complete ? "check" : "more"}/></div>)}
           </div>}
 
-          {instantInventoryAnswer ? <VintageInventoryAnswerPanel key={instantInventoryAnswer.command} answer={instantInventoryAnswer} onReview={reviewInventoryAnswerRow} onReset={() => { setInstantBuilt(false); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : instantShortlist ? <VintageGmShortlistPanel shortlist={instantShortlist} onReview={reviewVintageCandidate} onReset={() => { setInstantBuilt(false); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : !instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your answer or prefilled review will appear here.</h2><p>Run the command above to ask inventory questions or build a seller draft.</p></div> : <>
-            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantInventoryAnswer(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
+          {instantAssistantAnswer ? <SellerAssistantAnswerPanel answer={instantAssistantAnswer} onUseCommand={(command) => { setInstantCommand(command); setInstantBuilt(false); setInstantAssistantAnswer(null); window.scrollTo({top:0,behavior:"smooth"}); }} onReset={() => { setInstantBuilt(false); setInstantAssistantAnswer(null); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : instantInventoryAnswer ? <VintageInventoryAnswerPanel key={instantInventoryAnswer.command} answer={instantInventoryAnswer} onReview={reviewInventoryAnswerRow} onReset={() => { setInstantBuilt(false); setInstantAssistantAnswer(null); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : instantShortlist ? <VintageGmShortlistPanel shortlist={instantShortlist} onReview={reviewVintageCandidate} onReset={() => { setInstantBuilt(false); setInstantAssistantAnswer(null); setInstantInventoryAnswer(null); setInstantShortlist(null); setInstantPreview(null); window.scrollTo({top:0,behavior:"smooth"}); }}/> : !instantBuilt ? <div className="instant-empty"><span className="brand-scan"><b>PQ</b><i/><i/></span><h2>Your answer or prefilled review will appear here.</h2><p>Run the command above to ask inventory questions or build a seller draft.</p></div> : <>
+            <div className="draft-review-head"><div><span>Automatic draft review</span><h2>{instantItemLabel}</h2><p>Created by the PartQuill backend · seller price {instantPrice ? `$${instantPrice}` : "required"} · fingerprint {instantPreview?.fingerprint.slice(0, 10)}…</p></div><div><Badge tone={instantReady ? "green" : instantSafety ? "red" : "amber"}>{instantReady ? "Demo ready for private preflight" : instantSafety ? "Restricted-item hold" : instantPhotoFirst ? "Photos required · no part number needed" : instantCatalogMatch ? "GM catalog evidence found" : instantHeld ? "Held — identity not verified" : instantDirty ? "Rebuild after price change" : "2 quick confirmations"}</Badge><button onClick={() => { setInstantBuilt(false); setInstantPreview(null); setInstantShortlist(null); setInstantInventoryAnswer(null); setInstantAssistantAnswer(null); setInstantPhotos([]); window.scrollTo({top:0,behavior:"smooth"}); }}>Start over</button></div></div>
 
             <div className="instant-draft-grid">
               <div className="instant-draft-main">

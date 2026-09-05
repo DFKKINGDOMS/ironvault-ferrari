@@ -151,7 +151,7 @@ function quantityFrom(value: string | undefined): number {
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 999 ? parsed : 1;
 }
 
-function findPartNumber(command: string): string | null {
+export function findPartNumber(command: string): string | null {
   const explicit = command.match(
     /\b(?:part|mpn|oem(?:\s+part)?(?:\s+number)?)\s*(?:number|no\.?)?\s*[:#-]?\s*([a-z0-9][a-z0-9-]{3,})\b/i
   )?.[1];
@@ -885,7 +885,7 @@ export function buildSellerCommandPreview(
 
 export function buildSellerUiBootstrap(config: AppConfig) {
   return {
-    version: '0.23.0',
+    version: '0.24.0',
     mode: 'private-pilot',
     backendConnected: true,
     workspace: {

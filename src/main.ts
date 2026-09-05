@@ -25,6 +25,7 @@ import { AzureEpcQaEngine, DisabledEpcQaEngine } from './epc-image/azure-qa.js';
 import { EpcImageService } from './epc-image/service.js';
 import { DeereCollectionPilotStore } from './deere-collection-pilot/store.js';
 import { ShopifyMediaCatalog } from './shopify-media/catalog.js';
+import { AzureFoundrySellerAssistant } from './seller/astra-assistant.js';
 
 const config = loadConfig();
 if (config.DATABASE_URL) {
@@ -105,6 +106,16 @@ const deereCollectionPilot = new DeereCollectionPilotStore(imageJobStore);
 const shopifyMedia = config.SHOPIFY_MEDIA_ENABLED
   ? new ShopifyMediaCatalog(imageJobStore)
   : undefined;
+const sellerAssistant = completeAiEngine
+  && config.PARTQUILL_AI_PROVIDER === 'azure-local'
+  && config.AZURE_FOUNDRY_ENDPOINT
+  && config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT
+  ? new AzureFoundrySellerAssistant(
+      aiKey!,
+      `${config.AZURE_FOUNDRY_ENDPOINT.replace(/\/$/, '')}/openai/v1`,
+      config.AZURE_FOUNDRY_REVIEW_DEPLOYMENT
+    )
+  : undefined;
 const epcQa = completeAiEngine && config.PARTQUILL_AI_PROVIDER === 'azure-local'
   ? new AzureEpcQaEngine(
       aiKey,
@@ -157,6 +168,7 @@ const app = await buildApp({
   epcImage,
   deereCollectionPilot,
   ...(shopifyMedia ? { shopifyMedia } : {}),
+  ...(sellerAssistant ? { sellerAssistant } : {}),
   ...(communityImages ? { communityImages } : {}),
   ebayReference,
   ...(tokenVault ? { tokenVault } : {})

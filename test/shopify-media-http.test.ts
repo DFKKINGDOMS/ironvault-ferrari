@@ -113,6 +113,31 @@ describe('Shopify merchant media HTTP integration', () => {
     expect(preview.body).not.toContain(SHOPIFY_MEDIA_SOURCE_STORE);
     expect(preview.body).not.toContain('internal-source');
 
+    const question = await app.inject({
+      method: 'POST',
+      url: '/v1/seller-ui/command-preview',
+      payload: { command: 'What do you know about part 10110989?' }
+    });
+    expect(question.statusCode).toBe(200);
+    expect(question.json()).toMatchObject({
+      assistantAnswer: {
+        evidence: { partNumber: '10110989', approvedImageCount: 1 },
+        images: [{
+          id: assetId,
+          filename: '10110989-01.jpg',
+          width: 2000,
+          height: 2000,
+          qaState: 'FERRARI_RULES_PASSED',
+          requiresActualItemConfirmation: true
+        }],
+        listingDraftCreated: false,
+        publicEbayWrite: 'DISABLED'
+      }
+    });
+    expect(question.json().preview).toBeUndefined();
+    expect(question.body).not.toContain(SHOPIFY_MEDIA_SOURCE_STORE);
+    expect(question.body).not.toContain('internal-source');
+
     const image = await app.inject({
       method: 'GET',
       url: `/v1/shopify-media/parts/10110989/images/${assetId}`

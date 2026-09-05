@@ -7,7 +7,8 @@ It is intentionally not a universal visual parts identifier. The default runtime
 ## Implemented now
 
 - Command-first React seller workspace at `/`, with the approved Understand → Resolve → Map → Protect → Assemble → Review flow.
-- Public, rate-limited `POST /v1/seller-ui/command-preview` parser for part number or seller description, price, quantity, condition, shipping and no-fitment instructions.
+- Public, rate-limited `POST /v1/seller-ui/command-preview` intent router. Explicit list/sell/draft requests use the deterministic evidence-gated listing parser; every other unmatched sentence is a read-only question and can never silently become a draft.
+- Azure Foundry GPT-6 Astra answers ordinary seller questions with a bounded, tool-free request grounded only in sanitized authorized catalog and exact-key merchant-media evidence. Exact-key Ferrari-QA images appear directly with a part answer. Model failure returns a deterministic evidence-only answer, never a fabricated result or accidental `$0.99` listing.
 - Read-only Vintage Parts inventory questions in the same command box. A year/model request is filtered through the active Vintage snapshot and exact GM catalog applications, then returned as a sortable, searchable, paginated table with quantity, source unit price, extended source inventory value, catalog evidence links and CSV download. Source value is explicitly quantity × Vintage source price—not resale or eBay market value—and no draft or free-launch allowance is consumed.
 - Vintage GM discovery in the same command box: requests such as `Give me 10 rare Vintage GM parts in the database with exact GMPartsWiki evidence` join the active private Vintage feed to exact OEM catalog keys, rank low source stock first, exclude restraint-system candidates, and return held seller-review drafts only. Source scarcity is never presented as eBay-market rarity or value.
 - The GM brake/booster repair-kit rule maps to the current official eBay Motors `Brake Boosters` leaf (`174021`) instead of generic `9886`; a stored generic fallback cannot outrank the exact product-family rule.
@@ -122,7 +123,7 @@ Health endpoints are public:
 The seller workspace endpoints are also public and read-only:
 
 - `GET /v1/seller-ui/bootstrap` — sanitized runtime mode and seller defaults.
-- `POST /v1/seller-ui/command-preview` — routes a command into a read-only Vintage inventory answer, catalog-held draft, photo-first draft, restricted-safety review, illustrative preview, or Vintage GM shortlist; it performs no eBay write.
+- `POST /v1/seller-ui/command-preview` — routes a command into an Azure Astra read-only answer, deterministic evidence fallback, Vintage inventory answer, catalog-held draft, photo-first draft, restricted-safety review, illustrative preview, or Vintage GM shortlist; it performs no eBay write. Listing assembly requires an explicit list/sell/draft action.
 - `GET /v1/shopify-media/parts/:partNumber/images/:assetId` — serves only a private-Azure derivative that is exact-keyed to the requested part and has passed the locked Ferrari QA profile.
 - `GET /v1/seller-ui/ebay-reference/:partNumber` — checks only an exact, locally verified catalog key; unrelated categories, partial numbers, conflicting MPNs and conflicting automaker brands fail closed.
 
