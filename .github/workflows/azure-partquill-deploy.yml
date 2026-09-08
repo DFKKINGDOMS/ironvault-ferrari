@@ -17,6 +17,11 @@ on:
       - migrations/**
       - data/**
   workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: 'Run the legacy full infrastructure bootstrap and credential setup'
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -28,6 +33,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.bootstrap == true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -395,3 +401,88 @@ jobs:
           path: azure-partquill-deploy.txt
           if-no-files-found: ignore
           retention-days: 14
+
+  deploy_existing:
+    if: github.event_name != 'workflow_dispatch' || inputs.bootstrap != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:enterprise
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build:server
+      - run: npm run build:web
+      - name: Sign in to the existing Azure subscription
+        uses: azure/login@v2
+        with:
+          client-id: b1c0f635-65a8-4d64-b496-d2feb8927740
+          tenant-id: 6997811c-6e29-4a53-a691-699d603a7661
+          subscription-id: 5023fc36-12c2-4d2f-a446-bd2d0157fd15
+      - name: Build this commit and preserve existing application configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess, time, urllib.request
+          group = 'rg-partquill-platform-westus3'
+          name = 'ca-partquill-web-westus3'
+          subscription = '5023fc36-12c2-4d2f-a446-bd2d0157fd15'
+          tenant = '6997811c-6e29-4a53-a691-699d603a7661'
+          def az(*args):
+              result = subprocess.run(['az', *args, '--only-show-errors', '--output=json'], capture_output=True, text=True)
+              if result.returncode:
+                  raise SystemExit('Azure operation failed: ' + ' '.join(args[:3]))
+              return json.loads(result.stdout) if result.stdout.strip() else {}
+          account = az('account', 'show')
+          if account.get('id') != subscription or account.get('tenantId') != tenant:
+              raise SystemExit('Azure account guard failed')
+          previous = az('containerapp', 'show', '--name', name, '--resource-group', group)
+          expected_id = '/subscriptions/' + subscription + '/resourceGroups/' + group + '/providers/Microsoft.App/containerApps/' + name
+          if previous.get('id', '').lower() != expected_id.lower():
+              raise SystemExit('Existing app guard failed; use reviewed bootstrap for a new app')
+          original = previous['properties']
+          original_env = original['template']['containers'][0].get('env', [])
+          values = {item['name']: item.get('value') for item in original_env}
+          if values.get('EBAY_MODE') != 'mock' or str(values.get('ALLOW_EBAY_WRITES')).lower() != 'false':
+              raise SystemExit('Production eBay write protections must already be active')
+          tag = 'azure-' + os.environ['GITHUB_SHA']
+          image = 'partquill50230827.azurecr.io/partquill:' + tag
+          build = subprocess.run(['az', 'acr', 'build', '--registry', 'partquill50230827', '--image', 'partquill:' + tag, '--file', 'Dockerfile', '.', '--only-show-errors'], text=True)
+          if build.returncode:
+              raise SystemExit('Immutable image build failed')
+          current = az('containerapp', 'show', '--name', name, '--resource-group', group)
+          if current['properties']['latestRevisionName'] != original['latestRevisionName']:
+              raise SystemExit('App changed during build; preserve the newer deployment')
+          suffix = 'google-' + os.environ['GITHUB_SHA'][:8] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+          az('containerapp', 'update', '--name', name, '--resource-group', group, '--image', image, '--revision-suffix', suffix)
+          expected_revision = name + '--' + suffix
+          for attempt in range(48):
+              current = az('containerapp', 'show', '--name', name, '--resource-group', group)
+              properties = current['properties']
+              if properties.get('latestRevisionName') == properties.get('latestReadyRevisionName') == expected_revision:
+                  break
+              time.sleep(5)
+          else:
+              raise SystemExit('The exact new revision did not become ready')
+          if properties['template']['containers'][0]['image'] != image:
+              raise SystemExit('Image verification failed')
+          if properties['template']['containers'][0].get('env', []) != original_env:
+              raise SystemExit('Unexpected environment change')
+          if properties.get('configuration', {}).get('secrets', []) != original.get('configuration', {}).get('secrets', []):
+              raise SystemExit('Unexpected secret reference change')
+          if properties['configuration']['ingress'] != original['configuration']['ingress'] or properties['environmentId'] != original['environmentId']:
+              raise SystemExit('Unexpected network configuration change')
+          origin = 'https://' + properties['configuration']['ingress']['fqdn']
+          for path in ('/health', '/ready'):
+              with urllib.request.urlopen(origin + path, timeout=25) as response:
+                  if response.status != 200:
+                      raise SystemExit('Application readiness verification failed')
+          print(json.dumps({'app': name, 'revision': expected_revision, 'image': image,
+              'environment_preserved': True, 'secret_references_preserved': True, 'network_preserved': True}))
+          PY
