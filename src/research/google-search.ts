@@ -38,7 +38,7 @@ function httpsUrl(value: unknown): string {
 
 export function validateGoogleInput(input: GoogleResearchInput): GoogleResearchInput {
   const clean = (value: string | undefined, max: number) => {
-    if (value !== undefined && (typeof value !== 'string' || value.length > max || /[\u0000-\u001f\u007f]/.test(value))) {
+    if (value !== undefined && (typeof value !== 'string' || value.length > max || Array.from(value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))) {
       throw new GoogleResearchError('invalid_research_input', 400);
     }
     return (value ?? '').trim();
