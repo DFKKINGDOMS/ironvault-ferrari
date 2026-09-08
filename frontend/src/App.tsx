@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CommunityImages } from "./CommunityImages";
+import { GoogleResearch } from "./GoogleResearch";
 import { cleanCatalogBackground, rotateCatalogImage } from "./image-editing";
 
 type SellerBootstrap = {
@@ -2420,11 +2421,12 @@ export default function Home() {
           </div>
         </section>}
 
-        {view === "research" && <section className="view">
-          <SectionHeading eyebrow="Seller research · Read only" title="Resolve the part before writing the listing" body="Exact identity may be reusable. Fitment, condition, quantity and price remain separate seller decisions." action={<button className="secondary" onClick={() => showNotice("The research result was refreshed locally for this prototype.")}><Icon name="live"/> Refresh</button>} />
-          <div className="research-search"><label><span>OEM part number</span><div><input defaultValue="13568-29025"/><button><Icon name="search"/> Research part</button></div></label><label><span>Buyer VIN sandbox · optional</span><div><input placeholder="17-character VIN"/><button onClick={() => showNotice("No VIN was transmitted. This is a UI-only compatibility sandbox.")}>Check draft</button></div></label></div>
-          <div className="research-result"><div className="research-identity"><div className="part-glyph"><Icon name="box"/></div><div><Badge tone="green">Exact part number</Badge><h2>13568-29025 — Belt, Timing</h2><p>Superseded by <strong>13568-YZZ10</strong> · Diagram callout 13568</p></div><button className="primary" onClick={() => openDraft("identity")}>Attach identity to draft</button></div><div className="fitment-verdict amber"><span>!</span><div><strong>Fitment not verified for a specific vehicle</strong><p>Potential catalog applications exist, but this seller draft will not publish compatibility without permitted evidence.</p></div><button onClick={() => openDraft("fitment")}>Inspect applications</button></div><div className="traffic-guide"><div className="green"><b>GREEN</b><span>eBay-returned compatibility for a direct product match</span></div><div className="amber"><b>AMBER</b><span>Seller-confirmed, broad or incomplete evidence</span></div><div className="red"><b>NONE</b><span>No public fitment claim; buyer verification boilerplate used</span></div></div><div className="research-facts"><article><span>Anonymous reference range</span><strong>$49.97–$54.59</strong><small>Not an eBay market value or listing recommendation</small></article><article><span>Seller listing price</span><strong>$79.95</strong><small>Seller-entered; separate from research</small></article><article><span>Source checks</span><strong>2 of 3 exact</strong><small>One reference path unavailable</small></article><article><span>Listing condition</span><strong>Not inherited</strong><small>Seller must confirm the actual item</small></article></div></div>
-        </section>}
+        {view === "research" && <GoogleResearch onCatalogue={(sku, vendor) => {
+          const command = 'What catalogue evidence do we have for ' + vendor + ' part ' + sku + '?';
+          setInstantCommand(command);
+          setView("instant");
+          void buildInstantDraft(command);
+        }}/>}
 
         {view === "drafts" && <ActiveDraftEditor
           preview={instantPreview}

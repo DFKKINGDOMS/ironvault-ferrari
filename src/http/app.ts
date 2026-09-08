@@ -1,3 +1,4 @@
+import { registerGoogleResearchRoutes } from './google-research-routes.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -398,6 +399,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/v1/deere-model-pilot/')) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/community/submissions/')) return;
     if (request.method === 'POST' && request.url === '/v1/community/submissions') return;
+    if (request.method === 'GET' && request.url === '/v1/seller-ui/google-research/status') return;
+    if (request.method === 'POST' && request.url === '/v1/seller-ui/google-research') return;
     if (request.method === 'POST' && request.url.startsWith('/v1/seller-ui/command-preview')) return;
     if (request.method === 'POST' && request.url === '/internal/gm-catalog/import') return;
     if (request.method === 'POST' && request.url === '/internal/vintage-gm/import') return;
@@ -422,6 +425,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'valid PartQuill API key required' } });
     }
   });
+
+  registerGoogleResearchRoutes(app, config);
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof RequestLimitError) {

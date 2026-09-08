@@ -75,6 +75,8 @@ const schema = z
     COMMUNITY_GITHUB_REPOSITORY: z.string().default('DFKKINGDOMS/ironvault-ferrari'),
     COMMUNITY_GITHUB_BRANCH: z.string().default('main'),
     COMMUNITY_GITHUB_TOKEN: z.string().min(24).optional(),
+    GOOGLE_RESEARCH_MODE: z.enum(['disabled', 'live']).default('disabled'),
+    GOOGLE_RESEARCH_DAILY_LIMIT: z.coerce.number().int().min(1).max(1000).default(200),
     OEM_RESEARCH_MODE: z.enum(['disabled', 'private-pilot']).default('disabled'),
     OEM_DATA_RIGHTS_CONFIRMED: booleanString,
     MCP_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000).default(30),
