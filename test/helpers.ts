@@ -43,6 +43,8 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     COMMUNITY_UPLOAD_RATE_LIMIT_WINDOW_MS: 3_600_000,
     COMMUNITY_GITHUB_REPOSITORY: 'DFKKINGDOMS/ironvault-ferrari',
     COMMUNITY_GITHUB_BRANCH: 'main',
+    GOOGLE_RESEARCH_MODE: 'disabled',
+    GOOGLE_RESEARCH_DAILY_LIMIT: 200,
     OEM_RESEARCH_MODE: 'disabled',
     OEM_DATA_RIGHTS_CONFIRMED: false,
     MCP_RATE_LIMIT_MAX: 30,
