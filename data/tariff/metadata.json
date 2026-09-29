@@ -1,11 +1,11 @@
 {
-  "release": "2026HTSRev19",
-  "description": "2026 HTS Revision 19",
-  "retrievedAt": "2026-09-15T14:23:01.699Z",
+  "release": "2026HTSRev20",
+  "description": "2026 HTS Revision 20",
+  "retrievedAt": "2026-09-29T16:00:53.454Z",
   "sourcePage": "https://hts.usitc.gov/download",
   "sourceExport": "https://hts.usitc.gov/reststop/exportList?from=0101&to=9999&format=CSV&styles=false",
-  "filename": "hts-2026-rev19.csv",
-  "bytes": 3957343,
-  "sha256": "e5839407c3eddbada1164ab7e03fa683244646e55e41b122dd2d1c0eddcb64a0",
+  "filename": "hts-2026-rev20.csv",
+  "bytes": 3957760,
+  "sha256": "e9398030b5b23574716d56c050097079be059e006a9b25c90c4a1b7c53b0c6cb",
   "classificationPolicy": "Description rules return reviewable candidates only. Seller or customs review is required before international publication."
 }
